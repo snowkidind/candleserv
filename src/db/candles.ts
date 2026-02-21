@@ -49,6 +49,21 @@ export async function upsertCandle(c: {
 }
 
 /**
+ * Insert a candle only if that timestamp doesn't already exist.
+ * Used by backfill so it never overwrites live-collected multi-source data.
+ */
+export async function insertCandleIfMissing(c: Parameters<typeof upsertCandle>[0]): Promise<void> {
+  await query(
+    `INSERT INTO candles_1m
+       ("timestamp","open","high","low","close","volume","volumeNormalized","sourceCount","sourceCountBaseline","sources","confidence","createdAt","updatedAt")
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW(),NOW())
+     ON CONFLICT ("timestamp") DO NOTHING`,
+    [c.timestamp, c.open, c.high, c.low, c.close, c.volume, c.volumeNormalized,
+     c.sourceCount, c.sourceCountBaseline, c.sources, c.confidence]
+  );
+}
+
+/**
  * Upsert a per-source raw candle row.
  */
 export async function upsertSourceCandle(c: {

@@ -1,5 +1,5 @@
 import { fetchBinanceRange } from "../adapters/binance";
-import { upsertCandle, countCandlesInDay } from "../db/candles";
+import { upsertCandle, insertCandleIfMissing, countCandlesInDay } from "../db/candles";
 import { recordError } from "../db/errors";
 import { log, logError } from "./log";
 
@@ -52,7 +52,7 @@ async function backfillDay(dayStart: Date): Promise<void> {
 
     for (const { timestamp, candle } of [...first, ...second]) {
       if (timestamp < dayStart || timestamp >= dayEnd) continue;
-      await upsertCandle({
+      await insertCandleIfMissing({
         timestamp,
         ...candle,
         volumeNormalized: candle.volume,
