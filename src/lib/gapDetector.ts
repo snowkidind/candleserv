@@ -33,11 +33,17 @@ async function detectGapsInWindow(from: Date, to: Date): Promise<void> {
     [from, to]
   );
 
+  if (!res.rows.length) return;
+
   for (const row of res.rows) {
     const ts = new Date(row.expected_ts as string);
     await upsertGap(ts);
-    log(`[gapDetector] gap detected: ${ts.toISOString()}`);
-    await recordError("collector", "gapDetector", `Gap detected at ${ts.toISOString()}`);
+  }
+
+  log(`[gapDetector] detected ${res.rows.length} gap(s) in window ${from.toISOString().slice(0, 16)} → ${to.toISOString().slice(0, 16)}`);
+
+  if (res.rows.length > 100) {
+    await recordError("collector", "gapDetector", `${res.rows.length} gaps detected — DB likely empty, backfill running`);
   }
 }
 
