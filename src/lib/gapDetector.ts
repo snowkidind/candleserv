@@ -54,8 +54,18 @@ async function healPendingGaps(): Promise<void> {
   const gaps = await getPendingGaps();
   if (!gaps.length) return;
 
+  // When the DB is fresh the backfill will cover everything — don't hammer
+  // Binance with thousands of individual heal calls at the same time.
+  if (gaps.length > 100) {
+    log(`[gapDetector] ${gaps.length} pending gaps — deferring to backfill`);
+    return;
+  }
+
   const webhookUrl = (await query(`SELECT value FROM app_settings WHERE key = $1`, [ALERT_WEBHOOK_KEY]))
     .rows[0]?.value as string | undefined;
+
+  let healed = 0;
+  let unresolvable = 0;
 
   for (const gap of gaps) {
     await setGapState(gap.id, "healing");
@@ -71,15 +81,18 @@ async function healPendingGaps(): Promise<void> {
       await markAlertSent(gap.id);
     }
 
-    const healed = await healMinute(gap.timestamp);
-    if (healed) {
+    const ok = await healMinute(gap.timestamp);
+    if (ok) {
       await setGapState(gap.id, "healed");
-      log(`[gapDetector] healed gap: ${gap.timestamp.toISOString()}`);
+      healed++;
     } else {
       await setGapState(gap.id, "unresolvable");
+      unresolvable++;
       logError(`[gapDetector] unresolvable gap: ${gap.timestamp.toISOString()}`);
     }
   }
+
+  if (healed > 0) log(`[gapDetector] healed ${healed} gap(s)`);
 }
 
 /**
