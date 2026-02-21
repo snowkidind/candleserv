@@ -22,29 +22,20 @@ router.get("/candles/stream", ...guard, async (req, res) => {
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders();
 
-  // Send initial history on connect
-  try {
-    const candles = await getCandles({ tf, endingAt: new Date(), limit: n });
-    res.write(`event: init\ndata: ${JSON.stringify(candles)}\n\n`);
-  } catch {
-    // Non-fatal — client will just have no initial data
-  }
-
-  // On new 1m candle, derive the TF value and push
-  const onCandle = async (candle: unknown) => {
-    if (tf === "1m") {
-      res.write(`event: candle\ndata: ${JSON.stringify(candle)}\n\n`);
-    } else {
-      // For higher TFs, fetch the latest aggregated candle
-      try {
-        const candles = await getCandles({ tf, endingAt: new Date(), limit: 1 });
-        if (candles.length) {
-          res.write(`event: candle\ndata: ${JSON.stringify(candles[0])}\n\n`);
-        }
-      } catch {
-        // Non-fatal
-      }
+  // Push full N-candle snapshot — used on connect and on every new candle
+  const pushSnapshot = async () => {
+    try {
+      const candles = await getCandles({ tf, endingAt: new Date(), limit: n });
+      res.write(`event: candles\ndata: ${JSON.stringify(candles)}\n\n`);
+    } catch {
+      // Non-fatal
     }
+  };
+
+  await pushSnapshot();
+
+  const onCandle = async () => {
+    await pushSnapshot();
   };
 
   const onSourceState = (data: unknown) => {

@@ -41,24 +41,18 @@ export default function CandlesTab() {
     return () => { chart.current?.remove(); };
   }, []);
 
-  // SSE — initial history on connect, then live updates
+  // Subscribe to N-candle snapshots — full setData on every event
   useEffect(() => {
     setLoading(true);
     const es = new EventSource(`/monitor/candles/stream?tf=${tf}&n=200`);
 
-    es.addEventListener("init", (e) => {
+    es.addEventListener("candles", (e) => {
       const candles = JSON.parse(e.data) as Candle[];
       if (!series.current || !candles.length) return;
       const lw = candles.map(candleToLw).sort((a, b) => (a.time as number) - (b.time as number));
       series.current.setData(lw);
       setLatest(candles.at(-1) ?? null);
       setLoading(false);
-    });
-
-    es.addEventListener("candle", (e) => {
-      const c = JSON.parse(e.data) as Candle;
-      series.current?.update(candleToLw(c));
-      setLatest(c);
     });
 
     es.onerror = (e) => console.error("[CandlesTab] SSE error:", e);
