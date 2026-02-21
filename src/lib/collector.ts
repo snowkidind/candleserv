@@ -95,12 +95,7 @@ async function fetchOne(source: string, minuteTs: Date): Promise<SourceResult> {
       case "binance":  candle = await fetchBinanceCandle(minuteTs);  break;
       case "bybit":    candle = await fetchBybitCandle(minuteTs);    break;
       case "kraken":   candle = await fetchKrakenCandle(minuteTs);   break;
-      case "coinbase": {
-        const cb = await fetchCoinbaseCandle(minuteTs);
-        if (cb === null) return { source, candle: null }; // sparse minute, not a failure
-        candle = cb;
-        break;
-      }
+      case "coinbase": candle = await fetchCoinbaseCandle(minuteTs); break;
       case "bitfinex": candle = await fetchBitfinexCandle(minuteTs); break;
       default: return { source, candle: null, error: "unknown source" };
     }
