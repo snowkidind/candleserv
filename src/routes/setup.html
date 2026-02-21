@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Candleserv Setup</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .wizard { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; width: 480px; padding: 40px; }
+    h1 { font-size: 22px; font-weight: 600; margin-bottom: 6px; }
+    .subtitle { font-size: 13px; color: #666; margin-bottom: 32px; }
+    .steps { display: flex; gap: 8px; margin-bottom: 32px; }
+    .step { flex: 1; height: 3px; border-radius: 2px; background: #2a2a2a; transition: background 0.2s; }
+    .step.active { background: #3b82f6; }
+    .step.done { background: #22c55e; }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    h2 { font-size: 16px; font-weight: 600; margin-bottom: 20px; }
+    label { display: block; font-size: 12px; color: #999; margin-bottom: 4px; margin-top: 14px; }
+    input { width: 100%; background: #111; border: 1px solid #2a2a2a; border-radius: 6px; padding: 9px 12px; color: #e0e0e0; font-size: 14px; outline: none; }
+    input:focus { border-color: #3b82f6; }
+    .row { display: flex; gap: 10px; }
+    .row > div { flex: 1; }
+    .row > div.narrow { flex: 0 0 100px; }
+    .btn { display: inline-block; background: #3b82f6; color: white; border: none; border-radius: 6px; padding: 10px 20px; font-size: 14px; font-weight: 500; cursor: pointer; margin-top: 24px; width: 100%; }
+    .btn:hover { background: #2563eb; }
+    .btn:disabled { background: #2a2a2a; color: #555; cursor: default; }
+    .btn-test { background: #2a2a2a; margin-top: 14px; }
+    .btn-test:hover { background: #333; }
+    .error { color: #ef4444; font-size: 12px; margin-top: 8px; }
+    .success { color: #22c55e; font-size: 12px; margin-top: 8px; }
+    .summary { background: #111; border-radius: 8px; padding: 16px; font-size: 13px; line-height: 2; }
+    .summary dt { color: #666; float: left; width: 160px; }
+    .summary dd { color: #e0e0e0; }
+    .hint { font-size: 12px; color: #555; margin-top: 6px; }
+  </style>
+</head>
+<body>
+<div class="wizard">
+  <h1>Candleserv Setup</h1>
+  <p class="subtitle">Multi-source Bitcoin candle store — first-run configuration</p>
+
+  <div class="steps">
+    <div class="step active" id="s1"></div>
+    <div class="step" id="s2"></div>
+    <div class="step" id="s3"></div>
+    <div class="step" id="s4"></div>
+  </div>
+
+  <!-- Step 1: Database -->
+  <div class="panel active" id="p1">
+    <h2>Step 1 — Database connection</h2>
+    <div class="row">
+      <div><label>Host</label><input id="dbHost" value="localhost"></div>
+      <div class="narrow"><label>Port</label><input id="dbPort" value="5432"></div>
+    </div>
+    <label>Database name</label><input id="dbName" value="candleserv">
+    <label>Username</label><input id="dbUser">
+    <label>Password</label><input id="dbPassword" type="password">
+    <button class="btn btn-test" onclick="testDb()">Test connection</button>
+    <div id="dbMsg"></div>
+    <button class="btn" id="btnStep1" onclick="goStep(2)" disabled>Next →</button>
+  </div>
+
+  <!-- Step 2: Admin account -->
+  <div class="panel" id="p2">
+    <h2>Step 2 — Admin account</h2>
+    <label>Email</label><input id="email" type="email">
+    <div class="row">
+      <div><label>First name</label><input id="firstName"></div>
+      <div><label>Last name</label><input id="lastName"></div>
+    </div>
+    <label>Password (min 12 chars)</label><input id="password" type="password" oninput="checkPw()">
+    <label>Confirm password</label><input id="confirmPw" type="password" oninput="checkPw()">
+    <div id="pwMsg"></div>
+    <button class="btn" id="btnStep2" onclick="goStep(3)" disabled>Next →</button>
+  </div>
+
+  <!-- Step 3: Config -->
+  <div class="panel" id="p3">
+    <h2>Step 3 — Service configuration</h2>
+    <label>Minimum sources (default: 3)</label>
+    <input id="minSources" value="3">
+    <p class="hint">Minimum number of exchange sources required for a full-confidence composite.</p>
+    <label>Alert webhook URL (optional)</label>
+    <input id="alertWebhookUrl" placeholder="https://hooks.slack.com/...">
+    <p class="hint">HTTP POST target for gap and source alerts. Leave blank to disable.</p>
+    <button class="btn" onclick="goStep(4)">Next →</button>
+  </div>
+
+  <!-- Step 4: Confirm -->
+  <div class="panel" id="p4">
+    <h2>Step 4 — Confirm and install</h2>
+    <dl class="summary" id="summary"></dl>
+    <div id="installMsg"></div>
+    <button class="btn" onclick="install()">Install Candleserv</button>
+  </div>
+</div>
+
+<script>
+  let step = 1;
+
+  function goStep(n) {
+    document.getElementById('p' + step).classList.remove('active');
+    document.getElementById('s' + step).className = 'step done';
+    step = n;
+    document.getElementById('p' + n).classList.add('active');
+    document.getElementById('s' + n).className = 'step active';
+    if (n === 4) buildSummary();
+  }
+
+  async function testDb() {
+    const msg = document.getElementById('dbMsg');
+    msg.className = ''; msg.textContent = 'Testing…';
+    const body = {
+      host: v('dbHost'), port: v('dbPort'), database: v('dbName'),
+      user: v('dbUser'), password: v('dbPassword'),
+    };
+    try {
+      const res = await fetch('/setup/test-db', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      const data = await res.json();
+      if (data.ok) {
+        msg.className = 'success'; msg.textContent = '✓ Connection successful';
+        document.getElementById('btnStep1').disabled = false;
+      } else {
+        msg.className = 'error'; msg.textContent = '✗ ' + data.error;
+      }
+    } catch(e) {
+      msg.className = 'error'; msg.textContent = '✗ ' + e.message;
+    }
+  }
+
+  function checkPw() {
+    const pw = v('password'), cpw = v('confirmPw');
+    const msg = document.getElementById('pwMsg');
+    const btn = document.getElementById('btnStep2');
+    const email = v('email');
+    if (!email) { msg.className='error'; msg.textContent='Email required'; btn.disabled=true; return; }
+    if (pw.length < 12) { msg.className='error'; msg.textContent='Password too short (min 12)'; btn.disabled=true; return; }
+    if (pw !== cpw) { msg.className='error'; msg.textContent='Passwords do not match'; btn.disabled=true; return; }
+    msg.className='success'; msg.textContent='✓ Passwords match'; btn.disabled=false;
+  }
+
+  function buildSummary() {
+    const s = document.getElementById('summary');
+    s.innerHTML = [
+      ['Database', v('dbHost') + ':' + v('dbPort') + '/' + v('dbName')],
+      ['DB user', v('dbUser')],
+      ['Admin email', v('email')],
+      ['Admin name', (v('firstName') + ' ' + v('lastName')).trim() || '—'],
+      ['Min sources', v('minSources') || '3'],
+      ['Alert webhook', v('alertWebhookUrl') || '(disabled)'],
+    ].map(([k,val]) => `<dt>${k}</dt><dd>${val}</dd>`).join('');
+  }
+
+  async function install() {
+    const msg = document.getElementById('installMsg');
+    msg.className=''; msg.textContent='Installing…';
+    const body = {
+      dbHost: v('dbHost'), dbPort: v('dbPort'), dbName: v('dbName'),
+      dbUser: v('dbUser'), dbPassword: v('dbPassword'),
+      email: v('email'), firstName: v('firstName'), lastName: v('lastName'),
+      password: v('password'), minSources: v('minSources'), alertWebhookUrl: v('alertWebhookUrl'),
+    };
+    try {
+      const res = await fetch('/setup/install', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      const data = await res.json();
+      if (data.ok) {
+        msg.className='success'; msg.textContent='✓ Installation complete! Redirecting…';
+        setTimeout(() => window.location.href = '/monitor/login', 1500);
+      } else {
+        msg.className='error'; msg.textContent='✗ ' + data.error;
+      }
+    } catch(e) {
+      msg.className='error'; msg.textContent='✗ ' + e.message;
+    }
+  }
+
+  function v(id) { return document.getElementById(id).value.trim(); }
+</script>
+</body>
+</html>

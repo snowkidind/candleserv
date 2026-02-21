@@ -1,0 +1,27 @@
+# Environment
+.env
+
+# Build output
+dist/
+frontend/dist/
+
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# TypeScript
+*.tsbuildinfo
+
+# TanStack Router generated file
+frontend/src/routeTree.gen.ts
+
+# Logs
+*.log
+npm-debug.log*
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
