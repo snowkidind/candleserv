@@ -158,6 +158,7 @@ export async function getCandles(opts: {
   }
 
   // Aggregate from 1m: align to bucket boundaries, group, aggregate
+  const windowStart = new Date(endingAt.getTime() - minutes * limit * 60 * 1000);
   const res = await query(
     `SELECT
        date_trunc('minute', "timestamp") - (
@@ -175,11 +176,11 @@ export async function getCandles(opts: {
        AVG(confidence) AS confidence
      FROM candles_1m
      WHERE "timestamp" <= $2
-       AND "timestamp" > $2 - ($1 * $3 * INTERVAL '1 minute')
+       AND "timestamp" > $3
      GROUP BY bucket
      ORDER BY bucket DESC
-     LIMIT $3`,
-    [minutes, endingAt, limit]
+     LIMIT $4`,
+    [minutes, endingAt, windowStart, limit]
   );
 
   return res.rows

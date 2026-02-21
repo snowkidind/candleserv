@@ -53,6 +53,7 @@ export default function CandlesTab() {
       console.log("[CandlesTab] setData", lw.length, "candles, first:", lw[0], "last:", lw.at(-1));
       try {
         series.current.setData(lw);
+        chart.current?.timeScale().fitContent();
         setLatest(candles.at(-1) ?? null);
         setLoading(false);
       } catch (err) {
