@@ -26,20 +26,34 @@ export default function CandlesTab() {
   // Init chart once
   useEffect(() => {
     if (!chartRef.current) return;
-    chart.current = createChart(chartRef.current, {
-      autoSize: true,
+    const el = chartRef.current;
+    const instance = createChart(el, {
+      width:  el.clientWidth,
+      height: el.clientHeight,
       layout: { background: { color: "#030712" }, textColor: "#9ca3af" },
       grid: { vertLines: { color: "#111827" }, horzLines: { color: "#111827" } },
       crosshair: { mode: 1 },
       timeScale: { borderColor: "#1f2937", timeVisible: true, secondsVisible: false },
       rightPriceScale: { borderColor: "#1f2937" },
     });
-    series.current = chart.current.addCandlestickSeries({
+    chart.current  = instance;
+    series.current = instance.addCandlestickSeries({
       upColor: "#22c55e", downColor: "#ef4444",
       borderUpColor: "#22c55e", borderDownColor: "#ef4444",
       wickUpColor: "#22c55e", wickDownColor: "#ef4444",
     });
-    return () => { chart.current?.remove(); };
+
+    const handleResize = () => {
+      instance.applyOptions({ width: el.clientWidth, height: el.clientHeight });
+    };
+    window.addEventListener("resize", handleResize);
+
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      instance.remove();
+      chart.current  = null;
+      series.current = null;
+    };
   }, []);
 
   // Reset initialized flag when tf changes so the new series gets a proper initial view
