@@ -22,11 +22,13 @@ export default function CandlesTab() {
   const series   = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const [latest, setLatest] = useState<Candle | null>(null);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ["candles", tf],
     queryFn: () => getLatestCandles(tf, 200),
     refetchOnWindowFocus: false,
   });
+
+  if (error) console.error("[CandlesTab] query error:", error);
 
   // Init chart
   useEffect(() => {
@@ -64,6 +66,8 @@ export default function CandlesTab() {
       series.current?.update(candleToLw(c));
       setLatest(c);
     });
+    es.onerror = (e) => console.error("[CandlesTab] SSE error:", e);
+    es.onopen  = () => console.log("[CandlesTab] SSE connected");
     return () => es.close();
   }, [tf]);
 
