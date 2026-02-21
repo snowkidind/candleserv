@@ -17,8 +17,8 @@ export function createApp(): express.Application {
   app.use(express.json());
   app.use(cookieParser());
 
-  app.use((req, _res, next) => {
-    log(`[access] ${req.method} ${req.path}`);
+  app.use((req, res, next) => {
+    res.on("finish", () => log(`[access] ${req.method} ${req.path} ${res.statusCode}`));
     next();
   });
 
