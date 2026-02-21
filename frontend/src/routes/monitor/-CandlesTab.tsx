@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { createChart, IChartApi, ISeriesApi, CandlestickData, Time } from "lightweight-charts";
-import { getLatestCandles, type Candle } from "@/lib/api";
+import type { Candle } from "@/lib/api";
 
 const TFS = ["1m","5m","10m","15m","1h","2h","4h","6h","12h","1d","3d","7d","30d"];
 
@@ -21,16 +20,9 @@ export default function CandlesTab() {
   const chart    = useRef<IChartApi | null>(null);
   const series   = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const [latest, setLatest] = useState<Candle | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["candles", tf],
-    queryFn: () => getLatestCandles(tf, 200),
-    refetchOnWindowFocus: false,
-  });
-
-  if (error) console.error("[CandlesTab] query error:", error);
-
-  // Init chart
+  // Init chart once
   useEffect(() => {
     if (!chartRef.current) return;
     chart.current = createChart(chartRef.current, {
@@ -46,28 +38,30 @@ export default function CandlesTab() {
       borderUpColor: "#22c55e", borderDownColor: "#ef4444",
       wickUpColor: "#22c55e", wickDownColor: "#ef4444",
     });
-
     return () => { chart.current?.remove(); };
   }, []);
 
-  // Load data into chart when query resolves or TF changes
+  // SSE — initial history on connect, then live updates
   useEffect(() => {
-    if (!series.current || !data?.candles.length) return;
-    const lw = data.candles.map(candleToLw).sort((a, b) => (a.time as number) - (b.time as number));
-    series.current.setData(lw);
-    setLatest(data.candles.at(-1) ?? null);
-  }, [data]);
+    setLoading(true);
+    const es = new EventSource(`/monitor/candles/stream?tf=${tf}&n=200`);
 
-  // SSE for live updates
-  useEffect(() => {
-    const es = new EventSource(`/monitor/candles/stream?tf=${tf}`);
+    es.addEventListener("init", (e) => {
+      const candles = JSON.parse(e.data) as Candle[];
+      if (!series.current || !candles.length) return;
+      const lw = candles.map(candleToLw).sort((a, b) => (a.time as number) - (b.time as number));
+      series.current.setData(lw);
+      setLatest(candles.at(-1) ?? null);
+      setLoading(false);
+    });
+
     es.addEventListener("candle", (e) => {
       const c = JSON.parse(e.data) as Candle;
       series.current?.update(candleToLw(c));
       setLatest(c);
     });
+
     es.onerror = (e) => console.error("[CandlesTab] SSE error:", e);
-    es.onopen  = () => console.log("[CandlesTab] SSE connected");
     return () => es.close();
   }, [tf]);
 
@@ -102,7 +96,7 @@ export default function CandlesTab() {
               <span className={confColor}>conf {(latest.confidence * 100).toFixed(0)}%</span>
             </>
           )}
-          {isLoading && <span className="text-gray-600">loading…</span>}
+          {loading && <span className="text-gray-600">loading…</span>}
         </div>
       </div>
       {/* Chart */}

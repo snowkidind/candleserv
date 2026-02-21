@@ -12,6 +12,7 @@ const guard = [trackSession, authenticate, requirePerm("CAN_VIEW_CANDLESERV")];
  */
 router.get("/candles/stream", ...guard, async (req, res) => {
   const tf = (req.query.tf as string) || "1m";
+  const n  = Math.min(parseInt(req.query.n as string, 10) || 200, 1000);
   if (!VALID_TFS.includes(tf)) {
     return res.status(400).json({ error: "Invalid tf" });
   }
@@ -20,6 +21,14 @@ router.get("/candles/stream", ...guard, async (req, res) => {
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders();
+
+  // Send initial history on connect
+  try {
+    const candles = await getCandles({ tf, endingAt: new Date(), limit: n });
+    res.write(`event: init\ndata: ${JSON.stringify(candles)}\n\n`);
+  } catch {
+    // Non-fatal — client will just have no initial data
+  }
 
   // On new 1m candle, derive the TF value and push
   const onCandle = async (candle: unknown) => {
