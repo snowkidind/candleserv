@@ -42,6 +42,7 @@ export interface SourceResult {
   source: string;
   candle: SourceCandle | null;
   error?: string;
+  durationMs?: number;
 }
 
 export interface ApiKeyRow {

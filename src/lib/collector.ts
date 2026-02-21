@@ -13,7 +13,7 @@ import { getSettingInt } from "../db/appSettings";
 import { log, logError, logWarn } from "./log";
 import type { SourceResult } from "../types/index";
 
-const DEADLINE_MS = 10000; // 10 seconds from :00 to write
+const DEADLINE_MS = 15000; // 15 seconds from :00 to write
 const SOURCES = ["binance", "bybit", "kraken", "coinbase", "bitfinex"];
 
 // Per-source 24h failure counters for auto-pause
@@ -89,6 +89,7 @@ async function fetchOne(source: string, minuteTs: Date): Promise<SourceResult> {
   if (pausedSources.has(source)) {
     return { source, candle: null, error: "paused" };
   }
+  const t0 = Date.now();
   try {
     let candle;
     switch (source) {
@@ -100,13 +101,13 @@ async function fetchOne(source: string, minuteTs: Date): Promise<SourceResult> {
       default: return { source, candle: null, error: "unknown source" };
     }
     emitSourceState(source, "on");
-    return { source, candle };
+    return { source, candle, durationMs: Date.now() - t0 };
   } catch (err) {
     recordFailure(source);
     await checkAutoPause(source);
     emitSourceState(source, "error");
     await recordError("collector", `fetchOne:${source}`, String(err));
-    return { source, candle: null, error: String(err) };
+    return { source, candle: null, error: String(err), durationMs: Date.now() - t0 };
   }
 }
 
@@ -127,8 +128,9 @@ export async function collect(minuteTs: Date): Promise<boolean> {
     const results = await Promise.all(SOURCES.map((s) => fetchOne(s, minuteTs)));
 
     if (Date.now() > deadline) {
-      logError(`[collector] deadline exceeded for ${minuteTs.toISOString()} — skipping write`);
-      await recordError("collector", "deadline", `Deadline exceeded for ${minuteTs.toISOString()}`);
+      const timings = results.map(r => `${r.source}:${r.durationMs ?? "?"}ms`).join(" ");
+      logError(`[collector] deadline exceeded for ${minuteTs.toISOString()} — ${timings}`);
+      await recordError("collector", "deadline", `Deadline exceeded for ${minuteTs.toISOString()} — ${timings}`);
       return false;
     }
 
