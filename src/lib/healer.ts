@@ -3,6 +3,7 @@ import { upsertCandle, insertCandleIfMissing, countCandlesInDay } from "../db/ca
 import { clearDetectedGaps } from "../db/gaps";
 import { runGapScan } from "./gapDetector";
 import { recordError } from "../db/errors";
+import { getSetting, setSetting } from "../db/appSettings";
 import { log, logError } from "./log";
 
 const THREE_MONTHS_MS = 90 * 24 * 60 * 60 * 1000;
@@ -75,6 +76,12 @@ async function backfillDay(dayStart: Date): Promise<void> {
  * Skip days that already have 1440 rows.
  */
 export async function runBackfill(): Promise<void> {
+  const alreadyDone = await getSetting("backfillComplete");
+  if (alreadyDone === "true") {
+    log("[healer] backfill already complete — skipping");
+    return;
+  }
+
   log("[healer] starting backfill scan (3 months)");
   const now = new Date();
   const start = new Date(now.getTime() - THREE_MONTHS_MS);
@@ -91,6 +98,7 @@ export async function runBackfill(): Promise<void> {
     }
     day = new Date(day.getTime() + 24 * 60 * 60 * 1000);
   }
+  await setSetting("backfillComplete", "true");
   log("[healer] backfill complete — clearing stale detected gaps and rescanning");
   await clearDetectedGaps();
   await runGapScan(7);
