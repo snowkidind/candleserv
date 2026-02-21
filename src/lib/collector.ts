@@ -122,7 +122,7 @@ export async function collect(minuteTs: Date): Promise<boolean> {
   }
   collectionRunning = true;
 
-  const deadline = minuteTs.getTime() + DEADLINE_MS;
+  const deadline = Date.now() + DEADLINE_MS;
 
   try {
     const results = await Promise.all(SOURCES.map((s) => fetchOne(s, minuteTs)));
