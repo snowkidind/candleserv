@@ -29,7 +29,7 @@ function RootLayout() {
     : "text-red-400";
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100 flex flex-col">
+    <div className="h-screen bg-gray-950 text-gray-100 flex flex-col overflow-hidden">
       <header className="border-b border-gray-800 px-6 py-3 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
           <span className="text-white font-semibold text-sm tracking-wide">CANDLESERV</span>
