@@ -4,7 +4,7 @@ import { fetchKrakenCandle } from "../adapters/kraken";
 import { fetchCoinbaseCandle } from "../adapters/coinbase";
 import { fetchBitfinexCandle } from "../adapters/bitfinex";
 import { applyGuards, buildComposite } from "./composite";
-import { upsertCandle, upsertSourceCandle, getSourceCountBaseline } from "../db/candles";
+import { upsertCandle, upsertSourceCandle, getSourceCountBaseline, getRecentCloseStddev } from "../db/candles";
 import { recordError } from "../db/errors";
 import { candleEmitter } from "./emitter";
 import { rowToJson } from "../db/candles";
@@ -136,7 +136,8 @@ export async function collect(minuteTs: Date): Promise<boolean> {
 
     const minSources = await getSettingInt("minSources", 3);
     const baseline   = await getSourceCountBaseline();
-    const guarded    = applyGuards(results, minSources);
+    const sigma      = await getRecentCloseStddev();
+    const guarded    = applyGuards(results, minSources, sigma);
 
     // Upsert per-source rows
     for (const g of guarded) {

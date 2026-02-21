@@ -48,7 +48,7 @@ function stddev(values: number[]): number {
  * Apply input guards to a set of raw source candles.
  * Returns an array of GuardedSource (accepted + rejected).
  */
-export function applyGuards(results: SourceResult[], minSources: number): GuardedSource[] {
+export function applyGuards(results: SourceResult[], minSources: number, historicalSigma?: number): GuardedSource[] {
   // Step 1a + 1b: zero guard + OHLC consistency
   const afterBasic: GuardedSource[] = results.map(({ source, candle }) => {
     if (!candle) return { source, candle: candle as unknown as SourceCandle, rejected: true, rejectedReason: "fetch_failed" };
@@ -72,7 +72,7 @@ export function applyGuards(results: SourceResult[], minSources: number): Guarde
 
   const closes = passed.map((g) => g.candle.close);
   const med = median(closes);
-  const sigma = Math.max(stddev(closes), 10); // $10 floor
+  const sigma = historicalSigma ?? Math.max(stddev(closes), 10);
 
   return afterBasic.map((g) => {
     if (g.rejected) return g;

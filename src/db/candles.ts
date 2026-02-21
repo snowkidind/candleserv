@@ -105,6 +105,19 @@ export async function getSourceCountBaseline(): Promise<number> {
 }
 
 /**
+ * Standard deviation of close prices over the trailing 1440 rows (24h).
+ * Used as the outlier rejection threshold in the composite engine.
+ */
+export async function getRecentCloseStddev(): Promise<number> {
+  const res = await query(`
+    SELECT STDDEV(close) as sigma
+    FROM (SELECT close FROM candles_1m ORDER BY "timestamp" DESC LIMIT 1440) sub
+  `);
+  const sigma = Number(res.rows[0]?.sigma);
+  return isNaN(sigma) || sigma < 10 ? 10 : sigma; // $10 floor for cold-start
+}
+
+/**
  * Fetch the latest N 1m candles, oldest first.
  */
 export async function getLatest1m(n: number): Promise<CandleJson[]> {
