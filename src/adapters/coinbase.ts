@@ -6,7 +6,7 @@ const TIMEOUT_MS = 6000;
 export async function fetchCoinbaseCandle(minuteTs: Date): Promise<SourceCandle> {
   const start = minuteTs.toISOString();
   const end = new Date(minuteTs.getTime() + 60000).toISOString();
-  const url = `${BASE}/products/BTC-USDC/candles?granularity=60&start=${start}&end=${end}`;
+  const url = `${BASE}/products/BTC-USD/candles?granularity=60&start=${start}&end=${end}`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
