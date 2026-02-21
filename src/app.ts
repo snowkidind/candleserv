@@ -1,6 +1,7 @@
 import express from "express";
 import cookieParser from "cookie-parser";
 import path from "path";
+import { log } from "./lib/log";
 
 import healthRouter from "./routes/health";
 import setupRouter from "./routes/setup";
@@ -15,6 +16,11 @@ export function createApp(): express.Application {
 
   app.use(express.json());
   app.use(cookieParser());
+
+  app.use((req, _res, next) => {
+    log(`[access] ${req.method} ${req.path}`);
+    next();
+  });
 
   // Unauthenticated
   app.use("/", healthRouter);
