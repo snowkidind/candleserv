@@ -16,9 +16,10 @@ function candleToLw(c: Candle): CandlestickData {
 
 export default function CandlesTab() {
   const [tf, setTf] = useState("15m");
-  const chartRef = useRef<HTMLDivElement>(null);
-  const chart    = useRef<IChartApi | null>(null);
-  const series   = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const chartRef    = useRef<HTMLDivElement>(null);
+  const chart       = useRef<IChartApi | null>(null);
+  const series      = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const initialized = useRef(false);
   const [latest, setLatest] = useState<Candle | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -41,6 +42,9 @@ export default function CandlesTab() {
     return () => { chart.current?.remove(); };
   }, []);
 
+  // Reset initialized flag when tf changes so the new series gets a proper initial view
+  useEffect(() => { initialized.current = false; }, [tf]);
+
   // Subscribe to N-candle snapshots — full setData on every event
   useEffect(() => {
     setLoading(true);
@@ -50,10 +54,17 @@ export default function CandlesTab() {
       const candles = JSON.parse(e.data) as Candle[];
       if (!series.current || !candles.length) return;
       const lw = candles.map(candleToLw).sort((a, b) => (a.time as number) - (b.time as number));
-      console.log("[CandlesTab] setData", lw.length, "candles, first:", lw[0], "last:", lw.at(-1));
       try {
         series.current.setData(lw);
-        chart.current?.timeScale().fitContent();
+        if (!initialized.current) {
+          // First load: show the most recent 100 bars at a comfortable zoom
+          const from = Math.max(0, lw.length - 100);
+          chart.current?.timeScale().setVisibleLogicalRange({ from, to: lw.length });
+          initialized.current = true;
+        } else {
+          // Live updates: scroll to latest without resetting zoom
+          chart.current?.timeScale().scrollToRealTime();
+        }
         setLatest(candles.at(-1) ?? null);
         setLoading(false);
       } catch (err) {

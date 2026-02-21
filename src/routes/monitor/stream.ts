@@ -26,7 +26,6 @@ router.get("/candles/stream", ...guard, async (req, res) => {
   const pushSnapshot = async () => {
     try {
       const candles = await getCandles({ tf, endingAt: new Date(), limit: n });
-      console.log(`[stream] tf=${tf} n=${n} getCandles returned ${candles.length}`);
       res.write(`event: candles\ndata: ${JSON.stringify(candles)}\n\n`);
     } catch (err) {
       console.error(`[stream] getCandles error:`, err);
