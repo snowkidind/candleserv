@@ -50,9 +50,14 @@ export default function CandlesTab() {
       const candles = JSON.parse(e.data) as Candle[];
       if (!series.current || !candles.length) return;
       const lw = candles.map(candleToLw).sort((a, b) => (a.time as number) - (b.time as number));
-      series.current.setData(lw);
-      setLatest(candles.at(-1) ?? null);
-      setLoading(false);
+      console.log("[CandlesTab] setData", lw.length, "candles, first:", lw[0], "last:", lw.at(-1));
+      try {
+        series.current.setData(lw);
+        setLatest(candles.at(-1) ?? null);
+        setLoading(false);
+      } catch (err) {
+        console.error("[CandlesTab] setData error:", err);
+      }
     });
 
     es.onerror = (e) => console.error("[CandlesTab] SSE error:", e);
