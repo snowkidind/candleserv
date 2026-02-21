@@ -59,6 +59,10 @@ export async function getAllGaps(limit = 100): Promise<GapRow[]> {
   return res.rows.map(rowToGap);
 }
 
+export async function clearDetectedGaps(): Promise<void> {
+  await query(`DELETE FROM gaps WHERE state = 'detected'`);
+}
+
 export async function countPendingGaps(): Promise<number> {
   const res = await query(
     `SELECT COUNT(*) FROM gaps WHERE state IN ('detected','healing')`

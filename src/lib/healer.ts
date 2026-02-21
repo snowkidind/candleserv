@@ -1,5 +1,7 @@
 import { fetchBinanceRange } from "../adapters/binance";
 import { upsertCandle, insertCandleIfMissing, countCandlesInDay } from "../db/candles";
+import { clearDetectedGaps } from "../db/gaps";
+import { runGapScan } from "./gapDetector";
 import { recordError } from "../db/errors";
 import { log, logError } from "./log";
 
@@ -89,5 +91,7 @@ export async function runBackfill(): Promise<void> {
     }
     day = new Date(day.getTime() + 24 * 60 * 60 * 1000);
   }
-  log("[healer] backfill complete");
+  log("[healer] backfill complete — clearing stale detected gaps and rescanning");
+  await clearDetectedGaps();
+  await runGapScan(7);
 }
