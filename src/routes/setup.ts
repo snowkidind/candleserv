@@ -2,7 +2,8 @@ import { Router } from "express";
 import fs from "fs";
 import path from "path";
 
-const WIZARD_HTML = path.join(__dirname, "setup.html");
+// Resolve from project root so it works in both ts-node (src/) and compiled (dist/)
+const WIZARD_HTML = path.join(process.cwd(), "src", "routes", "setup.html");
 import crypto from "crypto";
 import { Pool } from "pg";
 import { createSchema, seedSettings } from "../db/schema";
