@@ -32,13 +32,12 @@ export default function CandlesTab() {
   useEffect(() => {
     if (!chartRef.current) return;
     chart.current = createChart(chartRef.current, {
+      autoSize: true,
       layout: { background: { color: "#030712" }, textColor: "#9ca3af" },
       grid: { vertLines: { color: "#111827" }, horzLines: { color: "#111827" } },
       crosshair: { mode: 1 },
       timeScale: { borderColor: "#1f2937", timeVisible: true, secondsVisible: false },
       rightPriceScale: { borderColor: "#1f2937" },
-      width: chartRef.current.clientWidth,
-      height: chartRef.current.clientHeight,
     });
     series.current = chart.current.addCandlestickSeries({
       upColor: "#22c55e", downColor: "#ef4444",
@@ -46,13 +45,7 @@ export default function CandlesTab() {
       wickUpColor: "#22c55e", wickDownColor: "#ef4444",
     });
 
-    const ro = new ResizeObserver(() => {
-      if (chart.current && chartRef.current) {
-        chart.current.resize(chartRef.current.clientWidth, chartRef.current.clientHeight);
-      }
-    });
-    ro.observe(chartRef.current);
-    return () => { ro.disconnect(); chart.current?.remove(); };
+    return () => { chart.current?.remove(); };
   }, []);
 
   // Load data into chart when query resolves or TF changes

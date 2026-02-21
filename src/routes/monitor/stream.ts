@@ -45,7 +45,10 @@ router.get("/candles/stream", ...guard, async (req, res) => {
   candleEmitter.on("candle", onCandle);
   candleEmitter.on("source_state", onSourceState);
 
+  const keepalive = setInterval(() => res.write(": ping\n\n"), 30000);
+
   req.on("close", () => {
+    clearInterval(keepalive);
     candleEmitter.off("candle", onCandle);
     candleEmitter.off("source_state", onSourceState);
   });
