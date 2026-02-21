@@ -27,6 +27,7 @@ export default function CandlesTab() {
   useEffect(() => {
     if (!chartRef.current) return;
     const el = chartRef.current;
+    console.log("[chart] container dims:", el.clientWidth, "x", el.clientHeight, "| offsetW:", el.offsetWidth, "offsetH:", el.offsetHeight, "| getBCR:", JSON.stringify(el.getBoundingClientRect()));
     const instance = createChart(el, {
       width:  el.clientWidth,
       height: el.clientHeight,
@@ -68,6 +69,7 @@ export default function CandlesTab() {
       const candles = JSON.parse(e.data) as Candle[];
       if (!series.current || !candles.length) return;
       const lw = candles.map(candleToLw).sort((a, b) => (a.time as number) - (b.time as number));
+      console.log("[candles] received", lw.length, "candles | series:", !!series.current, "chart:", !!chart.current);
       try {
         series.current.setData(lw);
         if (!initialized.current) {
