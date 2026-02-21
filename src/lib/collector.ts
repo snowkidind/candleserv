@@ -128,6 +128,7 @@ export async function collect(minuteTs: Date): Promise<boolean> {
 
     if (Date.now() > deadline) {
       logError(`[collector] deadline exceeded for ${minuteTs.toISOString()} — skipping write`);
+      await recordError("collector", "deadline", `Deadline exceeded for ${minuteTs.toISOString()}`);
       return false;
     }
 
@@ -151,6 +152,7 @@ export async function collect(minuteTs: Date): Promise<boolean> {
 
     if (Date.now() > deadline) {
       logError(`[collector] deadline exceeded after composite for ${minuteTs.toISOString()} — skipping write`);
+      await recordError("collector", "deadline", `Deadline exceeded after composite for ${minuteTs.toISOString()}`);
       return false;
     }
 
