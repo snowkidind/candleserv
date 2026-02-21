@@ -43,10 +43,10 @@ export async function healMinute(minuteTs: Date): Promise<boolean> {
 async function backfillDay(dayStart: Date): Promise<void> {
   const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
   try {
-    // Two fetches: 1000 candles ending at halfway, 440 ending at day end
-    const midpoint = new Date(dayStart.getTime() + 60 * 60 * 1000 * 12);
+    // Two fetches tiling the day: first 1000 minutes, then remaining 440
+    const first1000End = new Date(dayStart.getTime() + 1000 * 60 * 1000);
     const [first, second] = await Promise.all([
-      fetchBinanceRange(midpoint, 1000),
+      fetchBinanceRange(first1000End, 1000),
       fetchBinanceRange(dayEnd, 440),
     ]);
 
