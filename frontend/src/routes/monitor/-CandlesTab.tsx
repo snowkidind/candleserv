@@ -22,14 +22,15 @@ export default function CandlesTab() {
   const initialized = useRef(false);
   const [latest, setLatest] = useState<Candle | null>(null);
   const [loading, setLoading] = useState(true);
+  const [retryCount, setRetryCount] = useState(0);
 
-  // Init chart once
+  // Init chart once — autoSize lets lightweight-charts observe the container
+  // itself so it never initializes at 0×0 regardless of when the DOM is ready
   useEffect(() => {
     if (!chartRef.current) return;
     const el = chartRef.current;
     const instance = createChart(el, {
-      width:  el.clientWidth,
-      height: el.clientHeight,
+      autoSize: true,
       layout: { background: { color: "#030712" }, textColor: "#9ca3af" },
       grid: { vertLines: { color: "#111827" }, horzLines: { color: "#111827" } },
       crosshair: { mode: 1 },
@@ -43,13 +44,7 @@ export default function CandlesTab() {
       wickUpColor: "#22c55e", wickDownColor: "#ef4444",
     });
 
-    const handleResize = () => {
-      instance.applyOptions({ width: el.clientWidth, height: el.clientHeight });
-    };
-    window.addEventListener("resize", handleResize);
-
     return () => {
-      window.removeEventListener("resize", handleResize);
       instance.remove();
       chart.current  = null;
       series.current = null;
@@ -60,6 +55,7 @@ export default function CandlesTab() {
   useEffect(() => { initialized.current = false; }, [tf]);
 
   // Subscribe to N-candle snapshots — full setData on every event
+  // retryCount in deps causes a reconnect when the stream drops
   useEffect(() => {
     setLoading(true);
     const es = new EventSource(`/monitor/candles/stream?tf=${tf}&n=200`);
@@ -86,9 +82,14 @@ export default function CandlesTab() {
       }
     });
 
-    es.onerror = (e) => console.error("[CandlesTab] SSE error:", e);
+    es.onerror = () => {
+      console.error("[CandlesTab] SSE connection lost, reconnecting in 3s...");
+      es.close();
+      setTimeout(() => setRetryCount(n => n + 1), 3000);
+    };
+
     return () => es.close();
-  }, [tf]);
+  }, [tf, retryCount]);
 
   const conf = latest?.confidence ?? null;
   const confColor = conf === null ? "text-gray-500"
@@ -121,7 +122,7 @@ export default function CandlesTab() {
               <span className={confColor}>conf {(latest.confidence * 100).toFixed(0)}%</span>
             </>
           )}
-          {loading && <span className="text-gray-600">loading…</span>}
+          {loading && <span className="text-gray-600">{retryCount > 0 ? "reconnecting…" : "loading…"}</span>}
         </div>
       </div>
       {/* Chart */}
