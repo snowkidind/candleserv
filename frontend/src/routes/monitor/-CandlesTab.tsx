@@ -226,7 +226,7 @@ export default function CandlesTab() {
               setShowGoLive(false);
               chart.current?.timeScale().scrollToRealTime();
             }}
-            className="absolute bottom-8 right-4 px-3 py-1 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded shadow-lg transition-colors"
+            className="absolute bottom-8 right-4 z-10 px-3 py-1 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded shadow-lg transition-colors"
           >
             Go live
           </button>
