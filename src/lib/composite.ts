@@ -86,10 +86,14 @@ export function applyGuards(results: SourceResult[], minSources: number, histori
 
 /**
  * Build the composite candle from guarded sources.
+ * dominantSource: name of the trailing volume leader (from getTrailingVolumeLeader).
+ * If omitted or not present in accepted sources, falls back to the highest-volume
+ * source in the current minute.
  */
 export async function buildComposite(
   guarded: GuardedSource[],
-  sourceCountBaseline: number
+  sourceCountBaseline: number,
+  dominantSource?: string
 ): Promise<CompositeResult> {
   const accepted = guarded.filter((g) => !g.rejected && g.candle);
 
@@ -103,8 +107,25 @@ export async function buildComposite(
 
   const close  = median(closes);
   const open   = median(opens);
-  const high   = Math.max(...accepted.map((g) => g.candle.high));
-  const low    = Math.min(...accepted.map((g) => g.candle.low));
+
+  // Use the trailing volume leader as the dominant H/L source.
+  // Falls back to the highest-volume source in the current minute if the leader
+  // isn't in the accepted set (e.g. it was rejected or absent this tick).
+  const dominant = (dominantSource ? accepted.find(g => g.source === dominantSource) : null)
+    ?? accepted.reduce((best, g) => g.candle.volume > best.candle.volume ? g : best, accepted[0]);
+
+  // Continuity check: log if the dominant's H/L needs expanding to contain the body.
+  const bodyHigh = Math.max(open, close);
+  const bodyLow  = Math.min(open, close);
+  if (dominant.candle.high < bodyHigh || dominant.candle.low > bodyLow) {
+    logError(
+      `[composite] H/L extended for OHLC consistency: source=${dominant.source} ` +
+      `wick=[${dominant.candle.low.toFixed(2)}, ${dominant.candle.high.toFixed(2)}] ` +
+      `body=[${bodyLow.toFixed(2)}, ${bodyHigh.toFixed(2)}]`
+    );
+  }
+  const high = Math.max(dominant.candle.high, bodyHigh);
+  const low  = Math.min(dominant.candle.low,  bodyLow);
   const volume = accepted.reduce((sum, g) => sum + g.candle.volume, 0);
 
   const sourceCount = accepted.length;

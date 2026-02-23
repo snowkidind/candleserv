@@ -4,7 +4,7 @@ import { fetchKrakenCandle } from "../adapters/kraken";
 import { fetchCoinbaseCandle } from "../adapters/coinbase";
 import { fetchBitfinexCandle } from "../adapters/bitfinex";
 import { applyGuards, buildComposite } from "./composite";
-import { upsertCandle, upsertSourceCandle, getSourceCountBaseline, getRecentCloseStddev } from "../db/candles";
+import { upsertCandle, upsertSourceCandle, getSourceCountBaseline, getRecentCloseStddev, getTrailingVolumeLeader } from "../db/candles";
 import { recordError } from "../db/errors";
 import { candleEmitter } from "./emitter";
 import { rowToJson } from "../db/candles";
@@ -134,10 +134,11 @@ export async function collect(minuteTs: Date): Promise<boolean> {
       return false;
     }
 
-    const minSources = await getSettingInt("minSources", 3);
-    const baseline   = await getSourceCountBaseline();
-    const sigma      = await getRecentCloseStddev();
-    const guarded    = applyGuards(results, minSources, sigma);
+    const minSources   = await getSettingInt("minSources", 3);
+    const baseline     = await getSourceCountBaseline();
+    const sigma        = await getRecentCloseStddev();
+    const volumeLeader = await getTrailingVolumeLeader(10);
+    const guarded      = applyGuards(results, minSources, sigma);
 
     // Upsert per-source rows
     for (const g of guarded) {
@@ -151,7 +152,7 @@ export async function collect(minuteTs: Date): Promise<boolean> {
       });
     }
 
-    const composite = await buildComposite(guarded, baseline);
+    const composite = await buildComposite(guarded, baseline, volumeLeader ?? undefined);
 
     if (Date.now() > deadline) {
       logError(`[collector] deadline exceeded after composite for ${minuteTs.toISOString()} — skipping write`);

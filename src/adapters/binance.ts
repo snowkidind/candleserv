@@ -17,7 +17,17 @@ export async function fetchBinanceCandle(minuteTs: Date): Promise<SourceCandle> 
   try {
     const res = await fetch(url, { signal: controller.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json() as unknown[][];
+    let data = await res.json() as unknown[][];
+
+    // Binance occasionally returns empty at the daily UTC boundary (00:00).
+    // Retry once after a short delay before giving up.
+    if (!data.length) {
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      const res2 = await fetch(url);
+      if (!res2.ok) throw new Error(`HTTP ${res2.status}`);
+      data = await res2.json() as unknown[][];
+    }
+
     if (!data.length) throw new Error("No candle returned");
     const [, o, h, l, c, v] = data[0];
     return {

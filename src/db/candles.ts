@@ -296,3 +296,28 @@ export async function pruneSourceCandles(): Promise<void> {
     `DELETE FROM candles_1m_sources WHERE "timestamp" < NOW() - INTERVAL '30 days'`
   );
 }
+
+/**
+ * Returns the source with the highest total volume across the last N accepted
+ * 1m source-candle rows. Used by the collector to select the dominant H/L source.
+ * Returns null if candles_1m_sources is empty (cold start).
+ */
+export async function getTrailingVolumeLeader(n = 10): Promise<string | null> {
+  const res = await query(
+    `SELECT source, SUM(volume) AS total_vol
+     FROM candles_1m_sources
+     WHERE rejected = false
+       AND "timestamp" IN (
+         SELECT DISTINCT "timestamp"
+         FROM candles_1m_sources
+         WHERE rejected = false
+         ORDER BY "timestamp" DESC
+         LIMIT $1
+       )
+     GROUP BY source
+     ORDER BY total_vol DESC
+     LIMIT 1`,
+    [n]
+  );
+  return (res.rows[0]?.source as string) ?? null;
+}
