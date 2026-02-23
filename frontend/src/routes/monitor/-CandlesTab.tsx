@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { createChart, IChartApi, ISeriesApi, CandlestickData, Time } from "lightweight-charts";
+import { createChart, IChartApi, ISeriesApi, CandlestickData, Time, LogicalRange } from "lightweight-charts";
 import type { Candle } from "@/lib/api";
 import { getCandlesBefore } from "@/lib/api";
 
 const TFS = ["1m","5m","10m","15m","1h","2h","4h","6h","12h","1d","3d","7d","30d"];
 const HISTORY_FETCH_LIMIT = 500;
-const HISTORY_TRIGGER_BARS = 30; // fetch when scrolled within 30 bars of the left edge
+const HISTORY_TRIGGER_BARS = 50; // fetch when scrolled within 50 bars of the left edge
 
 function candleToLw(c: Candle): CandlestickData {
   return {
@@ -57,14 +57,19 @@ export default function CandlesTab() {
     });
 
     // ── Scroll handler — fetch history when user nears the left edge ──────────
-    const handleRangeChange = async (range: { from: number; to: number } | null) => {
+    const handleRangeChange = async (range: LogicalRange | null) => {
       if (!range || !series.current) return;
+
+      const from = range.from as number;
+      const to   = range.to as number;
 
       // Detect whether the user has scrolled away from the live edge
       const total = allCandles.current.size;
-      userScrolledBack.current = range.to < total - 10;
+      userScrolledBack.current = to < total - 10;
 
-      if (range.from > HISTORY_TRIGGER_BARS) return;
+      console.log(`[CandlesTab] range from=${from.toFixed(1)} to=${to.toFixed(1)} total=${total} loading=${loadingHistory.current} noMore=${noMoreHistory.current}`);
+
+      if (from > HISTORY_TRIGGER_BARS) return;
       if (loadingHistory.current || noMoreHistory.current) return;
 
       loadingHistory.current = true;
