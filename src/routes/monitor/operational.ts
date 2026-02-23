@@ -13,6 +13,22 @@ const router = Router();
 const view   = [trackSession, authenticate, requirePerm("CAN_VIEW_CANDLESERV")];
 const modify = [trackSession, authenticate, requirePerm("CAN_MODIFY_CANDLESERV")];
 
+/** GET /monitor/candles?tf=<tf>&endingAt=<iso>&limit=<n> — historical page for monitor chart */
+router.get("/candles", ...view, async (req, res) => {
+  const { tf, endingAt, limit } = req.query as Record<string, string>;
+  if (!tf || !VALID_TFS.includes(tf)) return res.status(400).json({ error: "Invalid tf" });
+  if (!endingAt) return res.status(400).json({ error: "endingAt required" });
+  const end = new Date(endingAt);
+  if (isNaN(end.getTime())) return res.status(400).json({ error: "Invalid endingAt" });
+  const count = Math.min(parseInt(limit, 10) || 500, 2000);
+  try {
+    const candles = await getCandles({ tf, endingAt: end, limit: count });
+    return res.json({ candles });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
 /** GET /monitor/candles/latest?tf=<tf>&n=<n> — session auth, for monitor UI */
 router.get("/candles/latest", ...view, async (req, res) => {
   const { tf, n } = req.query as Record<string, string>;

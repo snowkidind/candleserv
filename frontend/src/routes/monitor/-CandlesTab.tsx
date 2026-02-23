@@ -1,16 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { createChart, IChartApi, ISeriesApi, CandlestickData, Time } from "lightweight-charts";
 import type { Candle } from "@/lib/api";
+import { getCandlesBefore } from "@/lib/api";
 
 const TFS = ["1m","5m","10m","15m","1h","2h","4h","6h","12h","1d","3d","7d","30d"];
+const HISTORY_FETCH_LIMIT = 500;
+const HISTORY_TRIGGER_BARS = 30; // fetch when scrolled within 30 bars of the left edge
 
 function candleToLw(c: Candle): CandlestickData {
   return {
     time: Math.floor(c.timestamp / 1000) as Time,
-    open: c.open,
-    high: c.high,
-    low: c.low,
-    close: c.close,
+    open: c.open, high: c.high, low: c.low, close: c.close,
   };
 }
 
@@ -20,12 +20,24 @@ export default function CandlesTab() {
   const chart       = useRef<IChartApi | null>(null);
   const series      = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const initialized = useRef(false);
-  const [latest, setLatest] = useState<Candle | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [retryCount, setRetryCount] = useState(0);
+  const [latest, setLatest]           = useState<Candle | null>(null);
+  const [loading, setLoading]         = useState(true);
+  const [retryCount, setRetryCount]   = useState(0);
+  const [fetchingHistory, setFetchingHistory] = useState(false);
+  const [atHistoryStart, setAtHistoryStart]   = useState(false);
 
-  // Init chart once — autoSize lets lightweight-charts observe the container
-  // itself so it never initializes at 0×0 regardless of when the DOM is ready
+  // All loaded candles, keyed by Unix-seconds timestamp to deduplicate across
+  // SSE updates and historical fetches
+  const allCandles     = useRef<Map<number, CandlestickData>>(new Map());
+  const loadingHistory = useRef(false);
+  const noMoreHistory  = useRef(false);
+  // Track whether the user has scrolled back so we don't snap them to live on each tick
+  const userScrolledBack = useRef(false);
+  // Keep current tf accessible inside effects without re-subscribing
+  const tfRef = useRef(tf);
+  useEffect(() => { tfRef.current = tf; }, [tf]);
+
+  // ── Chart init — runs once ──────────────────────────────────────────────────
   useEffect(() => {
     if (!chartRef.current) return;
     const el = chartRef.current;
@@ -44,18 +56,76 @@ export default function CandlesTab() {
       wickUpColor: "#22c55e", wickDownColor: "#ef4444",
     });
 
+    // ── Scroll handler — fetch history when user nears the left edge ──────────
+    const handleRangeChange = async (range: { from: number; to: number } | null) => {
+      if (!range || !series.current) return;
+
+      // Detect whether the user has scrolled away from the live edge
+      const total = allCandles.current.size;
+      userScrolledBack.current = range.to < total - 10;
+
+      if (range.from > HISTORY_TRIGGER_BARS) return;
+      if (loadingHistory.current || noMoreHistory.current) return;
+
+      loadingHistory.current = true;
+      setFetchingHistory(true);
+
+      try {
+        const sorted = [...allCandles.current.keys()].sort((a, b) => a - b);
+        if (!sorted.length) return;
+        // Fetch candles strictly before the oldest loaded bar
+        const endingAtMs = sorted[0] * 1000 - 1;
+        const result = await getCandlesBefore(tfRef.current, endingAtMs, HISTORY_FETCH_LIMIT);
+
+        if (!result.candles.length) {
+          noMoreHistory.current = true;
+          setAtHistoryStart(true);
+          return;
+        }
+
+        for (const c of result.candles) {
+          const sec = Math.floor(c.timestamp / 1000);
+          if (!allCandles.current.has(sec)) {
+            allCandles.current.set(sec, candleToLw(c));
+          }
+        }
+
+        const data = sortedCandles();
+        series.current.setData(data);
+
+        if (result.candles.length < HISTORY_FETCH_LIMIT) {
+          noMoreHistory.current = true;
+          setAtHistoryStart(true);
+        }
+      } catch (err) {
+        console.error("[CandlesTab] history fetch error:", err);
+      } finally {
+        loadingHistory.current = false;
+        setFetchingHistory(false);
+      }
+    };
+
+    instance.timeScale().subscribeVisibleLogicalRangeChange(handleRangeChange);
+
     return () => {
+      instance.timeScale().unsubscribeVisibleLogicalRangeChange(handleRangeChange);
       instance.remove();
       chart.current  = null;
       series.current = null;
     };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Reset initialized flag when tf changes so the new series gets a proper initial view
-  useEffect(() => { initialized.current = false; }, [tf]);
+  // ── Reset per-tf state when timeframe changes ───────────────────────────────
+  useEffect(() => {
+    initialized.current    = false;
+    loadingHistory.current = false;
+    noMoreHistory.current  = false;
+    userScrolledBack.current = false;
+    allCandles.current.clear();
+    setAtHistoryStart(false);
+  }, [tf]);
 
-  // Subscribe to N-candle snapshots — full setData on every event
-  // retryCount in deps causes a reconnect when the stream drops
+  // ── SSE stream — merges into the shared candle map ──────────────────────────
   useEffect(() => {
     setLoading(true);
     const es = new EventSource(`/monitor/candles/stream?tf=${tf}&n=200`);
@@ -63,16 +133,21 @@ export default function CandlesTab() {
     es.addEventListener("candles", (e) => {
       const candles = JSON.parse(e.data) as Candle[];
       if (!series.current || !candles.length) return;
-      const lw = candles.map(candleToLw).sort((a, b) => (a.time as number) - (b.time as number));
+
+      for (const c of candles) {
+        allCandles.current.set(Math.floor(c.timestamp / 1000), candleToLw(c));
+      }
+
+      const data = sortedCandles();
       try {
-        series.current.setData(lw);
+        series.current.setData(data);
         if (!initialized.current) {
           // First load: show the most recent 100 bars at a comfortable zoom
-          const from = Math.max(0, lw.length - 100);
-          chart.current?.timeScale().setVisibleLogicalRange({ from, to: lw.length });
+          const from = Math.max(0, data.length - 100);
+          chart.current?.timeScale().setVisibleLogicalRange({ from, to: data.length });
           initialized.current = true;
-        } else {
-          // Live updates: scroll to latest without resetting zoom
+        } else if (!userScrolledBack.current) {
+          // Live update and user is at the live edge — follow it
           chart.current?.timeScale().scrollToRealTime();
         }
         setLatest(candles.at(-1) ?? null);
@@ -90,6 +165,12 @@ export default function CandlesTab() {
 
     return () => es.close();
   }, [tf, retryCount]);
+
+  function sortedCandles(): CandlestickData[] {
+    return [...allCandles.current.values()].sort(
+      (a, b) => (a.time as number) - (b.time as number)
+    );
+  }
 
   const conf = latest?.confidence ?? null;
   const confColor = conf === null ? "text-gray-500"
@@ -122,7 +203,11 @@ export default function CandlesTab() {
               <span className={confColor}>conf {(latest.confidence * 100).toFixed(0)}%</span>
             </>
           )}
-          {loading && <span className="text-gray-600">{retryCount > 0 ? "reconnecting…" : "loading…"}</span>}
+          {fetchingHistory && <span className="text-blue-400">loading history…</span>}
+          {atHistoryStart && !fetchingHistory && <span className="text-gray-600">full history loaded</span>}
+          {!fetchingHistory && !atHistoryStart && loading && (
+            <span className="text-gray-600">{retryCount > 0 ? "reconnecting…" : "loading…"}</span>
+          )}
         </div>
       </div>
       {/* Chart */}

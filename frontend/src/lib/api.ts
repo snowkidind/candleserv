@@ -42,6 +42,11 @@ export interface Candle {
 export const getLatestCandles = (tf: string, n: number) =>
   req<{ candles: Candle[] }>(`/monitor/candles/latest?tf=${tf}&n=${n}`);
 
+export const getCandlesBefore = (tf: string, endingAtMs: number, limit: number) =>
+  req<{ candles: Candle[] }>(
+    `/monitor/candles?tf=${tf}&endingAt=${new Date(endingAtMs).toISOString()}&limit=${limit}`
+  );
+
 // Stats
 export interface StatsData {
   totalRows: number;
