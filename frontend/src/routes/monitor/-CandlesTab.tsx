@@ -25,6 +25,7 @@ export default function CandlesTab() {
   const [retryCount, setRetryCount]   = useState(0);
   const [fetchingHistory, setFetchingHistory] = useState(false);
   const [atHistoryStart, setAtHistoryStart]   = useState(false);
+  const [showGoLive, setShowGoLive]           = useState(false);
 
   // All loaded candles, keyed by Unix-seconds timestamp to deduplicate across
   // SSE updates and historical fetches
@@ -65,7 +66,9 @@ export default function CandlesTab() {
 
       // Detect whether the user has scrolled away from the live edge
       const total = allCandles.current.size;
-      userScrolledBack.current = to < total - 10;
+      const scrolledBack = to < total - 10;
+      userScrolledBack.current = scrolledBack;
+      setShowGoLive(scrolledBack);
 
       if (from > HISTORY_TRIGGER_BARS) return;
       if (loadingHistory.current || noMoreHistory.current) return;
@@ -214,7 +217,21 @@ export default function CandlesTab() {
         </div>
       </div>
       {/* Chart */}
-      <div ref={chartRef} className="flex-1" />
+      <div className="relative flex-1">
+        <div ref={chartRef} className="w-full h-full" />
+        {showGoLive && (
+          <button
+            onClick={() => {
+              userScrolledBack.current = false;
+              setShowGoLive(false);
+              chart.current?.timeScale().scrollToRealTime();
+            }}
+            className="absolute bottom-8 right-4 px-3 py-1 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded shadow-lg transition-colors"
+          >
+            Go live
+          </button>
+        )}
+      </div>
     </div>
   );
 }
