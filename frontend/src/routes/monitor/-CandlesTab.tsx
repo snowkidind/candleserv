@@ -67,8 +67,6 @@ export default function CandlesTab() {
       const total = allCandles.current.size;
       userScrolledBack.current = to < total - 10;
 
-      console.log(`[CandlesTab] range from=${from.toFixed(1)} to=${to.toFixed(1)} total=${total} loading=${loadingHistory.current} noMore=${noMoreHistory.current}`);
-
       if (from > HISTORY_TRIGGER_BARS) return;
       if (loadingHistory.current || noMoreHistory.current) return;
 
