@@ -40,7 +40,7 @@ function candleToVolume(c: Candle): HistogramData {
 }
 
 export default function CandlesTab() {
-  const [tf, setTf] = useState("15m");
+  const [tf, setTf] = useState(() => localStorage.getItem("candleserv:tf") ?? "15m");
   const chartRef       = useRef<HTMLDivElement>(null);
   const chart          = useRef<IChartApi | null>(null);
   const series         = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -54,6 +54,7 @@ export default function CandlesTab() {
   const [atHistoryStart, setAtHistoryStart]   = useState(false);
   const [showGoLive, setShowGoLive]           = useState(false);
   const [errorTooltip, setErrorTooltip]       = useState<{ x: number; y: number; messages: string[] } | null>(null);
+  const [aspectRatio, setAspectRatio]         = useState<string | null>(null);
 
   // All loaded candles, keyed by Unix-seconds timestamp to deduplicate across
   // SSE updates and historical fetches
@@ -363,7 +364,7 @@ export default function CandlesTab() {
           {TFS.map(t => (
             <button
               key={t}
-              onClick={() => setTf(t)}
+              onClick={() => { localStorage.setItem("candleserv:tf", t); setTf(t); }}
               className={`px-2 py-1 text-xs rounded transition-colors ${
                 tf === t ? "bg-blue-600 text-white" : "text-gray-500 hover:text-gray-300"
               }`}
@@ -388,7 +389,10 @@ export default function CandlesTab() {
         </div>
       </div>
       {/* Chart */}
-      <div className="relative flex-1">
+      <div
+        className={`relative pb-6 ${aspectRatio ? "" : "flex-1"}`}
+        style={aspectRatio ? { aspectRatio, width: "100%" } : undefined}
+      >
         <div ref={chartRef} className="w-full h-full" />
         {errorTooltip && (
           <div
@@ -412,6 +416,24 @@ export default function CandlesTab() {
             Go live
           </button>
         )}
+        <div className="absolute bottom-1 right-4 z-10 flex gap-1">
+          {["21:9", "16:9", "4:3", "3:2"].map(label => {
+            const value = label.replace(":", "/");
+            return (
+              <button
+                key={label}
+                onClick={() => setAspectRatio(aspectRatio === value ? null : value)}
+                className={`px-1.5 py-0.5 text-xs rounded transition-colors ${
+                  aspectRatio === value
+                    ? "bg-gray-600 text-white"
+                    : "text-gray-700 hover:text-gray-400"
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
