@@ -21,14 +21,12 @@ export async function trackSession(
     const existing = cookies[COOKIE_NAME] as string | undefined;
     const { sessionId, userId } = await getOrCreateSession(existing);
 
-    if (sessionId !== existing) {
-      res.cookie(COOKIE_NAME, sessionId, {
-        httpOnly: true,
-        sameSite: "strict",
-        secure: false,
-        maxAge: COOKIE_MAX_AGE,
-      });
-    }
+    res.cookie(COOKIE_NAME, sessionId, {
+      httpOnly: true,
+      sameSite: "strict",
+      secure: false,
+      maxAge: COOKIE_MAX_AGE,
+    });
 
     req.sessionId = sessionId;
     req.userId = userId ?? undefined;
