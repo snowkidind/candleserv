@@ -18,17 +18,18 @@ import type { GuardedSource } from "../src/lib/composite";
 import { upsertCandle } from "../src/db/candles";
 
 const SOURCE_COUNT_BASELINE = 5;
-const START_DATE = new Date("2026-02-22T00:00:00Z");
+const START_DATE = new Date("2026-02-21T17:58:00Z");
+const END_DATE   = new Date("2026-02-22T00:00:00Z");
 
 async function main(): Promise<void> {
-  console.log(`\nRe-deriving candles_1m from ${START_DATE.toISOString()} onwards...\n`);
+  console.log(`\nRe-deriving candles_1m from ${START_DATE.toISOString()} to ${END_DATE.toISOString()}...\n`);
 
   // Fetch all distinct timestamps that have per-source data
   const tsRes = await query(
     `SELECT DISTINCT "timestamp" FROM candles_1m_sources
-     WHERE "timestamp" >= $1
+     WHERE "timestamp" >= $1 AND "timestamp" < $2
      ORDER BY "timestamp" ASC`,
-    [START_DATE]
+    [START_DATE, END_DATE]
   );
 
   const timestamps: Date[] = tsRes.rows.map(
