@@ -2,6 +2,7 @@ import { Router } from "express";
 import { trackSession, authenticate, requirePerm } from "../../middleware/sessionAuth";
 import { getCandles, VALID_TFS } from "../../db/candles";
 import { candleEmitter } from "../../lib/emitter";
+import { redisGet, redisSet } from "../../lib/redis";
 
 const router = Router();
 const guard = [trackSession, authenticate, requirePerm("CAN_VIEW_CANDLESERV")];
@@ -25,7 +26,15 @@ router.get("/candles/stream", ...guard, async (req, res) => {
   // Push full N-candle snapshot — used on connect and on every new candle
   const pushSnapshot = async () => {
     try {
-      const candles = await getCandles({ tf, endingAt: new Date(), limit: n });
+      const cacheKey = `candles:stream:${tf}:${n}`;
+      const cached = await redisGet(cacheKey);
+      let candles;
+      if (cached) {
+        candles = JSON.parse(cached);
+      } else {
+        candles = await getCandles({ tf, endingAt: new Date(), limit: n });
+        await redisSet(cacheKey, JSON.stringify(candles), 55);
+      }
       res.write(`event: candles\ndata: ${JSON.stringify(candles)}\n\n`);
     } catch (err) {
       console.error(`[stream] getCandles error:`, err);

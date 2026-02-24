@@ -17,6 +17,19 @@ export function createApp(): express.Application {
   app.use(express.json());
   app.use(cookieParser());
 
+  // Read-only instance: block all mutations except auth endpoints
+  if (process.env.READONLY_MODE === "true") {
+    app.use((req, res, next) => {
+      if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
+        return next();
+      }
+      if (req.path === "/monitor/login" || req.path === "/monitor/logout") {
+        return next();
+      }
+      return res.status(403).json({ error: "Read-only mode: write operations are disabled on this instance" });
+    });
+  }
+
   app.use((req, res, next) => {
     res.on("finish", () => log(`[access] ${req.method} ${req.path} ${res.statusCode}`));
     next();

@@ -161,8 +161,8 @@ export async function getCandles(opts: {
   const windowStart = new Date(endingAt.getTime() - minutes * limit * 60 * 1000);
   const res = await query(
     `SELECT
-       date_trunc('minute', "timestamp") - (
-         EXTRACT(MINUTE FROM "timestamp")::int % $1 * INTERVAL '1 minute'
+       to_timestamp(
+         FLOOR(EXTRACT(EPOCH FROM "timestamp") / ($1 * 60)) * ($1 * 60)
        ) AS bucket,
        (array_agg(open ORDER BY "timestamp" ASC))[1] AS open,
        MAX(high) AS high,
@@ -215,7 +215,8 @@ async function getCalendarMonthlyCandles(endingAt: Date, limit: number): Promise
        bit_or(sources) AS sources,
        AVG(confidence) AS confidence
      FROM candles_1m
-     WHERE date_trunc('month', "timestamp") <= date_trunc('month', $1::timestamptz)
+     WHERE "timestamp" <  date_trunc('month', $1::timestamptz) + INTERVAL '1 month'
+       AND "timestamp" >= date_trunc('month', $1::timestamptz) - ($2 * INTERVAL '1 month')
      GROUP BY bucket
      ORDER BY bucket DESC
      LIMIT $2`,

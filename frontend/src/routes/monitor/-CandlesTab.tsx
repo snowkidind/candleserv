@@ -1,16 +1,33 @@
 import { useEffect, useRef, useState } from "react";
-import { createChart, IChartApi, ISeriesApi, CandlestickData, HistogramData, Time, LogicalRange } from "lightweight-charts";
+import { createChart, IChartApi, ISeriesApi, CandlestickData, HistogramData, WhitespaceData, Time, LogicalRange } from "lightweight-charts";
 import type { Candle } from "@/lib/api";
-import { getCandlesBefore } from "@/lib/api";
+import { getCandlesBefore, getGaps, getErrors } from "@/lib/api";
 
 const TFS = ["1m","5m","10m","15m","1h","2h","4h","6h","12h","1d","3d","7d","30d"];
 const HISTORY_FETCH_LIMIT = 500;
 const HISTORY_TRIGGER_BARS = 50; // fetch when scrolled within 50 bars of the left edge
 
+const TF_SECONDS: Record<string, number> = {
+  "1m": 60, "5m": 300, "10m": 600, "15m": 900,
+  "1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600,
+  "12h": 43200, "1d": 86400, "3d": 259200, "7d": 604800, "30d": 2592000,
+};
+
+// Multi-exchange confidence averaging was introduced 2026-02-21T17:52:00Z.
+// Candles before this date carry a confidence value that isn't meaningful for opacity.
+const CONFIDENCE_CUTOFF_MS = new Date("2026-02-21T17:52:00Z").getTime();
+
 function candleToLw(c: Candle): CandlestickData {
+  const alpha = c.timestamp >= CONFIDENCE_CUTOFF_MS
+    ? Math.max(0.001, c.confidence)
+    : 1;
+  const color = c.close >= c.open
+    ? `rgba(34,197,94,${alpha})`
+    : `rgba(239,68,68,${alpha})`;
   return {
     time: Math.floor(c.timestamp / 1000) as Time,
     open: c.open, high: c.high, low: c.low, close: c.close,
+    color, borderColor: color, wickColor: color,
   };
 }
 
@@ -28,6 +45,7 @@ export default function CandlesTab() {
   const chart          = useRef<IChartApi | null>(null);
   const series         = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeries   = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const gapSeries      = useRef<ISeriesApi<"Histogram"> | null>(null);
   const initialized    = useRef(false);
   const [latest, setLatest]           = useState<Candle | null>(null);
   const [loading, setLoading]         = useState(true);
@@ -40,6 +58,8 @@ export default function CandlesTab() {
   // SSE updates and historical fetches
   const allCandles     = useRef<Map<number, CandlestickData>>(new Map());
   const allVolume      = useRef<Map<number, HistogramData>>(new Map());
+  const gapRanges      = useRef<{startSec: number, endSec: number}[]>([]);
+  const errorBars      = useRef<Set<number>>(new Set());
   const loadingHistory = useRef(false);
   const noMoreHistory  = useRef(false);
   // Track whether the user has scrolled back so we don't snap them to live on each tick
@@ -78,6 +98,18 @@ export default function CandlesTab() {
     });
     volumeSeries.current.priceScale().applyOptions({
       scaleMargins: { top: 0.75, bottom: 0 },
+      visible: false,
+    });
+
+    // Gap background bands — full pane height, own scale
+    gapSeries.current = instance.addHistogramSeries({
+      priceFormat: { type: "volume" },
+      priceScaleId: "gap-bg",
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+    gapSeries.current.priceScale().applyOptions({
+      scaleMargins: { top: 0, bottom: 0 },
       visible: false,
     });
 
@@ -121,9 +153,10 @@ export default function CandlesTab() {
           }
         }
 
-        const data = sortedCandles();
-        series.current.setData(data);
+        series.current.setData(sortedCandlesWithGaps());
         volumeSeries.current?.setData(sortedVolume());
+        gapSeries.current?.setData(sortedGapHistogram());
+        updateErrorMarkers();
 
         if (result.candles.length < HISTORY_FETCH_LIMIT) {
           noMoreHistory.current = true;
@@ -145,6 +178,7 @@ export default function CandlesTab() {
       chart.current        = null;
       series.current       = null;
       volumeSeries.current = null;
+      gapSeries.current    = null;
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -156,8 +190,36 @@ export default function CandlesTab() {
     userScrolledBack.current = false;
     allCandles.current.clear();
     allVolume.current.clear();
+    gapRanges.current = [];
+    errorBars.current = new Set();
     setAtHistoryStart(false);
   }, [tf]);
+
+  // ── Fetch gap ranges and service errors on TF change ────────────────────────
+  useEffect(() => {
+    gapRanges.current = [];
+    errorBars.current = new Set();
+
+    getGaps().then(result => {
+      gapRanges.current = result.gaps.map(g => ({
+        startSec: Math.floor(new Date(g.timestamp).getTime() / 1000),
+        endSec:   Math.floor(new Date(g.timestamp).getTime() / 1000) + g.durationMinutes * 60,
+      }));
+      series.current?.setData(sortedCandlesWithGaps());
+      gapSeries.current?.setData(sortedGapHistogram());
+    }).catch(err => console.error("[CandlesTab] getGaps error:", err));
+
+    getErrors(60 * 24 * 30).then(result => {
+      const step = TF_SECONDS[tfRef.current];
+      const bars = new Set<number>();
+      for (const err of result.errors) {
+        const tSec = Math.floor(new Date(err.createdAt).getTime() / 1000);
+        bars.add(Math.floor(tSec / step) * step);
+      }
+      errorBars.current = bars;
+      updateErrorMarkers();
+    }).catch(err => console.error("[CandlesTab] getErrors error:", err));
+  }, [tf]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── SSE stream — merges into the shared candle map ──────────────────────────
   useEffect(() => {
@@ -174,10 +236,12 @@ export default function CandlesTab() {
         allVolume.current.set(sec, candleToVolume(c));
       }
 
-      const data = sortedCandles();
       try {
+        const data = sortedCandlesWithGaps();
         series.current.setData(data);
         volumeSeries.current?.setData(sortedVolume());
+        gapSeries.current?.setData(sortedGapHistogram());
+        updateErrorMarkers();
         if (!initialized.current) {
           // First load: show the most recent 100 bars at a comfortable zoom
           const from = Math.max(0, data.length - 100);
@@ -213,6 +277,56 @@ export default function CandlesTab() {
     return [...allVolume.current.values()].sort(
       (a, b) => (a.time as number) - (b.time as number)
     );
+  }
+
+  function getGapBars(): number[] {
+    if (!gapRanges.current.length || !allCandles.current.size) return [];
+    const step = TF_SECONDS[tfRef.current];
+    const keys = [...allCandles.current.keys()];
+    const minT = Math.min(...keys);
+    const maxT = Math.max(...keys);
+    const result: number[] = [];
+    for (const { startSec, endSec } of gapRanges.current) {
+      const alignedStart = Math.floor(startSec / step) * step;
+      const alignedEnd   = Math.ceil(endSec / step) * step;
+      for (let t = alignedStart; t < alignedEnd; t += step) {
+        if (t >= minT && t <= maxT && !allCandles.current.has(t)) result.push(t);
+      }
+    }
+    return result;
+  }
+
+  function sortedCandlesWithGaps(): (CandlestickData | WhitespaceData)[] {
+    const gaps = getGapBars().map(t => ({ time: t as Time }));
+    return [...sortedCandles(), ...gaps]
+      .sort((a, b) => (a.time as number) - (b.time as number));
+  }
+
+  function sortedGapHistogram(): HistogramData[] {
+    return getGapBars().map(t => ({
+      time: t as Time, value: 1, color: "rgba(107,114,128,0.12)",
+    }));
+  }
+
+  function updateErrorMarkers() {
+    if (!volumeSeries.current) return;
+    // Error timestamps are 1m-resolution events. On higher TFs the confidence
+    // field already captures data quality, so markers are only shown at 1m.
+    if (tfRef.current !== "1m") {
+      volumeSeries.current.setMarkers([]);
+      return;
+    }
+    const markers = [...errorBars.current]
+      .filter(t => allCandles.current.has(t))
+      .sort((a, b) => a - b)
+      .map(t => ({
+        time: t as Time,
+        position: "aboveBar" as const,
+        color: "#ef4444",
+        shape: "square" as const,
+        size: 0.5,
+      }));
+    volumeSeries.current.setMarkers(markers);
   }
 
   const conf = latest?.confidence ?? null;

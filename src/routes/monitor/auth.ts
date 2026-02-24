@@ -19,13 +19,13 @@ router.post("/login", trackSession, async (req, res) => {
 
     const valid = await verifyPassword(password, user.password);
     if (!valid) {
-      await touchLastLoginFail(user.id);
+      if (process.env.READONLY_MODE !== "true") await touchLastLoginFail(user.id);
       log(`[auth] login failed — wrong password for: ${email}`);
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
     await assignUserToSession(req.sessionId!, user.id);
-    await touchLastLogin(user.id);
+    if (process.env.READONLY_MODE !== "true") await touchLastLogin(user.id);
     return res.json({ ok: true });
   } catch (err) {
     return res.status(500).json({ error: String(err) });

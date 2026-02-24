@@ -27,25 +27,29 @@ async function main(): Promise<void> {
   // Connect to Redis (optional — logs and continues if unavailable)
   await initRedis();
 
-  // Start live collection
-  startCollector();
+  if (process.env.READONLY_MODE === "true") {
+    log("[server] READONLY_MODE — collector, healer, gap detector, and maintenance disabled");
+  } else {
+    // Start live collection
+    startCollector();
 
-  // Background backfill (non-blocking — runs concurrently with collector)
-  runBackfill().catch((err) => logError("[server] backfill error:", err));
+    // Background backfill (non-blocking — runs concurrently with collector)
+    runBackfill().catch((err) => logError("[server] backfill error:", err));
 
-  // Gap detection: startup scan + hourly
-  startGapDetector().catch((err) => logError("[server] gap detector error:", err));
+    // Gap detection: startup scan + hourly
+    startGapDetector().catch((err) => logError("[server] gap detector error:", err));
 
-  // Daily maintenance: prune sessions + source candles
-  setInterval(async () => {
-    try {
-      await pruneOldSessions();
-      await pruneSourceCandles();
-      log("[server] daily maintenance complete");
-    } catch (err) {
-      logError("[server] maintenance error:", err);
-    }
-  }, 24 * 60 * 60 * 1000);
+    // Daily maintenance: prune sessions + source candles
+    setInterval(async () => {
+      try {
+        await pruneOldSessions();
+        await pruneSourceCandles();
+        log("[server] daily maintenance complete");
+      } catch (err) {
+        logError("[server] maintenance error:", err);
+      }
+    }, 24 * 60 * 60 * 1000);
+  }
 }
 
 main().catch((err) => {
