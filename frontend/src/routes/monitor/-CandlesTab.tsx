@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { createChart, IChartApi, ISeriesApi, CandlestickData, Time, LogicalRange } from "lightweight-charts";
+import { createChart, IChartApi, ISeriesApi, CandlestickData, HistogramData, Time, LogicalRange } from "lightweight-charts";
 import type { Candle } from "@/lib/api";
 import { getCandlesBefore } from "@/lib/api";
 
@@ -14,12 +14,21 @@ function candleToLw(c: Candle): CandlestickData {
   };
 }
 
+function candleToVolume(c: Candle): HistogramData {
+  return {
+    time: Math.floor(c.timestamp / 1000) as Time,
+    value: c.volumeNormalized,
+    color: c.close >= c.open ? "rgba(34,197,94,0.4)" : "rgba(239,68,68,0.4)",
+  };
+}
+
 export default function CandlesTab() {
   const [tf, setTf] = useState("15m");
-  const chartRef    = useRef<HTMLDivElement>(null);
-  const chart       = useRef<IChartApi | null>(null);
-  const series      = useRef<ISeriesApi<"Candlestick"> | null>(null);
-  const initialized = useRef(false);
+  const chartRef       = useRef<HTMLDivElement>(null);
+  const chart          = useRef<IChartApi | null>(null);
+  const series         = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const volumeSeries   = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const initialized    = useRef(false);
   const [latest, setLatest]           = useState<Candle | null>(null);
   const [loading, setLoading]         = useState(true);
   const [retryCount, setRetryCount]   = useState(0);
@@ -30,6 +39,7 @@ export default function CandlesTab() {
   // All loaded candles, keyed by Unix-seconds timestamp to deduplicate across
   // SSE updates and historical fetches
   const allCandles     = useRef<Map<number, CandlestickData>>(new Map());
+  const allVolume      = useRef<Map<number, HistogramData>>(new Map());
   const loadingHistory = useRef(false);
   const noMoreHistory  = useRef(false);
   // Track whether the user has scrolled back so we don't snap them to live on each tick
@@ -55,6 +65,20 @@ export default function CandlesTab() {
       upColor: "#22c55e", downColor: "#ef4444",
       borderUpColor: "#22c55e", borderDownColor: "#ef4444",
       wickUpColor: "#22c55e", wickDownColor: "#ef4444",
+    });
+    // Push candlesticks up to leave the bottom 25% for volume
+    series.current.priceScale().applyOptions({
+      scaleMargins: { top: 0.1, bottom: 0.25 },
+    });
+
+    // Volume histogram in the bottom quarter, on its own price scale
+    volumeSeries.current = instance.addHistogramSeries({
+      priceFormat: { type: "volume" },
+      priceScaleId: "volume",
+    });
+    volumeSeries.current.priceScale().applyOptions({
+      scaleMargins: { top: 0.75, bottom: 0 },
+      visible: false,
     });
 
     // ── Scroll handler — fetch history when user nears the left edge ──────────
@@ -93,11 +117,13 @@ export default function CandlesTab() {
           const sec = Math.floor(c.timestamp / 1000);
           if (!allCandles.current.has(sec)) {
             allCandles.current.set(sec, candleToLw(c));
+            allVolume.current.set(sec, candleToVolume(c));
           }
         }
 
         const data = sortedCandles();
         series.current.setData(data);
+        volumeSeries.current?.setData(sortedVolume());
 
         if (result.candles.length < HISTORY_FETCH_LIMIT) {
           noMoreHistory.current = true;
@@ -116,8 +142,9 @@ export default function CandlesTab() {
     return () => {
       instance.timeScale().unsubscribeVisibleLogicalRangeChange(handleRangeChange);
       instance.remove();
-      chart.current  = null;
-      series.current = null;
+      chart.current        = null;
+      series.current       = null;
+      volumeSeries.current = null;
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -128,6 +155,7 @@ export default function CandlesTab() {
     noMoreHistory.current  = false;
     userScrolledBack.current = false;
     allCandles.current.clear();
+    allVolume.current.clear();
     setAtHistoryStart(false);
   }, [tf]);
 
@@ -141,12 +169,15 @@ export default function CandlesTab() {
       if (!series.current || !candles.length) return;
 
       for (const c of candles) {
-        allCandles.current.set(Math.floor(c.timestamp / 1000), candleToLw(c));
+        const sec = Math.floor(c.timestamp / 1000);
+        allCandles.current.set(sec, candleToLw(c));
+        allVolume.current.set(sec, candleToVolume(c));
       }
 
       const data = sortedCandles();
       try {
         series.current.setData(data);
+        volumeSeries.current?.setData(sortedVolume());
         if (!initialized.current) {
           // First load: show the most recent 100 bars at a comfortable zoom
           const from = Math.max(0, data.length - 100);
@@ -174,6 +205,12 @@ export default function CandlesTab() {
 
   function sortedCandles(): CandlestickData[] {
     return [...allCandles.current.values()].sort(
+      (a, b) => (a.time as number) - (b.time as number)
+    );
+  }
+
+  function sortedVolume(): HistogramData[] {
+    return [...allVolume.current.values()].sort(
       (a, b) => (a.time as number) - (b.time as number)
     );
   }
