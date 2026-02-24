@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { createChart, IChartApi, ISeriesApi, CandlestickData, HistogramData, WhitespaceData, Time, LogicalRange } from "lightweight-charts";
+import { createChart, IChartApi, ISeriesApi, CandlestickData, HistogramData, WhitespaceData, Time, LogicalRange, MouseEventParams } from "lightweight-charts";
 import type { Candle } from "@/lib/api";
 import { getCandlesBefore, getGaps, getErrors } from "@/lib/api";
 
@@ -53,13 +53,14 @@ export default function CandlesTab() {
   const [fetchingHistory, setFetchingHistory] = useState(false);
   const [atHistoryStart, setAtHistoryStart]   = useState(false);
   const [showGoLive, setShowGoLive]           = useState(false);
+  const [errorTooltip, setErrorTooltip]       = useState<{ x: number; y: number; messages: string[] } | null>(null);
 
   // All loaded candles, keyed by Unix-seconds timestamp to deduplicate across
   // SSE updates and historical fetches
   const allCandles     = useRef<Map<number, CandlestickData>>(new Map());
   const allVolume      = useRef<Map<number, HistogramData>>(new Map());
   const gapRanges      = useRef<{startSec: number, endSec: number}[]>([]);
-  const errorBars      = useRef<Set<number>>(new Set());
+  const errorBars      = useRef<Map<number, string[]>>(new Map());
   const loadingHistory = useRef(false);
   const noMoreHistory  = useRef(false);
   // Track whether the user has scrolled back so we don't snap them to live on each tick
@@ -172,7 +173,23 @@ export default function CandlesTab() {
 
     instance.timeScale().subscribeVisibleLogicalRangeChange(handleRangeChange);
 
+    // ── Crosshair handler — show error tooltip when hovering a marked bar ─────
+    const handleCrosshairMove = (params: MouseEventParams) => {
+      if (!params.point || !params.time || tfRef.current !== "1m") {
+        setErrorTooltip(null);
+        return;
+      }
+      const msgs = errorBars.current.get(params.time as number);
+      if (msgs && msgs.length > 0) {
+        setErrorTooltip({ x: params.point.x, y: params.point.y, messages: msgs });
+      } else {
+        setErrorTooltip(null);
+      }
+    };
+    instance.subscribeCrosshairMove(handleCrosshairMove);
+
     return () => {
+      instance.unsubscribeCrosshairMove(handleCrosshairMove);
       instance.timeScale().unsubscribeVisibleLogicalRangeChange(handleRangeChange);
       instance.remove();
       chart.current        = null;
@@ -191,14 +208,14 @@ export default function CandlesTab() {
     allCandles.current.clear();
     allVolume.current.clear();
     gapRanges.current = [];
-    errorBars.current = new Set();
+    errorBars.current = new Map();
     setAtHistoryStart(false);
   }, [tf]);
 
   // ── Fetch gap ranges and service errors on TF change ────────────────────────
   useEffect(() => {
     gapRanges.current = [];
-    errorBars.current = new Set();
+    errorBars.current = new Map();
 
     getGaps().then(result => {
       gapRanges.current = result.gaps.map(g => ({
@@ -211,10 +228,13 @@ export default function CandlesTab() {
 
     getErrors(60 * 24 * 30).then(result => {
       const step = TF_SECONDS[tfRef.current];
-      const bars = new Set<number>();
+      const bars = new Map<number, string[]>();
       for (const err of result.errors) {
         const tSec = Math.floor(new Date(err.createdAt).getTime() / 1000);
-        bars.add(Math.floor(tSec / step) * step);
+        const barT = Math.floor(tSec / step) * step;
+        const msgs = bars.get(barT) ?? [];
+        msgs.push(err.message);
+        bars.set(barT, msgs);
       }
       errorBars.current = bars;
       updateErrorMarkers();
@@ -316,7 +336,7 @@ export default function CandlesTab() {
       volumeSeries.current.setMarkers([]);
       return;
     }
-    const markers = [...errorBars.current]
+    const markers = [...errorBars.current.keys()]
       .filter(t => allCandles.current.has(t))
       .sort((a, b) => a - b)
       .map(t => ({
@@ -370,6 +390,16 @@ export default function CandlesTab() {
       {/* Chart */}
       <div className="relative flex-1">
         <div ref={chartRef} className="w-full h-full" />
+        {errorTooltip && (
+          <div
+            className="absolute z-20 pointer-events-none bg-gray-900 border border-red-900 rounded px-2 py-1 text-xs text-gray-200 max-w-sm"
+            style={{ left: errorTooltip.x + 14, top: errorTooltip.y - 8 }}
+          >
+            {errorTooltip.messages.map((m, i) => (
+              <div key={i} className={i > 0 ? "mt-1 pt-1 border-t border-gray-700" : ""}>{m}</div>
+            ))}
+          </div>
+        )}
         {showGoLive && (
           <button
             onClick={() => {
