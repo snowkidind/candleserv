@@ -152,7 +152,7 @@ export async function collect(minuteTs: Date): Promise<boolean> {
       });
     }
 
-    const composite = await buildComposite(guarded, baseline, volumeLeader ?? undefined);
+    const composite = await buildComposite(guarded, baseline, volumeLeader ?? undefined, minuteTs);
 
     if (Date.now() > deadline) {
       logError(`[collector] deadline exceeded after composite for ${minuteTs.toISOString()} — skipping write`);

@@ -93,7 +93,8 @@ export function applyGuards(results: SourceResult[], minSources: number, histori
 export async function buildComposite(
   guarded: GuardedSource[],
   sourceCountBaseline: number,
-  dominantSource?: string
+  dominantSource?: string,
+  candleTs?: Date
 ): Promise<CompositeResult> {
   const accepted = guarded.filter((g) => !g.rejected && g.candle);
 
@@ -118,8 +119,9 @@ export async function buildComposite(
   const bodyHigh = Math.max(open, close);
   const bodyLow  = Math.min(open, close);
   if (dominant.candle.high < bodyHigh || dominant.candle.low > bodyLow) {
+    const tsLabel = candleTs ? ` candle=${candleTs.toISOString().slice(0, 16)}` : "";
     logError(
-      `[composite] H/L extended for OHLC consistency: source=${dominant.source} ` +
+      `[composite] H/L extended for OHLC consistency:${tsLabel} source=${dominant.source} ` +
       `wick=[${dominant.candle.low.toFixed(2)}, ${dominant.candle.high.toFixed(2)}] ` +
       `body=[${bodyLow.toFixed(2)}, ${bodyHigh.toFixed(2)}]`
     );

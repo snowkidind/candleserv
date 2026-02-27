@@ -117,7 +117,7 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
     );
     const guarded = applyGuards(allResults, minSources, sigma);
     try {
-      const composite = await buildComposite(guarded, baseline, volumeLeader ?? undefined);
+      const composite = await buildComposite(guarded, baseline, volumeLeader ?? undefined, minuteTs);
       if (overwrite) {
         await upsertCandle({ timestamp: minuteTs, ...composite });
       } else {
@@ -179,7 +179,7 @@ export async function healMinute(minuteTs: Date): Promise<boolean> {
       });
     }
 
-    const composite = await buildComposite(guarded, baseline, volumeLeader ?? undefined);
+    const composite = await buildComposite(guarded, baseline, volumeLeader ?? undefined, minuteTs);
     await upsertCandle({ timestamp: minuteTs, ...composite });
     return true;
   } catch (err) {
