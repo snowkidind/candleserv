@@ -120,3 +120,13 @@ export const toggleApiKey = (apiKey: string, enabled: boolean) =>
 // Resume source
 export const resumeSource = (source: string) =>
   req(`/monitor/sources/${source}/resume`, { method: "POST" });
+
+// Service events
+export interface ServiceEvent {
+  id: number; type: string;
+  startedAt: string; endedAt: string;
+  durationMinutes: number; notes: string | null;
+  createdAt: string;
+}
+export const getServiceEvents = () =>
+  req<{ events: ServiceEvent[] }>("/monitor/service-events");

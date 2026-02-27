@@ -37,3 +37,11 @@ export async function getRecentOutages(limit = 10): Promise<ServiceEvent[]> {
   );
   return res.rows.map(rowToEvent);
 }
+
+export async function getAllServiceEvents(limit = 200): Promise<ServiceEvent[]> {
+  const res = await query(
+    `SELECT * FROM service_events ORDER BY "startedAt" DESC LIMIT $1`,
+    [limit]
+  );
+  return res.rows.map(rowToEvent);
+}

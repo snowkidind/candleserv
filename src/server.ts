@@ -44,18 +44,18 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Apply any schema changes (idempotent — CREATE TABLE IF NOT EXISTS)
-  await createSchema();
-
-  // Detect power failures / unplanned restarts via heartbeat gap
-  await detectAndRecordOutage();
-
   // Connect to Redis (optional — logs and continues if unavailable)
   await initRedis();
 
   if (process.env.READONLY_MODE === "true") {
     log("[server] READONLY_MODE — collector, healer, gap detector, and maintenance disabled");
   } else {
+    // Apply any schema changes (idempotent — CREATE TABLE IF NOT EXISTS)
+    await createSchema();
+
+    // Detect power failures / unplanned restarts via heartbeat gap
+    await detectAndRecordOutage();
+
     // Start live collection
     startCollector();
 

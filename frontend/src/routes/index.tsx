@@ -3,11 +3,12 @@ import { useState } from "react";
 import CandlesTab from "@/routes/monitor/-CandlesTab";
 import ConnectionsTab from "@/routes/monitor/-ConnectionsTab";
 import ErrorsTab from "@/routes/monitor/-ErrorsTab";
+import EventsTab from "@/routes/monitor/-EventsTab";
 import AdminTab from "@/routes/monitor/-AdminTab";
 
 export const Route = createFileRoute("/")({ component: MonitorPage });
 
-const TABS = ["Candles", "Connections", "Errors", "Admin"] as const;
+const TABS = ["Candles", "Connections", "Errors", "Events", "Admin"] as const;
 type Tab = typeof TABS[number];
 
 function MonitorPage() {
@@ -34,6 +35,7 @@ function MonitorPage() {
         {tab === "Candles"     && <CandlesTab />}
         {tab === "Connections" && <ConnectionsTab />}
         {tab === "Errors"      && <ErrorsTab />}
+        {tab === "Events"      && <EventsTab />}
         {tab === "Admin"       && <AdminTab />}
       </div>
     </div>

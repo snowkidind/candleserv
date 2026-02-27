@@ -8,6 +8,7 @@ import { getCandles, getCollectionLatencyStats, VALID_TFS } from "../../db/candl
 import { runGapScan } from "../../lib/gapDetector";
 import { getSourceStatus, resumeSource } from "../../lib/collector";
 import { listApiKeys, createApiKey, revokeApiKey, setApiKeyEnabled } from "../../db/apiKeys";
+import { getAllServiceEvents } from "../../db/serviceEvents";
 
 const router = Router();
 const view   = [trackSession, authenticate, requirePerm("CAN_VIEW_CANDLESERV")];
@@ -104,6 +105,21 @@ router.get("/stream-events", ...view, async (req, res) => {
     source: source || undefined,
   });
   return res.json({ events });
+});
+
+/** GET /monitor/service-events */
+router.get("/service-events", ...view, async (_req, res) => {
+  try {
+    const events = await getAllServiceEvents(200);
+    return res.json({ events: events.map((e) => ({
+      ...e,
+      startedAt: e.startedAt.toISOString(),
+      endedAt: e.endedAt.toISOString(),
+      createdAt: e.createdAt.toISOString(),
+    }))});
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
 });
 
 /** GET /monitor/config */
