@@ -1,6 +1,6 @@
 import { query } from "../db/pool";
 import { upsertGap, setGapState, markAlertSent, getPendingGaps } from "../db/gaps";
-import { healMinute } from "./healer";
+import { healMinute, reHealLowConfidence } from "./healer";
 import { recordError } from "../db/errors";
 import { getSettingInt } from "../db/appSettings";
 import { log, logError } from "./log";
@@ -119,6 +119,9 @@ export async function runGapScan(windowDays = 1): Promise<void> {
 export async function startGapDetector(): Promise<void> {
   log("[gapDetector] startup scan (7 days)");
   await runGapScan(7);
+
+  // Upgrade any low-confidence rows (e.g. single-source power-failure heals)
+  await reHealLowConfidence(7).catch((err) => logError("[gapDetector] reHealLowConfidence failed:", err));
 
   // Hourly scan
   setInterval(() => {
