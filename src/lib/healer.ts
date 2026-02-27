@@ -106,6 +106,9 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
     }
 
     tileEnd = tileStart;
+
+    // Throttle between tiles to respect Kraken's ~1 req/sec rate limit
+    if (tileStart > from) await new Promise(r => setTimeout(r, 1200));
   }
 
   // Composite each minute and write

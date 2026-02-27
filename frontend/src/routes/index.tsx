@@ -25,11 +25,16 @@ function MonitorContent() {
   const { newCandleTick } = useCandleStream();
   const [hasNewCandle, setHasNewCandle] = useState(false);
   const prevTick = useRef(newCandleTick);
+  const dotTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (newCandleTick === prevTick.current) return;
     prevTick.current = newCandleTick;
-    if (tab !== "Candles") setHasNewCandle(true);
+    if (tab !== "Candles") {
+      setHasNewCandle(true);
+      if (dotTimer.current) clearTimeout(dotTimer.current);
+      dotTimer.current = setTimeout(() => setHasNewCandle(false), 4000);
+    }
   }, [newCandleTick, tab]);
 
   function handleTabChange(t: Tab) {
