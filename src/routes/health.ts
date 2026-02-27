@@ -4,6 +4,7 @@ import { countPendingGaps } from "../db/gaps";
 import { getCollectionLatencyStats } from "../db/candles";
 import { getRecentOutages } from "../db/serviceEvents";
 import { getAllClients } from "../lib/subscriptions";
+import { logError } from "../lib/log";
 
 const router = Router();
 
@@ -13,7 +14,7 @@ router.get("/health", async (_req, res) => {
       query(`SELECT "timestamp" FROM candles_1m ORDER BY "timestamp" DESC LIMIT 1`),
       countPendingGaps(),
       getCollectionLatencyStats(60),
-      getRecentOutages(5),
+      getRecentOutages(5).catch(() => []),
     ]);
 
     const latestCandle = latestRes.rows[0]?.timestamp ?? null;
@@ -30,6 +31,7 @@ router.get("/health", async (_req, res) => {
       recentOutages,
     });
   } catch (err) {
+    logError("[health] GET /health failed:", err);
     return res.status(500).json({ status: "error", error: String(err) });
   }
 });

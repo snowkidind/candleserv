@@ -9,6 +9,7 @@ import { runGapScan } from "../../lib/gapDetector";
 import { getSourceStatus, resumeSource } from "../../lib/collector";
 import { listApiKeys, createApiKey, revokeApiKey, setApiKeyEnabled } from "../../db/apiKeys";
 import { getAllServiceEvents } from "../../db/serviceEvents";
+import { logError } from "../../lib/log";
 
 const router = Router();
 const view   = [trackSession, authenticate, requirePerm("CAN_VIEW_CANDLESERV")];
@@ -26,6 +27,7 @@ router.get("/candles", ...view, async (req, res) => {
     const candles = await getCandles({ tf, endingAt: end, limit: count });
     return res.json({ candles });
   } catch (err) {
+    logError("[monitor] GET /candles failed:", err);
     return res.status(500).json({ error: String(err) });
   }
 });
@@ -39,6 +41,7 @@ router.get("/candles/latest", ...view, async (req, res) => {
     const candles = await getCandles({ tf, endingAt: new Date(), limit: count });
     return res.json({ candles });
   } catch (err) {
+    logError("[monitor] GET /candles/latest failed:", err);
     return res.status(500).json({ error: String(err) });
   }
 });
@@ -57,7 +60,7 @@ router.get("/gaps", ...view, async (_req, res) => {
 
 /** POST /monitor/heal — trigger a manual gap scan */
 router.post("/heal", ...modify, async (_req, res) => {
-  runGapScan(7).catch(() => {});
+  runGapScan(7).catch((err) => logError("[monitor] POST /heal runGapScan failed:", err));
   return res.json({ ok: true, message: "Heal scan started" });
 });
 
@@ -81,6 +84,7 @@ router.get("/stats", ...view, async (_req, res) => {
       collectionLatency: latency,
     });
   } catch (err) {
+    logError("[monitor] GET /stats failed:", err);
     return res.status(500).json({ error: String(err) });
   }
 });
@@ -118,6 +122,7 @@ router.get("/service-events", ...view, async (_req, res) => {
       createdAt: e.createdAt.toISOString(),
     }))});
   } catch (err) {
+    logError("[monitor] GET /service-events failed:", err);
     return res.status(500).json({ error: String(err) });
   }
 });

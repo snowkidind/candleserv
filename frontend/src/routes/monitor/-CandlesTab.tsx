@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createChart, IChartApi, ISeriesApi, CandlestickData, HistogramData, WhitespaceData, Time, LogicalRange, MouseEventParams } from "lightweight-charts";
 import type { Candle } from "@/lib/api";
 import { getCandlesBefore, getGaps, getErrors } from "@/lib/api";
+import { useCandleStream } from "@/lib/CandleStreamContext";
 
 const TFS = ["1m","5m","10m","15m","1h","2h","4h","6h","12h","1d","3d","7d","30d"];
 const HISTORY_FETCH_LIMIT = 500;
@@ -40,16 +41,14 @@ function candleToVolume(c: Candle): HistogramData {
 }
 
 export default function CandlesTab() {
-  const [tf, setTf] = useState(() => localStorage.getItem("candleserv:tf") ?? "15m");
+  const { snapshot, latestCandle: latest, tf, setTf } = useCandleStream();
   const chartRef       = useRef<HTMLDivElement>(null);
   const chart          = useRef<IChartApi | null>(null);
   const series         = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeries   = useRef<ISeriesApi<"Histogram"> | null>(null);
   const gapSeries      = useRef<ISeriesApi<"Histogram"> | null>(null);
   const initialized    = useRef(false);
-  const [latest, setLatest]           = useState<Candle | null>(null);
   const [loading, setLoading]         = useState(true);
-  const [retryCount, setRetryCount]   = useState(0);
   const [fetchingHistory, setFetchingHistory] = useState(false);
   const [atHistoryStart, setAtHistoryStart]   = useState(false);
   const [showGoLive, setShowGoLive]           = useState(false);
@@ -242,51 +241,36 @@ export default function CandlesTab() {
     }).catch(err => console.error("[CandlesTab] getErrors error:", err));
   }, [tf]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── SSE stream — merges into the shared candle map ──────────────────────────
+  // ── Merge SSE snapshot from context into the chart candle map ───────────────
   useEffect(() => {
-    setLoading(true);
-    const es = new EventSource(`/monitor/candles/stream?tf=${tf}&n=200`);
+    if (!snapshot.length || !series.current) return;
 
-    es.addEventListener("candles", (e) => {
-      const candles = JSON.parse(e.data) as Candle[];
-      if (!series.current || !candles.length) return;
+    for (const c of snapshot) {
+      const sec = Math.floor(c.timestamp / 1000);
+      allCandles.current.set(sec, candleToLw(c));
+      allVolume.current.set(sec, candleToVolume(c));
+    }
 
-      for (const c of candles) {
-        const sec = Math.floor(c.timestamp / 1000);
-        allCandles.current.set(sec, candleToLw(c));
-        allVolume.current.set(sec, candleToVolume(c));
+    try {
+      const data = sortedCandlesWithGaps();
+      series.current.setData(data);
+      volumeSeries.current?.setData(sortedVolume());
+      gapSeries.current?.setData(sortedGapHistogram());
+      updateErrorMarkers();
+      if (!initialized.current) {
+        // First load: show the most recent 100 bars at a comfortable zoom
+        const from = Math.max(0, data.length - 100);
+        chart.current?.timeScale().setVisibleLogicalRange({ from, to: data.length });
+        initialized.current = true;
+      } else if (!userScrolledBack.current) {
+        // Live update and user is at the live edge — follow it
+        chart.current?.timeScale().scrollToRealTime();
       }
-
-      try {
-        const data = sortedCandlesWithGaps();
-        series.current.setData(data);
-        volumeSeries.current?.setData(sortedVolume());
-        gapSeries.current?.setData(sortedGapHistogram());
-        updateErrorMarkers();
-        if (!initialized.current) {
-          // First load: show the most recent 100 bars at a comfortable zoom
-          const from = Math.max(0, data.length - 100);
-          chart.current?.timeScale().setVisibleLogicalRange({ from, to: data.length });
-          initialized.current = true;
-        } else if (!userScrolledBack.current) {
-          // Live update and user is at the live edge — follow it
-          chart.current?.timeScale().scrollToRealTime();
-        }
-        setLatest(candles.at(-1) ?? null);
-        setLoading(false);
-      } catch (err) {
-        console.error("[CandlesTab] setData error:", err);
-      }
-    });
-
-    es.onerror = () => {
-      console.error("[CandlesTab] SSE connection lost, reconnecting in 3s...");
-      es.close();
-      setTimeout(() => setRetryCount(n => n + 1), 3000);
-    };
-
-    return () => es.close();
-  }, [tf, retryCount]);
+      setLoading(false);
+    } catch (err) {
+      console.error("[CandlesTab] setData error:", err);
+    }
+  }, [snapshot]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function sortedCandles(): CandlestickData[] {
     return [...allCandles.current.values()].sort(
@@ -364,7 +348,7 @@ export default function CandlesTab() {
           {TFS.map(t => (
             <button
               key={t}
-              onClick={() => { localStorage.setItem("candleserv:tf", t); setTf(t); }}
+              onClick={() => setTf(t)}
               className={`px-2 py-1 text-xs rounded transition-colors ${
                 tf === t ? "bg-blue-600 text-white" : "text-gray-500 hover:text-gray-300"
               }`}
@@ -384,7 +368,7 @@ export default function CandlesTab() {
           {fetchingHistory && <span className="text-blue-400">loading history…</span>}
           {atHistoryStart && !fetchingHistory && <span className="text-gray-600">full history loaded</span>}
           {!fetchingHistory && !atHistoryStart && loading && (
-            <span className="text-gray-600">{retryCount > 0 ? "reconnecting…" : "loading…"}</span>
+            <span className="text-gray-600">loading…</span>
           )}
         </div>
       </div>
