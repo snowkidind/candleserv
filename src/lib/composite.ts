@@ -121,7 +121,7 @@ export async function buildComposite(
   if (dominant.candle.high < bodyHigh || dominant.candle.low > bodyLow) {
     const tsLabel = candleTs ? ` candle=${candleTs.toISOString().slice(0, 16)}` : "";
     logError(
-      `[composite] H/L extended for OHLC consistency:${tsLabel} source=${dominant.source} ` +
+      `[composite] H/L extended for OHLC consistency:${tsLabel} sources=${accepted.length}/${sourceCountBaseline} dominant=${dominant.source} ` +
       `wick=[${dominant.candle.low.toFixed(2)}, ${dominant.candle.high.toFixed(2)}] ` +
       `body=[${bodyLow.toFixed(2)}, ${bodyHigh.toFixed(2)}]`
     );
