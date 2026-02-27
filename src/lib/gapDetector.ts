@@ -1,6 +1,6 @@
 import { query } from "../db/pool";
 import { upsertGap, setGapState, markAlertSent, getPendingGaps } from "../db/gaps";
-import { healMinute, reHealLowConfidence } from "./healer";
+import { healRange, reHealLowConfidence } from "./healer";
 import { recordError } from "../db/errors";
 import { getSettingInt } from "../db/appSettings";
 import { log, logError } from "./log";
@@ -48,14 +48,46 @@ async function detectGapsInWindow(from: Date, to: Date): Promise<void> {
 }
 
 /**
- * Attempt to heal all pending gaps.
+ * Group GapRows into contiguous ranges (gaps ≤ 2 minutes apart are merged).
+ * Returns an array of { from, to, gaps } — one entry per contiguous block.
+ */
+function groupGapsIntoRanges(gaps: Awaited<ReturnType<typeof getPendingGaps>>) {
+  const sorted = [...gaps].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+  const ranges: { from: Date; to: Date; gaps: typeof sorted }[] = [];
+  let block = [sorted[0]];
+  let prev  = sorted[0];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const curr = sorted[i];
+    if (curr.timestamp.getTime() - prev.timestamp.getTime() > 2 * 60000) {
+      ranges.push({
+        from: block[0].timestamp,
+        to:   new Date(prev.timestamp.getTime() + 60000),
+        gaps: block,
+      });
+      block = [curr];
+    } else {
+      block.push(curr);
+    }
+    prev = curr;
+  }
+  ranges.push({
+    from: block[0].timestamp,
+    to:   new Date(prev.timestamp.getTime() + 60000),
+    gaps: block,
+  });
+  return ranges;
+}
+
+/**
+ * Heal all pending gaps.
+ * Contiguous gaps are fetched as a single range request across all five exchanges
+ * rather than one HTTP call per minute, avoiding rate-limit errors.
  */
 async function healPendingGaps(): Promise<void> {
   const gaps = await getPendingGaps();
   if (!gaps.length) return;
 
-  // When the DB is fresh the backfill will cover everything — don't hammer
-  // Binance with thousands of individual heal calls at the same time.
   if (gaps.length > 100) {
     log(`[gapDetector] ${gaps.length} pending gaps — deferring to backfill`);
     return;
@@ -64,35 +96,42 @@ async function healPendingGaps(): Promise<void> {
   const webhookUrl = (await query(`SELECT value FROM app_settings WHERE key = $1`, [ALERT_WEBHOOK_KEY]))
     .rows[0]?.value as string | undefined;
 
+  const ranges = groupGapsIntoRanges(gaps);
   let healed = 0;
   let unresolvable = 0;
 
-  for (const gap of gaps) {
-    await setGapState(gap.id, "healing");
-
-    // Alert on first detection
-    if (!gap.alertSent && webhookUrl) {
-      await fireWebhook(webhookUrl, {
-        type: "gap_detected",
-        timestamp: gap.timestamp.toISOString(),
-        durationMinutes: gap.durationMinutes,
-        sourcesAvailable: gap.sourcesAvailable,
-      });
-      await markAlertSent(gap.id);
+  for (const range of ranges) {
+    // Mark all gaps in this range as healing and fire alerts
+    for (const gap of range.gaps) {
+      await setGapState(gap.id, "healing");
+      if (!gap.alertSent && webhookUrl) {
+        await fireWebhook(webhookUrl, {
+          type: "gap_detected",
+          timestamp: gap.timestamp.toISOString(),
+          durationMinutes: gap.durationMinutes,
+          sourcesAvailable: gap.sourcesAvailable,
+        });
+        await markAlertSent(gap.id);
+      }
     }
 
-    const ok = await healMinute(gap.timestamp);
-    if (ok) {
-      await setGapState(gap.id, "healed");
-      healed++;
-    } else {
-      await setGapState(gap.id, "unresolvable");
-      unresolvable++;
-      logError(`[gapDetector] unresolvable gap: ${gap.timestamp.toISOString()}`);
+    // Fetch the whole range from all exchanges in one pass
+    const written = await healRange(range.from, range.to, true);
+
+    // Update each gap's state based on whether its minute was written
+    for (const gap of range.gaps) {
+      if (written.has(gap.timestamp.getTime())) {
+        await setGapState(gap.id, "healed");
+        healed++;
+      } else {
+        await setGapState(gap.id, "unresolvable");
+        unresolvable++;
+        logError(`[gapDetector] unresolvable gap: ${gap.timestamp.toISOString()}`);
+      }
     }
   }
 
-  if (healed > 0) log(`[gapDetector] healed ${healed} gap(s)`);
+  if (healed > 0) log(`[gapDetector] healed ${healed} gap(s) across ${ranges.length} range(s)`);
 }
 
 /**
