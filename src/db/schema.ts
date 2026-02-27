@@ -119,6 +119,17 @@ CREATE TABLE IF NOT EXISTS app_settings (
   "value"     text         NOT NULL,
   "updatedAt" timestamptz  NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS service_events (
+  "id"              serial       PRIMARY KEY,
+  "type"            varchar      NOT NULL,
+  "startedAt"       timestamptz  NOT NULL,
+  "endedAt"         timestamptz  NOT NULL,
+  "durationMinutes" integer      NOT NULL,
+  "notes"           text,
+  "createdAt"       timestamptz  NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS service_events_type_ts ON service_events ("type", "startedAt" DESC);
 `;
 
 const DEFAULT_SETTINGS: Record<string, string> = {

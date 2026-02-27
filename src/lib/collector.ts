@@ -9,7 +9,7 @@ import { recordError } from "../db/errors";
 import { candleEmitter } from "./emitter";
 import { rowToJson } from "../db/candles";
 import { insertStreamEvent } from "../db/streamEvents";
-import { getSettingInt } from "../db/appSettings";
+import { getSettingInt, setSetting } from "../db/appSettings";
 import { log, logError, logWarn } from "./log";
 import type { SourceResult } from "../types/index";
 
@@ -203,6 +203,8 @@ function scheduleNext(): void {
   const delay = fireAt - now;
 
   setTimeout(async () => {
+    // Record heartbeat so we can detect outages after power failure
+    void setSetting("lastHeartbeat", new Date().toISOString()).catch(() => {});
     // The candle we want is the minute that just closed
     const minuteTs = new Date(nextMinute - 60000);
     await collect(minuteTs);
