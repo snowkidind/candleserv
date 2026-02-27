@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getStats, getSourcesStatus, getGaps, getStreamEvents, triggerHeal, resumeSource, type StreamEvent } from "@/lib/api";
+import { useCandleStream } from "@/lib/CandleStreamContext";
 
 const SOURCES = ["binance", "bybit", "kraken", "coinbase", "bitfinex"];
 const TIMELINE_MINUTES = [10, 60, 720, 1440, 10080] as const;
@@ -120,6 +121,7 @@ export default function ConnectionsTab() {
   const [timelineMin, setTimelineMin] = useState<number>(60);
   const [healing, setHealing] = useState(false);
   const qc = useQueryClient();
+  const { sourceStateTick } = useCandleStream();
 
   const { data: stats }   = useQuery({ queryKey: ["stats"],   queryFn: getStats,         refetchInterval: 60_000 });
   const { data: sources } = useQuery({ queryKey: ["sources"], queryFn: getSourcesStatus, refetchInterval: 30_000 });
@@ -130,15 +132,12 @@ export default function ConnectionsTab() {
     refetchInterval: 30_000,
   });
 
-  // Live SSE source state updates
+  // Invalidate source queries whenever the shared stream emits a source_state event
   useEffect(() => {
-    const es = new EventSource("/monitor/candles/stream?tf=1m");
-    es.addEventListener("source_state", () => {
-      qc.invalidateQueries({ queryKey: ["sources"] });
-      qc.invalidateQueries({ queryKey: ["stream-events"] });
-    });
-    return () => es.close();
-  }, [qc]);
+    if (!sourceStateTick) return;
+    qc.invalidateQueries({ queryKey: ["sources"] });
+    qc.invalidateQueries({ queryKey: ["stream-events"] });
+  }, [sourceStateTick, qc]);
 
   const heal = async () => {
     setHealing(true);

@@ -437,6 +437,11 @@ GRANT USAGE, SELECT ON SEQUENCE sessions_id_seq TO candleserv_ro;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO candleserv_ro;
 ```
 
+> **Note:** `ALTER DEFAULT PRIVILEGES` only covers tables created after that command runs. If new tables are added to the schema later (e.g. `service_events`), re-run the following to catch up:
+> ```sql
+> GRANT SELECT ON ALL TABLES IN SCHEMA public TO candleserv_ro;
+> ```
+
 To verify the role cannot write to candle tables but can manage sessions:
 
 ```sql

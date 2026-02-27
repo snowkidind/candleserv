@@ -6,6 +6,7 @@ interface CandleStreamCtx {
   latestCandle: Candle | null;
   connected: boolean;
   newCandleTick: number;      // increments on each new candle event — use as useEffect dep
+  sourceStateTick: number;    // increments on each source_state event — use as useEffect dep
   tf: string;
   setTf: (tf: string) => void;
 }
@@ -15,6 +16,7 @@ const CandleStreamContext = createContext<CandleStreamCtx>({
   latestCandle: null,
   connected: false,
   newCandleTick: 0,
+  sourceStateTick: 0,
   tf: "15m",
   setTf: () => {},
 });
@@ -29,6 +31,7 @@ export function CandleStreamProvider({ children }: { children: React.ReactNode }
   const [latestCandle, setLatestCandle] = useState<Candle | null>(null);
   const [connected, setConnected] = useState(false);
   const [newCandleTick, setNewCandleTick] = useState(0);
+  const [sourceStateTick, setSourceStateTick] = useState(0);
 
   const esRef    = useRef<EventSource | null>(null);
   const tfRef    = useRef(tf);
@@ -50,6 +53,10 @@ export function CandleStreamProvider({ children }: { children: React.ReactNode }
       setSnapshot(candles);
       setLatestCandle(candles.at(-1) ?? null);
       setNewCandleTick(n => n + 1);
+    });
+
+    es.addEventListener("source_state", () => {
+      setSourceStateTick(n => n + 1);
     });
 
     es.onerror = () => {
@@ -92,7 +99,7 @@ export function CandleStreamProvider({ children }: { children: React.ReactNode }
   }
 
   return (
-    <CandleStreamContext.Provider value={{ snapshot, latestCandle, connected, newCandleTick, tf, setTf }}>
+    <CandleStreamContext.Provider value={{ snapshot, latestCandle, connected, newCandleTick, sourceStateTick, tf, setTf }}>
       {children}
     </CandleStreamContext.Provider>
   );

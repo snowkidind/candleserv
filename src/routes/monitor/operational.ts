@@ -128,7 +128,7 @@ router.get("/service-events", ...view, async (_req, res) => {
     }))});
   } catch (err) {
     logError("[monitor] GET /service-events failed:", err);
-    return res.status(500).json({ error: String(err) });
+    return res.json({ events: [] });
   }
 });
 
