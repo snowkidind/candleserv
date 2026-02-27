@@ -111,6 +111,11 @@ router.get("/stream-events", ...view, async (req, res) => {
   return res.json({ events });
 });
 
+/** GET /monitor/ping — lightweight session keepalive */
+router.get("/ping", ...view, (_req, res) => {
+  return res.json({ ok: true });
+});
+
 /** GET /monitor/service-events */
 router.get("/service-events", ...view, async (_req, res) => {
   try {

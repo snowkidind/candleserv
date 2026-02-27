@@ -409,8 +409,12 @@ Multiple read-only instances can connect to the same production database. They c
 
 Enforcement is at two layers:
 
-- **PostgreSQL role** — the read-only user has `SELECT` on all tables and write access only to `sessions` (required for monitor login/logout to function).
-- **Application flag** — `READONLY_MODE=true` suppresses all background workers and blocks all HTTP mutation endpoints at the app level.
+- **PostgreSQL role** — the read-only user has `SELECT` on all tables and write access only to `sessions` (required for monitor login/logout and session keepalive to function).
+- **Application flag** — `READONLY_MODE=true` suppresses all background workers (collector, healer, gap detector, schema migration) and blocks all HTTP mutation endpoints at the app level.
+
+### Required session table permissions
+
+The `sessions` table requires `SELECT`, `INSERT`, `UPDATE`, and `DELETE` for the read-only role. Without `UPDATE`, the session `lastSeen` timestamp cannot be refreshed on each request. This causes `trackSession` to fail, which can result in a new anonymous session cookie being issued that silently overwrites the browser's authenticated cookie — producing spurious 401s that persist until the user logs out and back in.
 
 ### Step 1 — Create the read-only PostgreSQL role (run once on the production DB)
 
@@ -425,7 +429,7 @@ GRANT USAGE ON SCHEMA public TO candleserv_ro;
 -- Read access to all tables
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO candleserv_ro;
 
--- Write access to sessions only (required for monitor login/logout)
+-- Write access to sessions only (required for monitor login/logout and session keepalive)
 GRANT INSERT, UPDATE, DELETE ON TABLE sessions TO candleserv_ro;
 GRANT USAGE, SELECT ON SEQUENCE sessions_id_seq TO candleserv_ro;
 
@@ -433,13 +437,28 @@ GRANT USAGE, SELECT ON SEQUENCE sessions_id_seq TO candleserv_ro;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO candleserv_ro;
 ```
 
-To verify the role cannot write to candle tables:
+To verify the role cannot write to candle tables but can manage sessions:
 
 ```sql
 SET ROLE candleserv_ro;
-INSERT INTO candles_1m (timestamp) VALUES (NOW());  -- must fail: permission denied
-INSERT INTO sessions ("sessionId") VALUES ('test'); -- must succeed
+INSERT INTO candles_1m (timestamp) VALUES (NOW());                     -- must fail: permission denied
+INSERT INTO sessions ("sessionId") VALUES ('test');                    -- must succeed
+UPDATE sessions SET "lastSeen" = NOW() WHERE "sessionId" = 'test';    -- must succeed
+DELETE FROM sessions WHERE "sessionId" = 'test';                      -- must succeed
 RESET ROLE;
+```
+
+### Stale session cleanup
+
+Each login creates a new session row. The master instance prunes them daily (authenticated sessions older than 7 days). If sessions accumulate — for example from repeated logout/login cycles while debugging the 401 issue — clean them up manually:
+
+```sql
+-- Keep only the most recent session per user, delete the rest
+DELETE FROM sessions
+WHERE id NOT IN (
+  SELECT MAX(id) FROM sessions WHERE "userId" IS NOT NULL GROUP BY "userId"
+)
+AND "userId" IS NOT NULL;
 ```
 
 ### Step 2 — Configure the read-only instance

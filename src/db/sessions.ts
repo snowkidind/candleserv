@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { query } from "./pool";
+import { logError } from "../lib/log";
 
 export interface SessionRow {
   id: number;
@@ -20,6 +21,9 @@ export async function getOrCreateSession(
     if (res.rows.length) {
       return { sessionId, userId: res.rows[0].userId ?? null };
     }
+    // Session cookie was present but not found in DB — it was pruned or never existed.
+    // A new anonymous session will be issued, overwriting the browser's cookie.
+    logError(`[sessions] session not found in DB: ${sessionId.slice(0, 8)}… — issuing new anonymous session (browser will lose auth)`);
   }
   const newId = crypto.randomBytes(24).toString("hex");
   await query(

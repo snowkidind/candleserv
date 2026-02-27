@@ -6,6 +6,10 @@ async function req<T>(path: string, opts?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json" },
     ...opts,
   });
+  if (res.status === 401 && !path.includes("/login")) {
+    window.location.href = "/login";
+    throw new Error("Unauthorized");
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({})) as { error?: string };
     throw new Error(body.error ?? `HTTP ${res.status}`);
@@ -120,6 +124,9 @@ export const toggleApiKey = (apiKey: string, enabled: boolean) =>
 // Resume source
 export const resumeSource = (source: string) =>
   req(`/monitor/sources/${source}/resume`, { method: "POST" });
+
+// Session keepalive
+export const ping = () => req<{ ok: boolean }>("/monitor/ping");
 
 // Service events
 export interface ServiceEvent {

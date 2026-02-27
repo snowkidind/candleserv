@@ -1,11 +1,22 @@
 import { createRootRoute, Outlet, useNavigate } from "@tanstack/react-router";
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { getHealth, logout } from "@/lib/api";
+import { getHealth, logout, ping } from "@/lib/api";
 
 export const Route = createRootRoute({ component: RootLayout });
 
 function RootLayout() {
   const navigate = useNavigate();
+
+  // Keep session alive — ping every 4 minutes.
+  // If the session has been lost, the 401 handler in api.ts redirects to /login.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      ping().catch(() => {});
+    }, 4 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, []);
+
   const { data: health } = useQuery({
     queryKey: ["health"],
     queryFn: getHealth,
