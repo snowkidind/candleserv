@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { createChart, IChartApi, ISeriesApi, CandlestickData, HistogramData, WhitespaceData, Time, LogicalRange, MouseEventParams } from "lightweight-charts";
+import { createChart, IChartApi, ISeriesApi, CandlestickData, HistogramData, WhitespaceData, LineData, Time, LogicalRange, MouseEventParams } from "lightweight-charts";
 import type { Candle } from "@/lib/api";
 import { getCandlesBefore, getGaps, getErrors } from "@/lib/api";
 import { useCandleStream } from "@/lib/CandleStreamContext";
@@ -17,6 +17,66 @@ const TF_SECONDS: Record<string, number> = {
 // Multi-exchange confidence averaging was introduced 2026-02-21T17:52:00Z.
 // Candles before this date carry a confidence value that isn't meaningful for opacity.
 const CONFIDENCE_CUTOFF_MS = new Date("2026-02-21T17:52:00Z").getTime();
+
+// ---------------------------------------------------------------------------
+// SMA / EMA — ported from ssModelJs/src/pipeline.ts
+// ---------------------------------------------------------------------------
+
+function fillSmaSeries(signal: number[], length: number): number[] {
+  const n = signal.length;
+  const out = new Array<number>(n).fill(NaN);
+  if (length === 0 || n < length) return out;
+  for (let i = length - 1; i < n; i++) {
+    let sum = 0;
+    for (let j = i + 1 - length; j <= i; j++) sum += signal[j];
+    out[i] = sum / length;
+  }
+  return out;
+}
+
+function fillEmaSeries(signal: number[], length: number): number[] {
+  const n = signal.length;
+  const out = new Array<number>(n).fill(NaN);
+  if (length === 0 || n < length) return out;
+  let prev: number | null = null;
+  for (let i = length - 1; i < n; i++) {
+    if (prev === null) {
+      let sum = 0;
+      for (let j = 0; j < length; j++) sum += signal[j];
+      prev = sum / length;
+    } else {
+      const mult = 2 / (length + 1);
+      prev = (signal[i] - prev) * mult + prev;
+    }
+    out[i] = prev;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// MA overlay settings — persisted in localStorage
+// ---------------------------------------------------------------------------
+
+interface MaSettings {
+  showEma: boolean;
+  showSma: boolean;
+  slowLength: number;
+  fastLength: number;
+}
+
+const MA_DEFAULTS: MaSettings = { showEma: false, showSma: false, slowLength: 26, fastLength: 12 };
+
+function loadMaSettings(): MaSettings {
+  try {
+    const raw = localStorage.getItem("candleserv:ma");
+    if (raw) return { ...MA_DEFAULTS, ...JSON.parse(raw) };
+  } catch {}
+  return { ...MA_DEFAULTS };
+}
+
+function saveMaSettings(s: MaSettings) {
+  localStorage.setItem("candleserv:ma", JSON.stringify(s));
+}
 
 function candleToLw(c: Candle): CandlestickData {
   const alpha = c.timestamp >= CONFIDENCE_CUTOFF_MS
@@ -47,6 +107,10 @@ export default function CandlesTab() {
   const series         = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeries   = useRef<ISeriesApi<"Histogram"> | null>(null);
   const gapSeries      = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const emaSlowSeries  = useRef<ISeriesApi<"Line"> | null>(null);
+  const emaFastSeries  = useRef<ISeriesApi<"Line"> | null>(null);
+  const smaSlowSeries  = useRef<ISeriesApi<"Line"> | null>(null);
+  const smaFastSeries  = useRef<ISeriesApi<"Line"> | null>(null);
   const initialized    = useRef(false);
   const [loading, setLoading]         = useState(true);
   const [fetchingHistory, setFetchingHistory] = useState(false);
@@ -54,11 +118,17 @@ export default function CandlesTab() {
   const [showGoLive, setShowGoLive]           = useState(false);
   const [errorTooltip, setErrorTooltip]       = useState<{ x: number; y: number; messages: string[] } | null>(null);
   const [aspectRatio, setAspectRatio]         = useState<string | null>(null);
+  const [ma, setMaState] = useState<MaSettings>(loadMaSettings);
+
+  function setMa(partial: Partial<MaSettings>) {
+    setMaState(prev => { const u = { ...prev, ...partial }; saveMaSettings(u); return u; });
+  }
 
   // All loaded candles, keyed by Unix-seconds timestamp to deduplicate across
   // SSE updates and historical fetches
   const allCandles     = useRef<Map<number, CandlestickData>>(new Map());
   const allVolume      = useRef<Map<number, HistogramData>>(new Map());
+  const allCloses      = useRef<Map<number, number>>(new Map());
   const gapRanges      = useRef<{startSec: number, endSec: number}[]>([]);
   const errorBars      = useRef<Map<number, string[]>>(new Map());
   const loadingHistory = useRef(false);
@@ -68,6 +138,8 @@ export default function CandlesTab() {
   // Keep current tf accessible inside effects without re-subscribing
   const tfRef = useRef(tf);
   useEffect(() => { tfRef.current = tf; }, [tf]);
+  const maRef = useRef(ma);
+  useEffect(() => { maRef.current = ma; }, [ma]);
 
   // ── Chart init — runs once ──────────────────────────────────────────────────
   useEffect(() => {
@@ -114,6 +186,24 @@ export default function CandlesTab() {
       visible: false,
     });
 
+    // MA overlay line series — share the main price scale
+    emaSlowSeries.current = instance.addLineSeries({
+      color: "#2dd4bf", lineWidth: 1, priceScaleId: "right",
+      lastValueVisible: false, priceLineVisible: false,
+    });
+    emaFastSeries.current = instance.addLineSeries({
+      color: "#f472b6", lineWidth: 1, priceScaleId: "right",
+      lastValueVisible: false, priceLineVisible: false,
+    });
+    smaSlowSeries.current = instance.addLineSeries({
+      color: "#60a5fa", lineWidth: 1, priceScaleId: "right",
+      lastValueVisible: false, priceLineVisible: false,
+    });
+    smaFastSeries.current = instance.addLineSeries({
+      color: "#fbbf24", lineWidth: 1, priceScaleId: "right",
+      lastValueVisible: false, priceLineVisible: false,
+    });
+
     // ── Scroll handler — fetch history when user nears the left edge ──────────
     const handleRangeChange = async (range: LogicalRange | null) => {
       if (!range || !series.current) return;
@@ -151,6 +241,7 @@ export default function CandlesTab() {
           if (!allCandles.current.has(sec)) {
             allCandles.current.set(sec, candleToLw(c));
             allVolume.current.set(sec, candleToVolume(c));
+            allCloses.current.set(sec, c.close);
           }
         }
 
@@ -158,6 +249,7 @@ export default function CandlesTab() {
         volumeSeries.current?.setData(sortedVolume());
         gapSeries.current?.setData(sortedGapHistogram());
         updateErrorMarkers();
+        updateMaOverlays();
 
         if (result.candles.length < HISTORY_FETCH_LIMIT) {
           noMoreHistory.current = true;
@@ -196,6 +288,10 @@ export default function CandlesTab() {
       series.current       = null;
       volumeSeries.current = null;
       gapSeries.current    = null;
+      emaSlowSeries.current = null;
+      emaFastSeries.current = null;
+      smaSlowSeries.current = null;
+      smaFastSeries.current = null;
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -207,6 +303,7 @@ export default function CandlesTab() {
     userScrolledBack.current = false;
     allCandles.current.clear();
     allVolume.current.clear();
+    allCloses.current.clear();
     gapRanges.current = [];
     errorBars.current = new Map();
     setAtHistoryStart(false);
@@ -249,6 +346,7 @@ export default function CandlesTab() {
       const sec = Math.floor(c.timestamp / 1000);
       allCandles.current.set(sec, candleToLw(c));
       allVolume.current.set(sec, candleToVolume(c));
+      allCloses.current.set(sec, c.close);
     }
 
     try {
@@ -257,6 +355,7 @@ export default function CandlesTab() {
       volumeSeries.current?.setData(sortedVolume());
       gapSeries.current?.setData(sortedGapHistogram());
       updateErrorMarkers();
+      updateMaOverlays();
       if (!initialized.current) {
         // First load: show the most recent 100 bars at a comfortable zoom
         const from = Math.max(0, data.length - 100);
@@ -334,6 +433,43 @@ export default function CandlesTab() {
     volumeSeries.current.setMarkers(markers);
   }
 
+  useEffect(() => {
+    updateMaOverlays();
+  }, [ma]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function updateMaOverlays() {
+    const m = maRef.current;
+    const sorted = [...allCloses.current.entries()]
+      .sort(([a], [b]) => a - b);
+    const times = sorted.map(([t]) => t);
+    const closes = sorted.map(([, v]) => v);
+
+    function toLineData(values: number[]): LineData[] {
+      const out: LineData[] = [];
+      for (let i = 0; i < values.length; i++) {
+        if (!isFinite(values[i])) continue;
+        out.push({ time: times[i] as Time, value: values[i] });
+      }
+      return out;
+    }
+
+    if (m.showEma) {
+      emaSlowSeries.current?.setData(toLineData(fillEmaSeries(closes, m.slowLength)));
+      emaFastSeries.current?.setData(toLineData(fillEmaSeries(closes, m.fastLength)));
+    } else {
+      emaSlowSeries.current?.setData([]);
+      emaFastSeries.current?.setData([]);
+    }
+
+    if (m.showSma) {
+      smaSlowSeries.current?.setData(toLineData(fillSmaSeries(closes, m.slowLength)));
+      smaFastSeries.current?.setData(toLineData(fillSmaSeries(closes, m.fastLength)));
+    } else {
+      smaSlowSeries.current?.setData([]);
+      smaFastSeries.current?.setData([]);
+    }
+  }
+
   const conf = latest?.confidence ?? null;
   const confColor = conf === null ? "text-gray-500"
     : conf >= 0.8 ? "text-green-400"
@@ -372,11 +508,20 @@ export default function CandlesTab() {
           )}
         </div>
       </div>
-      {/* Chart */}
-      <div
-        className={`relative pb-6 ${aspectRatio ? "" : "flex-1"}`}
-        style={aspectRatio ? { aspectRatio, width: "100%" } : undefined}
-      >
+      {/* Chart — outer div is a size container so the inner div can use cqw/cqh */}
+      <div className="flex-1 min-h-0" style={{ containerType: 'size' }}>
+        <div
+          className={`relative pb-6 ${aspectRatio ? 'mx-auto' : ''}`}
+          style={(() => {
+            if (!aspectRatio) return { width: '100%', height: '100%' };
+            const [w, h] = aspectRatio.split('/').map(Number);
+            const r = w / h;
+            return {
+              width:  `min(100cqw, calc(100cqh * ${r}))`,
+              height: `min(100cqh, calc(100cqw / ${r}))`,
+            };
+          })()}
+        >
         <div ref={chartRef} className="w-full h-full" />
         {errorTooltip && (
           <div
@@ -400,24 +545,49 @@ export default function CandlesTab() {
             Go live
           </button>
         )}
-        <div className="absolute bottom-1 right-4 z-10 flex gap-1">
-          {["21:9", "16:9", "4:3", "3:2"].map(label => {
-            const value = label.replace(":", "/");
-            return (
-              <button
-                key={label}
-                onClick={() => setAspectRatio(aspectRatio === value ? null : value)}
-                className={`px-1.5 py-0.5 text-xs rounded transition-colors ${
-                  aspectRatio === value
-                    ? "bg-gray-600 text-white"
-                    : "text-gray-700 hover:text-gray-400"
-                }`}
-              >
-                {label}
-              </button>
-            );
-          })}
+        <div className="absolute bottom-1 left-0 right-0 z-10 flex items-center px-4">
+          <div className="flex gap-1">
+            {["21:9", "16:9", "4:3", "3:2"].map(label => {
+              const value = label.replace(":", "/");
+              return (
+                <button
+                  key={label}
+                  onClick={() => setAspectRatio(aspectRatio === value ? null : value)}
+                  className={`px-1.5 py-0.5 text-xs rounded transition-colors ${
+                    aspectRatio === value
+                      ? "bg-gray-600 text-white"
+                      : "text-gray-700 hover:text-gray-400"
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-3 ml-auto text-xs">
+            <label className="flex items-center gap-1 cursor-pointer" style={{ color: ma.showEma ? "#2dd4bf" : "#4b5563" }}>
+              <input type="checkbox" checked={ma.showEma} onChange={e => setMa({ showEma: e.target.checked })} />
+              EMA
+            </label>
+            <label className="flex items-center gap-1 cursor-pointer" style={{ color: ma.showSma ? "#60a5fa" : "#4b5563" }}>
+              <input type="checkbox" checked={ma.showSma} onChange={e => setMa({ showSma: e.target.checked })} />
+              SMA
+            </label>
+            <label className="flex items-center gap-1 text-gray-500">
+              Slow
+              <input type="number" min={2} value={ma.slowLength}
+                onChange={e => setMa({ slowLength: parseInt(e.target.value) || 26 })}
+                className="bg-gray-900 border border-gray-700 rounded px-1 py-0.5 text-gray-300 w-12 text-xs" />
+            </label>
+            <label className="flex items-center gap-1 text-gray-500">
+              Fast
+              <input type="number" min={2} value={ma.fastLength}
+                onChange={e => setMa({ fastLength: parseInt(e.target.value) || 12 })}
+                className="bg-gray-900 border border-gray-700 rounded px-1 py-0.5 text-gray-300 w-12 text-xs" />
+            </label>
+          </div>
         </div>
+      </div>
       </div>
     </div>
   );
