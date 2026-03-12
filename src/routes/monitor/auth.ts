@@ -34,7 +34,7 @@ router.post("/login", trackSession, async (req, res) => {
 
 router.post("/logout", trackSession, async (req, res) => {
   if (req.sessionId) await clearUserFromSession(req.sessionId);
-  res.clearCookie("session");
+  res.clearCookie("candleserv_session");
   return res.json({ ok: true });
 });
 
