@@ -77,9 +77,9 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
   let firstTile = true;
   for (let tileEnd = to; tileEnd > from;) {
     // Throttle before every tile except the first to respect Kraken's ~1 req/sec rate limit
-    if (!firstTile) await new Promise(r => setTimeout(r, 1200));
+    //if (!firstTile) for some reason this doesnt work.
+    await new Promise(r => setTimeout(r, 5000));
     firstTile = false;
-
     const tileStartMs = Math.max(from.getTime(), tileEnd.getTime() - BACKFILL_TILE * 60000);
     const tileStart   = new Date(tileStartMs);
     const limit       = Math.round((tileEnd.getTime() - tileStartMs) / 60000);
