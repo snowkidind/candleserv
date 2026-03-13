@@ -74,7 +74,12 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
   }
 
   // Walk backward through [from, to) in BACKFILL_TILE chunks
+  let firstTile = true;
   for (let tileEnd = to; tileEnd > from;) {
+    // Throttle before every tile except the first to respect Kraken's ~1 req/sec rate limit
+    if (!firstTile) await new Promise(r => setTimeout(r, 1200));
+    firstTile = false;
+
     const tileStartMs = Math.max(from.getTime(), tileEnd.getTime() - BACKFILL_TILE * 60000);
     const tileStart   = new Date(tileStartMs);
     const limit       = Math.round((tileEnd.getTime() - tileStartMs) / 60000);
@@ -106,9 +111,6 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
     }
 
     tileEnd = tileStart;
-
-    // Throttle between tiles to respect Kraken's ~1 req/sec rate limit
-    if (tileStart > from) await new Promise(r => setTimeout(r, 1200));
   }
 
   // Composite each minute and write

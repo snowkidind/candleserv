@@ -85,11 +85,12 @@ async function main(): Promise<void> {
     // Start live collection
     startCollector();
 
-    // Background backfill (non-blocking — runs concurrently with collector)
-    runBackfill().catch((err) => logError("[server] backfill error:", err));
-
-    // Gap detection: startup scan + hourly
-    startGapDetector().catch((err) => logError("[server] gap detector error:", err));
+    // Background backfill + gap detection: delayed 30s to avoid hammering exchanges
+    // immediately after a power failure when all services restart simultaneously.
+    setTimeout(() => {
+      runBackfill().catch((err) => logError("[server] backfill error:", err));
+      startGapDetector().catch((err) => logError("[server] gap detector error:", err));
+    }, 30_000);
 
     // Daily maintenance: prune sessions + source candles
     setInterval(async () => {

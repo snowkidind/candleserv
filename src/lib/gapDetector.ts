@@ -159,7 +159,8 @@ export async function startGapDetector(): Promise<void> {
   log("[gapDetector] startup scan (7 days)");
   await runGapScan(7);
 
-  // Upgrade any low-confidence rows (e.g. single-source power-failure heals)
+  // Upgrade any low-confidence rows — delayed 2s to avoid back-to-back exchange hits
+  await new Promise(r => setTimeout(r, 2000));
   await reHealLowConfidence(7).catch((err) => logError("[gapDetector] reHealLowConfidence failed:", err));
 
   // Hourly scan
