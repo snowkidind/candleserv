@@ -1,6 +1,6 @@
-import type { SourceCandle, SourceResult } from "../types/index";
-import { recordError } from "../db/errors";
-import { logError } from "./log";
+import type { SourceCandle, SourceResult } from "../types/index.js";
+import { recordError } from "../db/errors.js";
+import { logError } from "./log.js";
 
 export const SOURCE_BITS: Record<string, number> = {
   binance: 1 << 0,

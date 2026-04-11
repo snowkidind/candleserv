@@ -1,4 +1,4 @@
-import { query } from "./pool";
+import { query } from "./pool.js";
 
 export const PERM_SUPERADMIN            = "SUPERADMIN";
 export const PERM_CAN_VIEW_CANDLESERV   = "CAN_VIEW_CANDLESERV";

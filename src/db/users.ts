@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { query } from "./pool";
+import { query } from "./pool.js";
 
 export interface UserRow {
   id: number;

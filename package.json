@@ -2,11 +2,12 @@
   "name": "candleserv",
   "version": "1.0.0",
   "description": "Multi-source Bitcoin 1m OHLCV candle store",
+  "type": "module",
   "main": "dist/server.js",
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",
-    "dev": "ts-node src/server.ts"
+    "dev": "npx tsx src/server.ts"
   },
   "keywords": [],
   "author": "",

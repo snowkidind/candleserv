@@ -1,5 +1,5 @@
-import { query } from "./pool";
-import { log } from "../lib/log";
+import { query } from "./pool.js";
+import { log } from "../lib/log.js";
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS candles_1m (

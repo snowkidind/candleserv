@@ -1,6 +1,6 @@
 import { EventEmitter } from "events";
-import { redisDel } from "./redis";
-import { VALID_TFS } from "../db/candles";
+import { redisDel } from "./redis.js";
+import { VALID_TFS } from "../db/candles.js";
 
 /**
  * Internal event bus. The live collector emits here after each successful

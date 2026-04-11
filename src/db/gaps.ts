@@ -1,5 +1,5 @@
-import { query } from "./pool";
-import type { GapRow } from "../types/index";
+import { query } from "./pool.js";
+import type { GapRow } from "../types/index.js";
 
 function rowToGap(row: Record<string, unknown>): GapRow {
   return {

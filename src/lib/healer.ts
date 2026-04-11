@@ -1,21 +1,21 @@
-import { fetchBinanceCandle, fetchBinanceRange } from "../adapters/binance";
-import { fetchBybitCandle,    fetchBybitRange   } from "../adapters/bybit";
-import { fetchKrakenCandle,   fetchKrakenRange  } from "../adapters/kraken";
-import { fetchCoinbaseCandle, fetchCoinbaseRange } from "../adapters/coinbase";
-import { fetchBitfinexCandle, fetchBitfinexRange } from "../adapters/bitfinex";
-import { applyGuards, buildComposite } from "./composite";
+import { fetchBinanceCandle, fetchBinanceRange } from "../adapters/binance.js";
+import { fetchBybitCandle,    fetchBybitRange   } from "../adapters/bybit.js";
+import { fetchKrakenCandle,   fetchKrakenRange  } from "../adapters/kraken.js";
+import { fetchCoinbaseCandle, fetchCoinbaseRange } from "../adapters/coinbase.js";
+import { fetchBitfinexCandle, fetchBitfinexRange } from "../adapters/bitfinex.js";
+import { applyGuards, buildComposite } from "./composite.js";
 import {
   upsertCandle, upsertSourceCandle, insertCandleIfMissing,
   countCandlesInDay, getSourceCountBaseline, getRecentCloseStddev,
   getTrailingVolumeLeader,
-} from "../db/candles";
-import { clearDetectedGaps } from "../db/gaps";
-import { runGapScan } from "./gapDetector";
-import { recordError } from "../db/errors";
-import { getSetting, setSetting, getSettingInt } from "../db/appSettings";
-import { query } from "../db/pool";
-import { log, logError } from "./log";
-import type { SourceResult } from "../types/index";
+} from "../db/candles.js";
+import { clearDetectedGaps } from "../db/gaps.js";
+import { runGapScan } from "./gapDetector.js";
+import { recordError } from "../db/errors.js";
+import { getSetting, setSetting, getSettingInt } from "../db/appSettings.js";
+import { query } from "../db/pool.js";
+import { log, logError } from "./log.js";
+import type { SourceResult } from "../types/index.js";
 
 const THREE_MONTHS_MS = 90 * 24 * 60 * 60 * 1000;
 

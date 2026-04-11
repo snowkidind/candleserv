@@ -1,10 +1,10 @@
 import { Router } from "express";
-import { query } from "../db/pool";
-import { countPendingGaps } from "../db/gaps";
-import { getCollectionLatencyStats } from "../db/candles";
-import { getRecentOutages } from "../db/serviceEvents";
-import { getAllClients } from "../lib/subscriptions";
-import { logError } from "../lib/log";
+import { query } from "../db/pool.js";
+import { countPendingGaps } from "../db/gaps.js";
+import { getCollectionLatencyStats } from "../db/candles.js";
+import { getRecentOutages } from "../db/serviceEvents.js";
+import { getAllClients } from "../lib/subscriptions.js";
+import { logError } from "../lib/log.js";
 
 const router = Router();
 

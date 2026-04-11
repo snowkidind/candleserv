@@ -6,12 +6,12 @@ import path from "path";
 const WIZARD_HTML = path.join(process.cwd(), "src", "routes", "setup.html");
 import crypto from "crypto";
 import { Pool } from "pg";
-import { createSchema, seedSettings } from "../db/schema";
-import { createUser } from "../db/users";
-import { grantPermission, PERM_SUPERADMIN } from "../db/permissions";
-import { insertStreamEvent } from "../db/streamEvents";
-import { setSetting } from "../db/appSettings";
-import { log, logError } from "../lib/log";
+import { createSchema, seedSettings } from "../db/schema.js";
+import { createUser } from "../db/users.js";
+import { grantPermission, PERM_SUPERADMIN } from "../db/permissions.js";
+import { insertStreamEvent } from "../db/streamEvents.js";
+import { setSetting } from "../db/appSettings.js";
+import { log, logError } from "../lib/log.js";
 
 const router = Router();
 

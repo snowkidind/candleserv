@@ -1,18 +1,18 @@
 import dotenv from "dotenv";
 dotenv.config();
 
-import { createApp } from "./app";
-import { startCollector } from "./lib/collector";
-import { runBackfill } from "./lib/healer";
-import { startGapDetector } from "./lib/gapDetector";
-import { pruneOldSessions } from "./db/sessions";
-import { pruneSourceCandles } from "./db/candles";
-import { initRedis } from "./lib/redis";
-import { createSchema } from "./db/schema";
-import { getSetting } from "./db/appSettings";
-import { recordOutage } from "./db/serviceEvents";
-import { query } from "./db/pool";
-import { log, logError } from "./lib/log";
+import { createApp } from "./app.js";
+import { startCollector } from "./lib/collector.js";
+import { runBackfill } from "./lib/healer.js";
+import { startGapDetector } from "./lib/gapDetector.js";
+import { pruneOldSessions } from "./db/sessions.js";
+import { pruneSourceCandles } from "./db/candles.js";
+import { initRedis } from "./lib/redis.js";
+import { createSchema } from "./db/schema.js";
+import { getSetting } from "./db/appSettings.js";
+import { recordOutage } from "./db/serviceEvents.js";
+import { query } from "./db/pool.js";
+import { log, logError } from "./lib/log.js";
 
 const PORT = parseInt(process.env.PORT ?? "3007", 10);
 

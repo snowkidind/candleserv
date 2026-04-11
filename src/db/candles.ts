@@ -1,5 +1,5 @@
-import { query } from "./pool";
-import type { CandleRow, CandleJson } from "../types/index";
+import { query } from "./pool.js";
+import type { CandleRow, CandleJson } from "../types/index.js";
 
 export function rowToJson(row: Record<string, unknown>): CandleJson {
   return {

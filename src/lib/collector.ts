@@ -1,17 +1,17 @@
-import { fetchBinanceCandle } from "../adapters/binance";
-import { fetchBybitCandle } from "../adapters/bybit";
-import { fetchKrakenCandle } from "../adapters/kraken";
-import { fetchCoinbaseCandle } from "../adapters/coinbase";
-import { fetchBitfinexCandle } from "../adapters/bitfinex";
-import { applyGuards, buildComposite } from "./composite";
-import { upsertCandle, upsertSourceCandle, getSourceCountBaseline, getRecentCloseStddev, getTrailingVolumeLeader } from "../db/candles";
-import { recordError } from "../db/errors";
-import { candleEmitter } from "./emitter";
-import { rowToJson } from "../db/candles";
-import { insertStreamEvent } from "../db/streamEvents";
-import { getSettingInt, setSetting } from "../db/appSettings";
-import { log, logError, logWarn } from "./log";
-import type { SourceResult } from "../types/index";
+import { fetchBinanceCandle } from "../adapters/binance.js";
+import { fetchBybitCandle } from "../adapters/bybit.js";
+import { fetchKrakenCandle } from "../adapters/kraken.js";
+import { fetchCoinbaseCandle } from "../adapters/coinbase.js";
+import { fetchBitfinexCandle } from "../adapters/bitfinex.js";
+import { applyGuards, buildComposite } from "./composite.js";
+import { upsertCandle, upsertSourceCandle, getSourceCountBaseline, getRecentCloseStddev, getTrailingVolumeLeader } from "../db/candles.js";
+import { recordError } from "../db/errors.js";
+import { candleEmitter } from "./emitter.js";
+import { rowToJson } from "../db/candles.js";
+import { insertStreamEvent } from "../db/streamEvents.js";
+import { getSettingInt, setSetting } from "../db/appSettings.js";
+import { log, logError, logWarn } from "./log.js";
+import type { SourceResult } from "../types/index.js";
 
 const DEADLINE_MS = 15000; // 15 seconds from :00 to write
 const SOURCES = ["binance", "bybit", "kraken", "coinbase", "bitfinex"];

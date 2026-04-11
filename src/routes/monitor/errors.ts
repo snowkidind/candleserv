@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { trackSession, authenticate, requirePerm } from "../../middleware/sessionAuth";
-import { getRecentErrors } from "../../db/errors";
+import { trackSession, authenticate, requirePerm } from "../../middleware/sessionAuth.js";
+import { getRecentErrors } from "../../db/errors.js";
 
 const router = Router();
 const guard = [trackSession, authenticate, requirePerm("CAN_VIEW_CANDLESERV")];

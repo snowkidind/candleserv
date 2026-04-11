@@ -1,4 +1,4 @@
-import type { SourceCandle } from "../types/index";
+import type { SourceCandle } from "../types/index.js";
 
 const BASE = "https://api.kraken.com";
 const TIMEOUT_MS = 6000;

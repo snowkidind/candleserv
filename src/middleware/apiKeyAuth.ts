@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { Request, Response, NextFunction } from "express";
-import { findApiKey, updateApiKeyNonce } from "../db/apiKeys";
-import { recordError } from "../db/errors";
+import { findApiKey, updateApiKeyNonce } from "../db/apiKeys.js";
+import { recordError } from "../db/errors.js";
 
 /**
  * API key auth middleware for /v1/* routes.

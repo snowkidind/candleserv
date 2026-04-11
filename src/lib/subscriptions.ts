@@ -1,5 +1,5 @@
 import type { Response } from "express";
-import type { SseClient } from "../types/index";
+import type { SseClient } from "../types/index.js";
 
 // Active API consumer SSE connections, keyed by apiKey
 const clients = new Map<string, SseClient>();

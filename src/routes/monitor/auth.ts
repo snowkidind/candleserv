@@ -1,8 +1,8 @@
 import { Router } from "express";
-import { trackSession } from "../../middleware/sessionAuth";
-import { findUserByEmail, verifyPassword, touchLastLogin, touchLastLoginFail } from "../../db/users";
-import { assignUserToSession, clearUserFromSession } from "../../db/sessions";
-import { log } from "../../lib/log";
+import { trackSession } from "../../middleware/sessionAuth.js";
+import { findUserByEmail, verifyPassword, touchLastLogin, touchLastLoginFail } from "../../db/users.js";
+import { assignUserToSession, clearUserFromSession } from "../../db/sessions.js";
+import { log } from "../../lib/log.js";
 
 const router = Router();
 

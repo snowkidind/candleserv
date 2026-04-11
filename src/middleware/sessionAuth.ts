@@ -1,8 +1,8 @@
 import { Request, Response, NextFunction } from "express";
-import { getOrCreateSession } from "../db/sessions";
-import { findUserById } from "../db/users";
-import { getPermissionsForUser } from "../db/permissions";
-import { logError } from "../lib/log";
+import { getOrCreateSession } from "../db/sessions.js";
+import { findUserById } from "../db/users.js";
+import { getPermissionsForUser } from "../db/permissions.js";
+import { logError } from "../lib/log.js";
 
 const COOKIE_NAME = "candleserv_session";
 const COOKIE_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days

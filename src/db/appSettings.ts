@@ -1,5 +1,5 @@
-import { query } from "./pool";
-import { logError } from "../lib/log";
+import { query } from "./pool.js";
+import { logError } from "../lib/log.js";
 
 // In-memory cache (fallback when Redis unavailable)
 const cache = new Map<string, { value: string; expiresAt: number }>();

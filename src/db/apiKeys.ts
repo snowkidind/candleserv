@@ -1,6 +1,6 @@
 import crypto from "crypto";
-import { query } from "./pool";
-import type { ApiKeyRow } from "../types/index";
+import { query } from "./pool.js";
+import type { ApiKeyRow } from "../types/index.js";
 
 function rowToApiKey(row: Record<string, unknown>): ApiKeyRow {
   return {

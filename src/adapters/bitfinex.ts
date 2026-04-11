@@ -1,4 +1,4 @@
-import type { SourceCandle } from "../types/index";
+import type { SourceCandle } from "../types/index.js";
 
 const BASE = "https://api-pub.bitfinex.com";
 const TIMEOUT_MS = 6000;

@@ -1,15 +1,15 @@
 import { Router } from "express";
-import { trackSession, authenticate, requirePerm } from "../../middleware/sessionAuth";
-import { query } from "../../db/pool";
-import { getAllGaps, countPendingGaps } from "../../db/gaps";
-import { getStreamEvents } from "../../db/streamEvents";
-import { getAllSettings, setSetting } from "../../db/appSettings";
-import { getCandles, getCollectionLatencyStats, VALID_TFS } from "../../db/candles";
-import { runGapScan } from "../../lib/gapDetector";
-import { getSourceStatus, resumeSource } from "../../lib/collector";
-import { listApiKeys, createApiKey, revokeApiKey, setApiKeyEnabled } from "../../db/apiKeys";
-import { getAllServiceEvents } from "../../db/serviceEvents";
-import { logError } from "../../lib/log";
+import { trackSession, authenticate, requirePerm } from "../../middleware/sessionAuth.js";
+import { query } from "../../db/pool.js";
+import { getAllGaps, countPendingGaps } from "../../db/gaps.js";
+import { getStreamEvents } from "../../db/streamEvents.js";
+import { getAllSettings, setSetting } from "../../db/appSettings.js";
+import { getCandles, getCollectionLatencyStats, VALID_TFS } from "../../db/candles.js";
+import { runGapScan } from "../../lib/gapDetector.js";
+import { getSourceStatus, resumeSource } from "../../lib/collector.js";
+import { listApiKeys, createApiKey, revokeApiKey, setApiKeyEnabled } from "../../db/apiKeys.js";
+import { getAllServiceEvents } from "../../db/serviceEvents.js";
+import { logError } from "../../lib/log.js";
 
 const router = Router();
 const view   = [trackSession, authenticate, requirePerm("CAN_VIEW_CANDLESERV")];

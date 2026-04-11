@@ -1,4 +1,4 @@
-import { query } from "./pool";
+import { query } from "./pool.js";
 
 export async function insertStreamEvent(source: string, state: string): Promise<void> {
   await query(

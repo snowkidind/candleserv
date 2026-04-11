@@ -1,6 +1,6 @@
 import crypto from "crypto";
-import { query } from "./pool";
-import { logError } from "../lib/log";
+import { query } from "./pool.js";
+import { logError } from "../lib/log.js";
 
 export interface SessionRow {
   id: number;

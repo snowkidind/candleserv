@@ -1,5 +1,5 @@
 import { Pool, PoolClient, QueryResult } from "pg";
-import { logError } from "../lib/log";
+import { logError } from "../lib/log.js";
 
 let pool: Pool | undefined;
 

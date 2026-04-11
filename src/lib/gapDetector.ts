@@ -1,9 +1,9 @@
-import { query } from "../db/pool";
-import { upsertGap, setGapState, markAlertSent, getPendingGaps } from "../db/gaps";
-import { healRange, reHealLowConfidence } from "./healer";
-import { recordError } from "../db/errors";
-import { getSettingInt } from "../db/appSettings";
-import { log, logError } from "./log";
+import { query } from "../db/pool.js";
+import { upsertGap, setGapState, markAlertSent, getPendingGaps } from "../db/gaps.js";
+import { healRange, reHealLowConfidence } from "./healer.js";
+import { recordError } from "../db/errors.js";
+import { getSettingInt } from "../db/appSettings.js";
+import { log, logError } from "./log.js";
 
 const ALERT_WEBHOOK_KEY = "alertWebhookUrl";
 

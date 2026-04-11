@@ -1,10 +1,10 @@
 import { Router } from "express";
-import { apiKeyAuth } from "../../middleware/apiKeyAuth";
-import { getCandles, getLatest1m, VALID_TFS } from "../../db/candles";
-import { addClient, removeClient, getSubscriptionStatus, pushToClient } from "../../lib/subscriptions";
-import { candleEmitter } from "../../lib/emitter";
-import { redisGet, redisSet, boundaryTtl } from "../../lib/redis";
-import type { SseClient } from "../../types/index";
+import { apiKeyAuth } from "../../middleware/apiKeyAuth.js";
+import { getCandles, getLatest1m, VALID_TFS } from "../../db/candles.js";
+import { addClient, removeClient, getSubscriptionStatus, pushToClient } from "../../lib/subscriptions.js";
+import { candleEmitter } from "../../lib/emitter.js";
+import { redisGet, redisSet, boundaryTtl } from "../../lib/redis.js";
+import type { SseClient } from "../../types/index.js";
 
 const router = Router();
 

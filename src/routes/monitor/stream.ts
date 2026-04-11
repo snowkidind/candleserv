@@ -1,8 +1,8 @@
 import { Router } from "express";
-import { trackSession, authenticate, requirePerm } from "../../middleware/sessionAuth";
-import { getCandles, VALID_TFS } from "../../db/candles";
-import { candleEmitter } from "../../lib/emitter";
-import { redisGet, redisSet } from "../../lib/redis";
+import { trackSession, authenticate, requirePerm } from "../../middleware/sessionAuth.js";
+import { getCandles, VALID_TFS } from "../../db/candles.js";
+import { candleEmitter } from "../../lib/emitter.js";
+import { redisGet, redisSet } from "../../lib/redis.js";
 
 const router = Router();
 const guard = [trackSession, authenticate, requirePerm("CAN_VIEW_CANDLESERV")];

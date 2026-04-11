@@ -1,15 +1,15 @@
 import express from "express";
 import cookieParser from "cookie-parser";
 import path from "path";
-import { log } from "./lib/log";
+import { log } from "./lib/log.js";
 
-import healthRouter from "./routes/health";
-import setupRouter from "./routes/setup";
-import v1CandlesRouter from "./routes/v1/candles";
-import monitorAuthRouter from "./routes/monitor/auth";
-import monitorErrorsRouter from "./routes/monitor/errors";
-import monitorOperationalRouter from "./routes/monitor/operational";
-import monitorStreamRouter from "./routes/monitor/stream";
+import healthRouter from "./routes/health.js";
+import setupRouter from "./routes/setup.js";
+import v1CandlesRouter from "./routes/v1/candles.js";
+import monitorAuthRouter from "./routes/monitor/auth.js";
+import monitorErrorsRouter from "./routes/monitor/errors.js";
+import monitorOperationalRouter from "./routes/monitor/operational.js";
+import monitorStreamRouter from "./routes/monitor/stream.js";
 
 export function createApp(): express.Application {
   const app = express();
