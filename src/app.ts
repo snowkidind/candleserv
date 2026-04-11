@@ -1,8 +1,10 @@
 import express from "express";
 import cookieParser from "cookie-parser";
 import path from "path";
+import { fileURLToPath } from "url";
 import { log } from "./lib/log.js";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import healthRouter from "./routes/health.js";
 import setupRouter from "./routes/setup.js";
 import v1CandlesRouter from "./routes/v1/candles.js";
