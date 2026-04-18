@@ -20,7 +20,12 @@
  *   npx tsx scripts/healGaps.ts 7 --dry-run     # report only, no network/writes
  */
 import dotenv from "dotenv";
-dotenv.config();
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = dirname(__filename);
+dotenv.config({ path: resolve(__dirname, "../.env") });
 
 import { query, getPool } from "../src/db/pool";
 import { healRange } from "../src/lib/healer";
