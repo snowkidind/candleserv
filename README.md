@@ -54,7 +54,7 @@ src/
     monitor/        Monitor UI routes (session auth)
   types/            TypeScript interfaces
 frontend/           React SPA (monitor UI)
-scripts/            Utility scripts (rederive, testCaller)
+scripts/            Utility scripts (rederive, testCaller, healGaps)
 ```
 
 ### Data flow
@@ -193,13 +193,33 @@ Detection uses `generate_series` against the expected minute sequence and identi
 
 ### Gap healing
 
-For each detected gap, the healer fetches the missing minute from Binance and upserts a single-source candle with `confidence = 0.2`. Gaps transition through states: `detected` → `healing` → `healed` or `unresolvable`. Healed gaps are retained as history.
+Contiguous missing minutes are grouped into ranges and each range is fetched from all five exchanges in 300-minute tiles via `healRange`. Per-source guards (zero, OHLC, outlier) run exactly as in the live collector, and surviving sources are composited through `buildComposite` — so a healed row carries the same confidence score, volume-leader-derived high/low, and `sources` bitmask as any live-collected row. Minutes that all five exchanges refuse are marked `unresolvable`.
+
+Gaps transition through states: `detected` → `healing` → `healed` or `unresolvable`. Healed gaps are retained as history.
 
 If more than 100 gaps are pending (indicating a fresh database), healing defers to the backfill process rather than issuing thousands of individual requests.
 
+### Manual healer — `scripts/healGaps.ts`
+
+The in-process healer has one failure mode on a live instance: when a **single multi-hour outage** produces more than 100 missing minutes, `healPendingGaps` defers to the backfill — but backfill only runs on first startup (it sets `backfillComplete=true` in `app_settings` and skips on every subsequent boot). The result is that a 3-hour+ outage can sit detected-but-unhealed indefinitely, and even `POST /monitor/heal` won't fix it (it trips the same guard).
+
+`scripts/healGaps.ts` is the escape hatch. It bypasses the guard and calls `healRange(from, to, true)` directly per contiguous block of missing minutes — same code path the hourly scan uses for small gaps, so the resulting composites are full-quality (all five exchanges, guards applied, confidence + volume-leader normalization).
+
+```bash
+npx tsx scripts/healGaps.ts              # last 7 days
+npx tsx scripts/healGaps.ts 3            # last 3 days
+npx tsx scripts/healGaps.ts 7 --dry-run  # detect only, no fetches/writes
+```
+
+The script keeps the `gaps` table coherent (`detected` → `healing` → `healed`/`unresolvable`) and prints a post-heal confidence histogram so you can verify the window came out clean. Network cost is bounded by range span: each 300-minute tile is one parallel fetch across the five exchanges with a 5s throttle between tiles.
+
+Reach for `healGaps.ts` when `/monitor/gaps` shows a large block stuck in `detected`, or after a known exchange/collector outage. It does **not** touch `backfillComplete`, so it is safe to re-run.
+
 ### Backfill
 
-On first startup, if fewer than 3 months of data exist, the backfill process scans day-by-day from 90 days ago to present. For each day with fewer than 1440 rows, it fetches the full day from Binance in two API calls (1000 + 440 candles) and inserts any missing rows. Existing rows are never overwritten — `INSERT ... ON CONFLICT DO NOTHING`.
+On first startup, if fewer than 3 months of data exist, the backfill process scans day-by-day from 90 days ago to present. For each day with fewer than 1440 rows, it calls `healRange(dayStart, dayEnd, false)` — the same multi-source fetch and composite path used by the gap healer, but in `insertCandleIfMissing` mode so existing rows are never overwritten. Backfill therefore produces full-confidence composites, not single-source placeholders.
+
+Backfill is idempotent per-instance: completion writes `backfillComplete=true` to `app_settings` and subsequent boots skip it. To recover a specific window on a live instance — for example a multi-hour outage that the hourly scan refuses to heal under the 100-gap guard — use `scripts/healGaps.ts` instead of clearing `backfillComplete`.
 
 Backfill runs concurrently with the live collector. After completion it clears stale detected gaps and rescans the last 7 days.
 
