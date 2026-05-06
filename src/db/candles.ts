@@ -241,14 +241,14 @@ async function getCalendarMonthlyCandles(endingAt: Date, limit: number): Promise
 
 export function tfToMinutes(tf: string): number {
   const map: Record<string, number> = {
-    "1m": 1, "5m": 5, "10m": 10, "15m": 15,
+    "1m": 1, "5m": 5, "10m": 10, "15m": 15, "30m": 30,
     "1h": 60, "2h": 120, "4h": 240, "6h": 360, "12h": 720,
     "1d": 1440, "3d": 4320, "7d": 10080,
   };
   return map[tf] ?? 1;
 }
 
-export const VALID_TFS = ["1m","5m","10m","15m","1h","2h","4h","6h","12h","1d","3d","7d","30d"];
+export const VALID_TFS = ["1m","5m","10m","15m","30m","1h","2h","4h","6h","12h","1d","3d","7d","30d"];
 
 /**
  * Count candles in a day window (for backfill check).
