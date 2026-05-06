@@ -261,7 +261,7 @@ Nonce must be monotonically increasing (replay protection). The secret never lea
 ### Candle endpoints
 
 ```
-GET /v1/candles?tf=<tf>&endingAt=<iso>&limit=<n>
+GET /v1/candles?tf=<tf>&endingAt=<iso>&limit=<n>[&waitForFresh=true&maxWaitMs=<ms>]
 GET /v1/candles/latest?tf=<tf>&n=<count>
 ```
 
@@ -270,6 +270,14 @@ Maximum limit: 5000. All higher timeframes are aggregated from 1m rows on read.
 **Supported timeframes:** `1m`, `5m`, `10m`, `15m`, `1h`, `2h`, `4h`, `6h`, `12h`, `1d`, `3d`, `7d`, `30d`
 
 The `7d` timeframe aligns to Monday 00:00 UTC. The `30d` timeframe aligns to calendar month boundaries (actual width varies 28–31 days).
+
+**`waitForFresh` (long-poll):** when `waitForFresh=true`, the server holds the response until a 1m candle whose close timestamp is at-or-after `endingAt` has been ingested. Eliminates the exchange-feed-lag race for callers that must consume bars at the moment of close. Constraints:
+
+- Requires `endingAt` aligned to the `tf` boundary (`endingAt % tfMs === 0`).
+- Supported tfs: `1m`, `5m`, `15m`, `1h`, `4h`, `1d`, `7d`.
+- `maxWaitMs` defaults to 15000 and is clamped to 60000.
+- If the bar arrives in time, the response is identical in shape to a normal fetch.
+- On timeout, returns `504 Gateway Timeout` with `{ error, tf, endingAt, lastAvailableTs, waitedMs }`.
 
 **Response format:**
 

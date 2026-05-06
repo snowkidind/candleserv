@@ -10,6 +10,10 @@ class CandleEmitter extends EventEmitter {}
 
 export const candleEmitter = new CandleEmitter();
 
+// Each in-flight waitForFresh long-poll attaches one listener. Default cap of 10
+// would warn under normal multi-consumer load (phaseserv + oracle + dashboards).
+candleEmitter.setMaxListeners(1000);
+
 // Invalidate all candles:latest:* cache keys on every new candle
 candleEmitter.on("candle", async () => {
   for (const tf of VALID_TFS) {
