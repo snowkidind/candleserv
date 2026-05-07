@@ -7,7 +7,7 @@ import { redisGet, redisSet, boundaryTtl } from "../../lib/redis.js";
 import { log, logError } from "../../lib/log.js";
 import type { CandleJson, SseClient } from "../../types/index.js";
 
-const WAIT_FOR_FRESH_TFS = new Set(["1m", "5m", "15m", "1h", "4h", "1d", "7d"]);
+const WAIT_FOR_FRESH_TFS = new Set(["1m", "5m", "15m", "30m", "1h", "4h", "6h", "1d", "7d"]);
 const DEFAULT_WAIT_MS = 15_000;
 const MAX_WAIT_LIMIT_MS = 60_000;
 
