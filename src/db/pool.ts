@@ -9,7 +9,11 @@ function initPool(): void {
   if (!url) throw new Error("DATABASE_URL is not set");
   pool = new Pool({
     connectionString: url,
-    options: "-c timezone=UTC",
+  });
+  pool.on("connect", (client) => {
+    client.query("SET TIME ZONE 'UTC'").catch((err) => {
+      logError("[candleserv pool] failed to set UTC timezone on new connection:", err);
+    });
   });
   pool.on("error", (err: Error) => {
     logError("db/pool — unexpected pool error:", err);
