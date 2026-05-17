@@ -29,12 +29,73 @@ export async function updateApiKeyNonce(id: number, nonce: bigint): Promise<void
   );
 }
 
-export async function listApiKeys(): Promise<Omit<ApiKeyRow, "secret" | "nonce">[]> {
+/**
+ * List keys for the admin UI. Strips `secret` and the raw `nonce` value
+ * (no need to expose either to operators), but exposes a derived
+ * `nonceStatus` so the UI can flag rows that need repair.
+ *
+ * 'ok'     — nonce ≤ current ms (normal: future requests can advance it)
+ * 'repair' — nonce > current ms (poisoned: every legit request now 401s
+ *            as a replay; operator action required)
+ */
+export interface ApiKeyListRow extends Omit<ApiKeyRow, "secret" | "nonce"> {
+  nonceStatus: "ok" | "repair";
+}
+
+export async function listApiKeys(): Promise<ApiKeyListRow[]> {
+  const nowMs = Date.now();
   const res = await query(
-    `SELECT id, label, "apiKey", enabled, "lastSeen", "createdAt", "updatedAt"
-     FROM api_keys ORDER BY "createdAt" DESC`
+    `SELECT id, label, "apiKey", enabled, "lastSeen", "createdAt", "updatedAt",
+            (nonce > $1) AS "needsRepair"
+     FROM api_keys ORDER BY "createdAt" DESC`,
+    [nowMs]
   );
-  return res.rows as Omit<ApiKeyRow, "secret" | "nonce">[];
+  return res.rows.map(row => ({
+    id:          row.id as number,
+    label:       row.label as string,
+    apiKey:      row.apiKey as string,
+    enabled:     row.enabled as boolean,
+    lastSeen:    row.lastSeen as Date | null,
+    createdAt:   row.createdAt as Date,
+    updatedAt:   row.updatedAt as Date,
+    nonceStatus: row.needsRepair ? "repair" : "ok",
+  }));
+}
+
+/**
+ * Reset the nonce of one key to 0. Used by the per-row "Repair" action
+ * on the admin tab.
+ */
+export async function repairApiKeyNonce(apiKey: string): Promise<void> {
+  await query(
+    `UPDATE api_keys SET nonce = 0, "updatedAt" = NOW() WHERE "apiKey" = $1`,
+    [apiKey]
+  );
+}
+
+/**
+ * Scan + repair all rows whose nonce exceeds wall-clock ms. Returns the
+ * list of repaired rows with their pre-reset nonce values for reporting.
+ */
+export async function findAndRepairBrokenNonces(): Promise<{ id: number; label: string; apiKey: string; oldNonce: string }[]> {
+  const nowMs = Date.now();
+  const res = await query(
+    `WITH broken AS (
+       SELECT id, label, "apiKey", nonce FROM api_keys WHERE nonce > $1
+     ),
+     upd AS (
+       UPDATE api_keys SET nonce = 0, "updatedAt" = NOW() WHERE id IN (SELECT id FROM broken)
+       RETURNING id
+     )
+     SELECT id, label, "apiKey", nonce FROM broken ORDER BY label`,
+    [nowMs]
+  );
+  return res.rows.map(r => ({
+    id:       r.id as number,
+    label:    r.label as string,
+    apiKey:   r.apiKey as string,
+    oldNonce: String(r.nonce),   // bigint → string to keep precision in JSON
+  }));
 }
 
 export async function createApiKey(label: string): Promise<{ apiKey: string; secret: string }> {

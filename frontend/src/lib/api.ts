@@ -108,6 +108,9 @@ export const saveConfig = (settings: Record<string, string>) =>
 export interface ApiKey {
   id: number; label: string; apiKey: string;
   enabled: boolean; lastSeen: string | null; createdAt: string;
+  // 'repair' when stored nonce > now and the key is wedged into permanent
+  // 401-replay; 'ok' otherwise.
+  nonceStatus: "ok" | "repair";
 }
 export const getApiKeys = () => req<{ keys: ApiKey[] }>("/monitor/admin/keys");
 export const createApiKey = (label: string) =>
@@ -120,6 +123,8 @@ export const toggleApiKey = (apiKey: string, enabled: boolean) =>
   req(`/monitor/admin/keys/${apiKey}`, {
     method: "PATCH", body: JSON.stringify({ enabled }),
   });
+export const repairApiKeyNonce = (apiKey: string) =>
+  req(`/monitor/admin/keys/${apiKey}/repair-nonce`, { method: "POST" });
 
 // Resume source
 export const resumeSource = (source: string) =>

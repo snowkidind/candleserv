@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  getApiKeys, createApiKey, revokeApiKey, toggleApiKey,
+  getApiKeys, createApiKey, revokeApiKey, toggleApiKey, repairApiKeyNonce,
   getConfig, saveConfig,
   type ApiKey,
 } from "@/lib/api";
@@ -18,6 +18,10 @@ function KeyRow({ k }: { k: ApiKey }) {
     mutationFn: () => revokeApiKey(k.apiKey),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["api-keys"] }),
   });
+  const repair = useMutation({
+    mutationFn: () => repairApiKeyNonce(k.apiKey),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["api-keys"] }),
+  });
 
   return (
     <tr className="border-b border-gray-800/50">
@@ -30,6 +34,20 @@ function KeyRow({ k }: { k: ApiKey }) {
         <span className={`text-xs px-1.5 py-0.5 rounded ${k.enabled ? "bg-green-900/40 text-green-400" : "bg-gray-800 text-gray-500"}`}>
           {k.enabled ? "active" : "disabled"}
         </span>
+      </td>
+      <td className="px-3 py-2">
+        {k.nonceStatus === "ok" ? (
+          <span className="text-xs text-gray-500">ok</span>
+        ) : (
+          <button
+            onClick={() => repair.mutate()}
+            disabled={repair.isPending}
+            className="text-xs px-1.5 py-0.5 rounded bg-yellow-900/40 text-yellow-300 hover:bg-yellow-900/60 transition-colors disabled:opacity-50"
+            title="Stored nonce exceeds wall-clock ms; every legit request is being rejected as a replay. Click to reset to 0."
+          >
+            repair
+          </button>
+        )}
       </td>
       <td className="px-3 py-2">
         <div className="flex gap-2">
@@ -112,6 +130,7 @@ function ApiKeysSection() {
                 <th className="text-left px-3 py-2">Key</th>
                 <th className="text-left px-3 py-2">Last seen</th>
                 <th className="text-left px-3 py-2">Status</th>
+                <th className="text-left px-3 py-2">Nonce</th>
                 <th className="px-3 py-2" />
               </tr>
             </thead>

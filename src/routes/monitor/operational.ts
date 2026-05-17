@@ -7,7 +7,10 @@ import { getAllSettings, setSetting } from "../../db/appSettings.js";
 import { getCandles, getCollectionLatencyStats, VALID_TFS } from "../../db/candles.js";
 import { runGapScan } from "../../lib/gapDetector.js";
 import { getSourceStatus, resumeSource } from "../../lib/collector.js";
-import { listApiKeys, createApiKey, revokeApiKey, setApiKeyEnabled } from "../../db/apiKeys.js";
+import {
+  listApiKeys, createApiKey, revokeApiKey, setApiKeyEnabled,
+  repairApiKeyNonce, findAndRepairBrokenNonces,
+} from "../../db/apiKeys.js";
 import { getAllServiceEvents } from "../../db/serviceEvents.js";
 import { logError } from "../../lib/log.js";
 
@@ -173,6 +176,26 @@ router.patch("/admin/keys/:apiKey", ...modify, async (req, res) => {
   if (enabled === undefined) return res.status(400).json({ error: "enabled required" });
   await setApiKeyEnabled(req.params.apiKey, enabled);
   return res.json({ ok: true });
+});
+
+/**
+ * POST /monitor/admin/keys/:apiKey/repair-nonce
+ * Reset a single key's nonce to 0. Used by the per-row "Repair" action
+ * when nonce > now wedges the key into permanent 401-replay.
+ */
+router.post("/admin/keys/:apiKey/repair-nonce", ...modify, async (req, res) => {
+  await repairApiKeyNonce(req.params.apiKey);
+  return res.json({ ok: true });
+});
+
+/**
+ * POST /monitor/admin/keys/repair-nonces
+ * Scan + repair every row whose nonce exceeds wall-clock ms. Returns
+ * the list of repaired rows so the operator can see who was poisoned.
+ */
+router.post("/admin/keys/repair-nonces", ...modify, async (_req, res) => {
+  const repaired = await findAndRepairBrokenNonces();
+  return res.json({ ok: true, repaired });
 });
 
 export default router;
