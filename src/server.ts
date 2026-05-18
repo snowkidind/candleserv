@@ -62,8 +62,13 @@ async function main(): Promise<void> {
     log(`[candleserv] listening on port ${PORT}`);
   });
 
-  if (process.env.SETUP_COMPLETE !== "true") {
-    log("[candleserv] setup not complete — waiting for setup wizard");
+  // Setup-complete marker lives in app_settings (written by db/init.ts install
+  // or the legacy /setup wizard). DB is the single source of truth — no .env
+  // coupling. If the app_settings table is missing entirely, getSetting returns
+  // null (logs the error) and we treat that as "not initialized."
+  const setupComplete = await getSetting("setupComplete");
+  if (setupComplete !== "true") {
+    log("[candleserv] setup not complete — run db/init.ts install (or visit /setup)");
     return;
   }
 

@@ -78,6 +78,12 @@ router.post("/install", async (req, res) => {
     await grantPermission(adminUser.id, "CAN_MODIFY_CANDLESERV");
 
     await insertStreamEvent("candleserv", "on");
+
+    // server.ts gates startup on app_settings.setupComplete='true' (single
+    // source of truth). The SETUP_COMPLETE .env line above is legacy and no
+    // longer read by the server — kept for backward visibility only.
+    await setSetting("setupComplete", "true");
+
     log("[setup] install complete");
     return res.json({ ok: true });
   } catch (err) {
