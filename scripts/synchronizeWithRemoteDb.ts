@@ -109,6 +109,17 @@ function parseArgs(): Args {
   return out;
 }
 
+const URL_SCHEME_RE = /^postgres(ql)?:\/\//;
+
+function assertScheme(name: string, value: string): void {
+  if (!URL_SCHEME_RE.test(value)) {
+    console.error(`FATAL: ${name} must start with 'postgres://' or 'postgresql://'.`);
+    console.error(`       Got: ${value}`);
+    console.error(`       Run with --help for the expected URL format.`);
+    process.exit(1);
+  }
+}
+
 function resolveRemoteUrl(): string {
   const local  = process.env.DATABASE_URL;
   const remote = process.env.REMOTE_DATABASE_URL;
@@ -122,6 +133,8 @@ function resolveRemoteUrl(): string {
     printUsage();
     process.exit(1);
   }
+  assertScheme("DATABASE_URL", local);
+  assertScheme("REMOTE_DATABASE_URL", remote);
   if (local === remote) {
     console.error("FATAL: REMOTE_DATABASE_URL equals the local DATABASE_URL — refusing to sync a DB with itself.");
     process.exit(1);
