@@ -1,5 +1,13 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { query } from "./pool.js";
 import { log } from "../lib/log.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = path.dirname(__filename);
+// src/db/schema.ts → ../../schema/func.sql (works for both src/ and dist/ layouts)
+const FUNC_SQL_PATH = path.resolve(__dirname, "..", "..", "schema", "func.sql");
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS candles_1m (
@@ -143,6 +151,23 @@ export async function createSchema(): Promise<void> {
   log("[schema] creating tables...");
   await query(DDL);
   log("[schema] tables ready");
+  await applyFunctions();
+}
+
+/**
+ * Apply schema/func.sql — defines get_kline_minute/hour/day, the SQL functions
+ * paperserv (and other consumers) call to fetch OHLCV ranges. Uses CREATE OR
+ * REPLACE FUNCTION so this is idempotent and safe to re-run against an
+ * already-initialized DB to repair missing functions.
+ */
+export async function applyFunctions(): Promise<void> {
+  if (!fs.existsSync(FUNC_SQL_PATH)) {
+    throw new Error(`[schema] schema/func.sql not found at ${FUNC_SQL_PATH}`);
+  }
+  log(`[schema] applying functions from ${FUNC_SQL_PATH}`);
+  const sql = fs.readFileSync(FUNC_SQL_PATH, "utf8");
+  await query(sql);
+  log("[schema] functions ready");
 }
 
 export async function seedSettings(): Promise<void> {
