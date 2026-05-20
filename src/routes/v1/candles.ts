@@ -77,6 +77,85 @@ router.get("/candles", async (req, res) => {
   }
 });
 
+/**
+ * POST /v1/candles/multi
+ *
+ * Body: { requests: [{ tf, endingAt, limit }, ...] }
+ *
+ * Batched read so phaseserv's /phase/current/bundle (and any consumer that
+ * needs N timeframes at once) issues a single auth/nonce pair instead of N.
+ * That prevents the multi-call nonce-race scenario where parallel single-TF
+ * fetches could lap each other across replicas. waitForFresh is intentionally
+ * not supported here — bundle path doesn't use it, cron is sequential.
+ *
+ * Semantics: all-or-nothing. Any validation or fetch failure 4xx/5xx's the
+ * whole batch with the offending entry index. Per-request redis cache is
+ * still consulted so a mixed cache state benefits the batch the same way it
+ * benefits single-TF calls.
+ *
+ * Response: { results: [{ tf, endingAt, candles }, ...] } in input order.
+ */
+const MAX_BATCH_SIZE = 16;
+const MAX_LIMIT_PER_ENTRY = 5000;
+
+interface MultiEntry {
+  tf: string;
+  endingAt: string;
+  limit: number;
+}
+
+router.post("/candles/multi", async (req, res) => {
+  const body = req.body as { requests?: unknown };
+  if (!body || !Array.isArray(body.requests)) {
+    return res.status(400).json({ error: "body must be { requests: [...] }" });
+  }
+  if (body.requests.length === 0) {
+    return res.status(400).json({ error: "requests must be non-empty" });
+  }
+  if (body.requests.length > MAX_BATCH_SIZE) {
+    return res.status(400).json({ error: `requests exceeds max batch size of ${MAX_BATCH_SIZE}` });
+  }
+
+  const validated: Array<{ tf: string; endDate: Date; n: number }> = [];
+  for (let i = 0; i < body.requests.length; i++) {
+    const entry = body.requests[i] as Partial<MultiEntry>;
+    if (!entry || typeof entry.tf !== "string" || !VALID_TFS.includes(entry.tf)) {
+      return res.status(400).json({ error: `requests[${i}].tf invalid (valid: ${VALID_TFS.join(", ")})` });
+    }
+    if (typeof entry.endingAt !== "string") {
+      return res.status(400).json({ error: `requests[${i}].endingAt is required` });
+    }
+    const endDate = new Date(entry.endingAt);
+    if (isNaN(endDate.getTime())) {
+      return res.status(400).json({ error: `requests[${i}].endingAt is not a valid date` });
+    }
+    if (typeof entry.limit !== "number" || !Number.isInteger(entry.limit) || entry.limit <= 0) {
+      return res.status(400).json({ error: `requests[${i}].limit must be a positive integer` });
+    }
+    const n = Math.min(entry.limit, MAX_LIMIT_PER_ENTRY);
+    validated.push({ tf: entry.tf, endDate, n });
+  }
+
+  try {
+    const results = await Promise.all(
+      validated.map(async ({ tf, endDate, n }) => {
+        const cacheKey = `candles:${tf}:${endDate.getTime()}:${n}`;
+        const cached = await redisGet(cacheKey);
+        if (cached) {
+          const parsed = JSON.parse(cached) as { candles: CandleJson[] };
+          return { tf, endingAt: endDate.toISOString(), candles: parsed.candles };
+        }
+        const candles = await getCandles({ tf, endingAt: endDate, limit: n });
+        await redisSet(cacheKey, JSON.stringify({ candles }), boundaryTtl(tf, endDate));
+        return { tf, endingAt: endDate.toISOString(), candles };
+      }),
+    );
+    return res.json({ results });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
 async function handleWaitForFresh(
   req: import("express").Request,
   res: import("express").Response,

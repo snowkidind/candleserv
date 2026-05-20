@@ -28,6 +28,11 @@ export function createApp(): express.Application {
       if (req.path === "/monitor/login" || req.path === "/monitor/logout") {
         return next();
       }
+      // Batch candle fetch uses POST for body-encoded request list but is
+      // semantically a read — explicit whitelist so read-only replicas serve it.
+      if (req.method === "POST" && req.path === "/v1/candles/multi") {
+        return next();
+      }
       return res.status(403).json({ error: "Read-only mode: write operations are disabled on this instance" });
     });
   }
