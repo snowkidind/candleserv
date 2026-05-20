@@ -3,7 +3,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getStats, getSourcesStatus, getGaps, getStreamEvents, triggerHeal, resumeSource, type StreamEvent } from "@/lib/api";
 import { useCandleStream } from "@/lib/CandleStreamContext";
 
-const SOURCES = ["binance", "bybit", "kraken", "coinbase", "bitfinex"];
 const TIMELINE_MINUTES = [10, 60, 720, 1440, 10080] as const;
 const TIMELINE_LABELS  = ["10m", "1h", "12h", "1d", "7d"] as const;
 
@@ -49,7 +48,7 @@ function SourceCard({ name, status }: { name: string; status: { paused: boolean;
   );
 }
 
-function TimelineCanvas({ events, minutes }: { events: StreamEvent[]; minutes: number }) {
+function TimelineCanvas({ events, minutes, sources }: { events: StreamEvent[]; minutes: number; sources: string[] }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -57,28 +56,32 @@ function TimelineCanvas({ events, minutes }: { events: StreamEvent[]; minutes: n
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    if (sources.length === 0) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
 
     const W = canvas.width, H = canvas.height;
-    const rowH = Math.floor(H / SOURCES.length);
+    const rowH = Math.floor(H / sources.length);
     const now = Date.now();
     const windowMs = minutes * 60 * 1000;
 
     ctx.clearRect(0, 0, W, H);
 
     // Row backgrounds
-    SOURCES.forEach((_, i) => {
+    sources.forEach((_, i) => {
       ctx.fillStyle = i % 2 === 0 ? "#111827" : "#0f172a";
       ctx.fillRect(0, i * rowH, W, rowH);
     });
 
     // Plot events as colored segments
     const bySource: Record<string, StreamEvent[]> = {};
-    for (const s of SOURCES) bySource[s] = [];
+    for (const s of sources) bySource[s] = [];
     for (const e of events) {
       if (bySource[e.source]) bySource[e.source].push(e);
     }
 
-    SOURCES.forEach((src, i) => {
+    sources.forEach((src, i) => {
       const evts = bySource[src].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
       const y = i * rowH + 2;
       const h = rowH - 4;
@@ -112,7 +115,7 @@ function TimelineCanvas({ events, minutes }: { events: StreamEvent[]; minutes: n
     ctx.lineTo(W - 1, H);
     ctx.stroke();
     ctx.setLineDash([]);
-  }, [events, minutes]);
+  }, [events, minutes, sources]);
 
   return <canvas ref={canvasRef} width={800} height={120} className="w-full rounded" />;
 }
@@ -153,6 +156,9 @@ export default function ConnectionsTab() {
     : latency.avgMs < 10000 ? "text-yellow-400"
     : "text-red-400";
 
+  // Source list comes from the API (server's registry order), not a hard-coded constant.
+  const sourceNames = Object.keys(sources?.sources ?? {});
+
   return (
     <div className="p-4 space-y-4">
       {/* Stats row */}
@@ -172,7 +178,7 @@ export default function ConnectionsTab() {
 
       {/* Exchange grid */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        {SOURCES.map(src => (
+        {sourceNames.map(src => (
           <SourceCard
             key={src}
             name={src}
@@ -199,7 +205,7 @@ export default function ConnectionsTab() {
             ))}
           </div>
         </div>
-        <TimelineCanvas events={events?.events ?? []} minutes={timelineMin} />
+        <TimelineCanvas events={events?.events ?? []} minutes={timelineMin} sources={sourceNames} />
         <div className="flex gap-4 mt-2 text-xs text-gray-600">
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded bg-green-800 inline-block" /> on</span>
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded bg-red-900 inline-block" /> error</span>

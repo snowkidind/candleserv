@@ -1,8 +1,4 @@
-import { fetchBinanceCandle, fetchBinanceRange } from "../adapters/binance.js";
-import { fetchBybitCandle,    fetchBybitRange   } from "../adapters/bybit.js";
-import { fetchKrakenCandle,   fetchKrakenRange  } from "../adapters/kraken.js";
-import { fetchCoinbaseCandle, fetchCoinbaseRange } from "../adapters/coinbase.js";
-import { fetchBitfinexCandle, fetchBitfinexRange } from "../adapters/bitfinex.js";
+import { ADAPTERS, SOURCE_NAMES } from "../adapters/registry.js";
 import { applyGuards, buildComposite } from "./composite.js";
 import {
   upsertCandle, upsertSourceCandle, insertCandleIfMissing,
@@ -22,7 +18,6 @@ const THREE_MONTHS_MS = 90 * 24 * 60 * 60 * 1000;
 // Minutes per tile — safe for all adapters (Coinbase hard limit: 300)
 const BACKFILL_TILE = 300;
 
-const SOURCES = ["binance", "bybit", "kraken", "coinbase", "bitfinex"] as const;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -84,21 +79,13 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
     const tileStart   = new Date(tileStartMs);
     const limit       = Math.round((tileEnd.getTime() - tileStartMs) / 60000);
 
-    const [bin, bby, kra, coi, bit] = await Promise.allSettled([
-      fetchBinanceRange(tileEnd, limit),
-      fetchBybitRange(tileEnd,   limit),
-      fetchKrakenRange(tileEnd,  limit),
-      fetchCoinbaseRange(tileEnd,limit),
-      fetchBitfinexRange(tileEnd,limit),
-    ]);
+    const settled = await Promise.allSettled(
+      ADAPTERS.map((a) => a.fetchRange(tileEnd, limit)),
+    );
 
-    for (const { name, res } of [
-      { name: "binance",  res: bin },
-      { name: "bybit",    res: bby },
-      { name: "kraken",   res: kra },
-      { name: "coinbase", res: coi },
-      { name: "bitfinex", res: bit },
-    ]) {
+    for (let i = 0; i < ADAPTERS.length; i++) {
+      const name = ADAPTERS[i].name;
+      const res = settled[i];
       if (res.status === "rejected") {
         logError(`[healer] healRange: ${name} tile failed`, res.reason);
         continue;
@@ -117,7 +104,7 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
   for (const [tsMs, results] of byMinute) {
     if (!results.length) continue;
     const minuteTs   = new Date(tsMs);
-    const allResults: SourceResult[] = SOURCES.map(
+    const allResults: SourceResult[] = SOURCE_NAMES.map(
       (s) => results.find((r) => r.source === s) ?? { source: s, candle: null, error: "not_in_tile" }
     );
     const guarded = applyGuards(allResults, minSources, sigma);
@@ -139,25 +126,15 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
 
 // ── Individual minute heal ────────────────────────────────────────────────────
 
-/** Fetch one 1m candle from all five sources concurrently. Never throws. */
+/** Fetch one 1m candle from every registered adapter concurrently. Never throws. */
 async function fetchAllSources(minuteTs: Date): Promise<SourceResult[]> {
-  return Promise.all([
-    fetchBinanceCandle(minuteTs)
-      .then((candle) => ({ source: "binance",  candle } as SourceResult))
-      .catch((err)  => ({ source: "binance",  candle: null, error: String(err) } as SourceResult)),
-    fetchBybitCandle(minuteTs)
-      .then((candle) => ({ source: "bybit",    candle } as SourceResult))
-      .catch((err)  => ({ source: "bybit",    candle: null, error: String(err) } as SourceResult)),
-    fetchKrakenCandle(minuteTs)
-      .then((candle) => ({ source: "kraken",   candle } as SourceResult))
-      .catch((err)  => ({ source: "kraken",   candle: null, error: String(err) } as SourceResult)),
-    fetchCoinbaseCandle(minuteTs)
-      .then((candle) => ({ source: "coinbase", candle } as SourceResult))
-      .catch((err)  => ({ source: "coinbase", candle: null, error: String(err) } as SourceResult)),
-    fetchBitfinexCandle(minuteTs)
-      .then((candle) => ({ source: "bitfinex", candle } as SourceResult))
-      .catch((err)  => ({ source: "bitfinex", candle: null, error: String(err) } as SourceResult)),
-  ]);
+  return Promise.all(
+    ADAPTERS.map((a) =>
+      a.fetchOne(minuteTs)
+        .then((candle) => ({ source: a.name, candle } as SourceResult))
+        .catch((err) => ({ source: a.name, candle: null, error: String(err) } as SourceResult)),
+    ),
+  );
 }
 
 /**

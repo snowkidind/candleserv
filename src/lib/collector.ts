@@ -1,8 +1,4 @@
-import { fetchBinanceCandle } from "../adapters/binance.js";
-import { fetchBybitCandle } from "../adapters/bybit.js";
-import { fetchKrakenCandle } from "../adapters/kraken.js";
-import { fetchCoinbaseCandle } from "../adapters/coinbase.js";
-import { fetchBitfinexCandle } from "../adapters/bitfinex.js";
+import { ADAPTERS, ADAPTER_BY_NAME, SOURCE_NAMES } from "../adapters/registry.js";
 import { applyGuards, buildComposite } from "./composite.js";
 import { upsertCandle, upsertSourceCandle, getSourceCountBaseline, getRecentCloseStddev, getTrailingVolumeLeader } from "../db/candles.js";
 import { recordError } from "../db/errors.js";
@@ -14,11 +10,10 @@ import { log, logError, logWarn } from "./log.js";
 import type { SourceResult } from "../types/index.js";
 
 const DEADLINE_MS = 15000; // 15 seconds from :00 to write
-const SOURCES = ["binance", "bybit", "kraken", "coinbase", "bitfinex"];
 
 // Per-source 24h failure counters for auto-pause
 const failureCounters: Record<string, number[]> = {};
-for (const s of SOURCES) failureCounters[s] = [];
+for (const s of SOURCE_NAMES) failureCounters[s] = [];
 
 // Paused sources (until manually re-enabled)
 const pausedSources = new Set<string>();
@@ -72,7 +67,7 @@ export function resumeSource(source: string): void {
 
 export function getSourceStatus(): Record<string, { paused: boolean; failures24h: number; state: string }> {
   const result: Record<string, { paused: boolean; failures24h: number; state: string }> = {};
-  for (const s of SOURCES) {
+  for (const s of SOURCE_NAMES) {
     result[s] = {
       paused: pausedSources.has(s),
       failures24h: failureCounters[s].length,
@@ -89,17 +84,12 @@ async function fetchOne(source: string, minuteTs: Date): Promise<SourceResult> {
   if (pausedSources.has(source)) {
     return { source, candle: null, error: "paused" };
   }
+  const adapter = ADAPTER_BY_NAME[source];
+  if (!adapter) return { source, candle: null, error: "unknown source" };
+
   const t0 = Date.now();
   try {
-    let candle;
-    switch (source) {
-      case "binance":  candle = await fetchBinanceCandle(minuteTs);  break;
-      case "bybit":    candle = await fetchBybitCandle(minuteTs);    break;
-      case "kraken":   candle = await fetchKrakenCandle(minuteTs);   break;
-      case "coinbase": candle = await fetchCoinbaseCandle(minuteTs); break;
-      case "bitfinex": candle = await fetchBitfinexCandle(minuteTs); break;
-      default: return { source, candle: null, error: "unknown source" };
-    }
+    const candle = await adapter.fetchOne(minuteTs);
     emitSourceState(source, "on");
     return { source, candle, durationMs: Date.now() - t0 };
   } catch (err) {
@@ -125,7 +115,7 @@ export async function collect(minuteTs: Date): Promise<boolean> {
   const deadline = Date.now() + DEADLINE_MS;
 
   try {
-    const results = await Promise.all(SOURCES.map((s) => fetchOne(s, minuteTs)));
+    const results = await Promise.all(ADAPTERS.map((a) => fetchOne(a.name, minuteTs)));
 
     if (Date.now() > deadline) {
       const timings = results.map(r => `${r.source}:${r.durationMs ?? "?"}ms`).join(" ");

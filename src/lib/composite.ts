@@ -1,14 +1,7 @@
 import type { SourceCandle, SourceResult } from "../types/index.js";
 import { recordError } from "../db/errors.js";
 import { logError } from "./log.js";
-
-export const SOURCE_BITS: Record<string, number> = {
-  binance: 1 << 0,
-  bybit:   1 << 1,
-  kraken:  1 << 2,
-  coinbase: 1 << 3,
-  bitfinex: 1 << 4,
-};
+import { SOURCE_BITS } from "../adapters/registry.js";
 
 export interface GuardedSource {
   source: string;
