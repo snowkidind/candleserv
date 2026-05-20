@@ -19,6 +19,10 @@ import {
 } from "../../db/apiKeys.js";
 import { findUserById } from "../../db/users.js";
 import { getAllServiceEvents } from "../../db/serviceEvents.js";
+import {
+  startRepairJob, previewRepair, getRepairJob, cancelRepairJob,
+  isRepairInProgress, validateRepairWindow,
+} from "../../lib/repairJobs.js";
 import { logError } from "../../lib/log.js";
 
 const router = Router();
@@ -190,6 +194,96 @@ router.put("/formula", ...modify, async (req, res) => {
     excludedSources: getCurrentFormula().excludedSources,
     lastChange: lastChangePayload(),
   });
+});
+
+// ── Repair operations ────────────────────────────────────────────────────────
+
+/**
+ * POST /monitor/repair?dry=<true|false>
+ *   body: { from: ISO, to: ISO, sources?: string[], formula?: { excludedSources: string[] }, retryEmpty?: boolean }
+ *
+ * dry=true returns { preview }. dry=false starts a job and returns { jobId }.
+ * Single-flight: rejects with 409 if a job is already running.
+ *
+ * Window guards (validateRepairWindow):
+ *   from ≥ NOW() - 180d
+ *   to   ≤ floor(NOW() to minute) - 1m  (never touches the in-progress minute)
+ */
+router.post("/repair", ...modify, async (req, res) => {
+  const body = req.body as {
+    from?: string;
+    to?: string;
+    sources?: unknown;
+    formula?: { excludedSources?: unknown };
+    retryEmpty?: unknown;
+  };
+  if (typeof body?.from !== "string" || typeof body?.to !== "string") {
+    return res.status(400).json({ error: "Body must include from + to (ISO strings)" });
+  }
+  const from = new Date(body.from);
+  const to   = new Date(body.to);
+  const winErr = validateRepairWindow(from, to);
+  if (winErr) return res.status(400).json({ error: winErr });
+
+  let sources: string[] | undefined;
+  if (body.sources !== undefined) {
+    if (!Array.isArray(body.sources) || !body.sources.every((s) => typeof s === "string")) {
+      return res.status(400).json({ error: "sources must be string[]" });
+    }
+    sources = body.sources as string[];
+    const unknown = sources.filter((s) => !SOURCE_NAMES.includes(s));
+    if (unknown.length) return res.status(400).json({ error: `Unknown source(s): ${unknown.join(", ")}` });
+  }
+
+  let formula: { excludedSources: string[] } | undefined;
+  if (body.formula !== undefined) {
+    const f = body.formula;
+    if (!f || !Array.isArray(f.excludedSources) || !f.excludedSources.every((s) => typeof s === "string")) {
+      return res.status(400).json({ error: "formula must be { excludedSources: string[] }" });
+    }
+    formula = { excludedSources: f.excludedSources as string[] };
+    const unknown = formula.excludedSources.filter((s) => !SOURCE_NAMES.includes(s));
+    if (unknown.length) return res.status(400).json({ error: `Unknown source(s) in formula override: ${unknown.join(", ")}` });
+  }
+
+  const retryEmpty = Boolean(body.retryEmpty);
+  const dry = req.query.dry === "true";
+
+  if (dry) {
+    try {
+      const preview = await previewRepair({ from, to, sources, formula, retryEmpty });
+      return res.json({ preview });
+    } catch (err) {
+      logError("[monitor] POST /repair?dry=true failed:", err);
+      return res.status(500).json({ error: String(err) });
+    }
+  }
+
+  // Wet run — single-flight check + start job.
+  if (isRepairInProgress()) {
+    return res.status(409).json({ error: "a repair job is already in progress" });
+  }
+  try {
+    const { jobId } = startRepairJob({ from, to, sources, formula, retryEmpty });
+    return res.json({ jobId });
+  } catch (err) {
+    logError("[monitor] POST /repair start failed:", err);
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+/** GET /monitor/repair/jobs/:jobId — poll job state */
+router.get("/repair/jobs/:jobId", ...view, (req, res) => {
+  const state = getRepairJob(req.params.jobId);
+  if (!state) return res.status(404).json({ error: "unknown jobId" });
+  return res.json(state);
+});
+
+/** POST /monitor/repair/jobs/:jobId/cancel — signal cancellation */
+router.post("/repair/jobs/:jobId/cancel", ...modify, (req, res) => {
+  const r = cancelRepairJob(req.params.jobId);
+  if (!r.ok) return res.status(400).json({ error: r.error });
+  return res.json({ ok: true });
 });
 
 /**
