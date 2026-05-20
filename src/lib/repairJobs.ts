@@ -15,6 +15,7 @@
 import crypto from "node:crypto";
 import { ensureSourceCoverage, recomposeRange } from "./repair.js";
 import type { EnsureSourceCoverageResult, RecomposeRangeResult } from "./repair.js";
+import { SOURCE_NAMES } from "../adapters/registry.js";
 import { getCurrentFormula } from "../db/formulaChanges.js";
 import { closeAllListeners } from "./emitter.js";
 import { query } from "../db/pool.js";
@@ -229,10 +230,10 @@ export async function previewRepair(req: StartRepairJobRequest): Promise<RepairP
   // 3. Archive holes — how many (minute, source) pairs are missing in the
   // window. Excludes formula-excluded sources from the denominator (we don't
   // intend to fill those). Excludes 'no_data' sentinels unless retryEmpty.
+  // SOURCE_NAMES from the registry is the source of truth so a future 9th
+  // adapter gets included in the preview without touching this file.
   const excluded = new Set(getCurrentFormula().excludedSources);
-  const requestedSources = (sources ?? Array.from(new Set([
-    "binance", "bybit", "kraken", "coinbase", "bitfinex", "okx", "gate", "bitget",
-  ]))).filter((s) => !excluded.has(s));
+  const requestedSources = (sources ?? SOURCE_NAMES).filter((s) => !excluded.has(s));
 
   const sentinelsRes = await query(
     `SELECT COUNT(*) AS n FROM candles_1m_sources

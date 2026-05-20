@@ -93,11 +93,15 @@ function RepairConfirmModal({
 // ── progress panel ───────────────────────────────────────────────────────────
 
 function RepairProgressPanel({
-  jobId, sourceNames, onDismiss, liveFormula,
+  jobId, sourceNames, onDismiss, onReconcile, liveFormula,
 }: {
   jobId: string;
   sourceNames: string[];
   onDismiss: () => void;
+  // Called with the original from/to from the completed job — the parent
+  // re-runs runRepair with no formula override to bring the window back to
+  // live-formula composites. One-click loop closure for the divergence case.
+  onReconcile: (from: string, to: string) => void;
   liveFormula: Formula | null;
 }) {
   // Poll every 2s while not in a terminal state. React Query handles this via
@@ -200,7 +204,15 @@ function RepairProgressPanel({
                 <span className="font-mono">excludedSources=[{(data.formula?.excludedSources ?? []).join(", ")}]</span>.
                 Live formula currently:{" "}
                 <span className="font-mono">excludedSources=[{liveFormula?.excludedSources.join(", ") ?? ""}]</span>.
-                candles_1m for this window stays off-live until reconciled (rerun without a formula override).
+                candles_1m for this window stays off-live until reconciled.
+              </div>
+              <div className="mt-3">
+                <button
+                  onClick={() => onReconcile(data.from, data.to)}
+                  className="px-3 py-1.5 text-xs bg-yellow-700 hover:bg-yellow-600 text-yellow-100 rounded transition-colors"
+                >
+                  Reconcile: rerun with live formula
+                </button>
               </div>
             </div>
           )}
@@ -473,6 +485,21 @@ export default function RepairRangePanel({ sourceNames }: { sourceNames: string[
           onDismiss={() => {
             setActiveJobId(null);
             qc.invalidateQueries({ queryKey: ["sources", "status"] });
+          }}
+          onReconcile={async (origFrom, origTo) => {
+            // One-click "rerun with live formula" — same window, no override.
+            // Replaces the active job; the previous progress panel unmounts
+            // and a fresh one mounts against the new jobId.
+            try {
+              const { jobId } = await runRepair({
+                from: origFrom,
+                to: origTo,
+                // No formula override → server defaults to getCurrentFormula().
+              });
+              setActiveJobId(jobId);
+            } catch (err) {
+              setPreviewError(String((err as Error).message ?? err));
+            }
           }}
         />
       )}
