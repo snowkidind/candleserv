@@ -1,8 +1,9 @@
 import { ADAPTERS, SOURCE_NAMES } from "../adapters/registry.js";
 import { applyGuards, buildComposite } from "./composite.js";
+import { composeMinute } from "./compose.js";
 import { getCurrentFormula } from "../db/formulaChanges.js";
 import {
-  upsertCandle, upsertSourceCandle, insertCandleIfMissing,
+  upsertSourceCandle, insertCandleIfMissing,
   countCandlesInDay, getSourceCountBaseline, getRecentCloseStddev,
   getTrailingVolumeLeader,
 } from "../db/candles.js";
@@ -104,9 +105,15 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
     tileEnd = tileStart;
   }
 
-  // Composite each minute and write composite + per-source rows. usedInFormula
-  // reflects this compose's verdict: !rejected if the composite was built,
-  // NULL if it wasn't (preserves usedInFormula IS NULL ⟺ no candles_1m row).
+  // overwrite=true path: re-heal low confidence + manual gap heal. Uses
+  // composeMinute so the canonical bulk UPDATE on usedInFormula runs and the
+  // composite + archive flags commit in one transaction.
+  //
+  // overwrite=false path: initial backfill — preserves "never clobber live
+  // data" via insertCandleIfMissing. composeMinute always overwrites, so the
+  // backfill path keeps using the legacy buildComposite flow. The Phase 3
+  // deferred bug (stale-NULL usedInFormula on already-composed minutes) can
+  // be cleaned up by a one-shot recomposeRange after this phase ships.
   for (const [tsMs, results] of byMinute) {
     if (!results.length) continue;
     const minuteTs   = new Date(tsMs);
@@ -115,21 +122,9 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
     );
     const guarded = applyGuards(allResults, minSources, sigma);
 
-    let composed = false;
-    try {
-      const composite = await buildComposite(guarded, baseline, volumeLeader ?? undefined, minuteTs);
-      if (overwrite) {
-        await upsertCandle({ timestamp: minuteTs, ...composite });
-      } else {
-        await insertCandleIfMissing({ timestamp: minuteTs, ...composite });
-      }
-      composed = true;
-      written.add(tsMs);
-    } catch {
-      // All sources rejected — no composite, but still write per-source rows
-      // below so the archive captures what each exchange said.
-    }
-
+    // Write archive rows first. usedInFormula left NULL — composeMinute will
+    // set it via the bulk UPDATE. For the backfill path we still want the
+    // archive populated.
     for (const g of guarded) {
       if (!g.candle) continue;
       await upsertSourceCandle({
@@ -137,8 +132,30 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
         open: g.candle.open, high: g.candle.high, low: g.candle.low,
         close: g.candle.close, volume: g.candle.volume,
         rejected: g.rejected, rejectedReason: g.rejectedReason,
-        usedInFormula: composed ? !g.rejected : null,
+        usedInFormula: null,
       });
+    }
+
+    if (overwrite) {
+      const result = await composeMinute(
+        minuteTs,
+        getCurrentFormula(),
+        { baseline, minSources, volumeLeader: volumeLeader ?? undefined },
+      );
+      if (result.composed) written.add(tsMs);
+    } else {
+      // Initial backfill — never clobber live data. Compute composite from
+      // freshly-fetched guarded set; only insert if no row exists. Per-source
+      // rows already written above; usedInFormula stays NULL on the new ones
+      // and unchanged on any pre-existing ones (a future recomposeRange will
+      // reconcile).
+      try {
+        const composite = await buildComposite(guarded, baseline, volumeLeader ?? undefined, minuteTs);
+        await insertCandleIfMissing({ timestamp: minuteTs, ...composite });
+        written.add(tsMs);
+      } catch {
+        // All-rejected: leave the minute as a gap.
+      }
     }
   }
 
@@ -177,32 +194,30 @@ export async function healMinute(minuteTs: Date): Promise<boolean> {
     const volumeLeader = await getTrailingVolumeLeader(10);
     const guarded      = applyGuards(results, minSources, sigma);
 
-    const writeSourceRows = async (composed: boolean) => {
-      for (const g of guarded) {
-        if (!g.candle) continue;
-        await upsertSourceCandle({
-          timestamp: minuteTs, source: g.source,
-          open: g.candle.open, high: g.candle.high, low: g.candle.low,
-          close: g.candle.close, volume: g.candle.volume,
-          rejected: g.rejected, rejectedReason: g.rejectedReason,
-          usedInFormula: composed ? !g.rejected : null,
-        });
-      }
-    };
-
-    let composite;
-    try {
-      composite = await buildComposite(guarded, baseline, volumeLeader ?? undefined, minuteTs);
-    } catch (err) {
-      // No composite possible — still persist the raw observations so the
-      // archive reflects what each exchange said.
-      await writeSourceRows(/*composed=*/false);
-      await recordError("healer", "healMinute:buildComposite", String(err));
-      return false;
+    // Step 1: write fetched archive rows with their applyGuards verdict.
+    // usedInFormula stays NULL; composeMinute sets it via bulk UPDATE.
+    for (const g of guarded) {
+      if (!g.candle) continue;
+      await upsertSourceCandle({
+        timestamp: minuteTs, source: g.source,
+        open: g.candle.open, high: g.candle.high, low: g.candle.low,
+        close: g.candle.close, volume: g.candle.volume,
+        rejected: g.rejected, rejectedReason: g.rejectedReason,
+        usedInFormula: null,
+      });
     }
 
-    await upsertCandle({ timestamp: minuteTs, ...composite });
-    await writeSourceRows(/*composed=*/true);
+    // Step 2: composeMinute reads back, builds composite, writes both in tx.
+    const result = await composeMinute(
+      minuteTs,
+      getCurrentFormula(),
+      { baseline, minSources, volumeLeader: volumeLeader ?? undefined },
+    );
+    if (!result.composed) {
+      await recordError("healer", "healMinute:noComposite",
+        `composeMinute skipped ${minuteTs.toISOString()} — ${result.contributing} sources after formula+guards`);
+      return false;
+    }
     return true;
   } catch (err) {
     await recordError("healer", "healMinute", String(err));

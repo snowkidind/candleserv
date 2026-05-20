@@ -1,6 +1,7 @@
 import { ADAPTERS, ADAPTER_BY_NAME, SOURCE_NAMES } from "../adapters/registry.js";
-import { applyGuards, buildComposite } from "./composite.js";
-import { upsertCandle, upsertSourceCandle, getSourceCountBaseline, getRecentCloseStddev, getTrailingVolumeLeader, get24hSourceStats } from "../db/candles.js";
+import { applyGuards } from "./composite.js";
+import { composeMinute } from "./compose.js";
+import { upsertSourceCandle, getSourceCountBaseline, getRecentCloseStddev, getTrailingVolumeLeader, get24hSourceStats } from "../db/candles.js";
 import { recordError } from "../db/errors.js";
 import { candleEmitter } from "./emitter.js";
 import { rowToJson } from "../db/candles.js";
@@ -208,44 +209,40 @@ export async function collect(minuteTs: Date): Promise<boolean> {
     const volumeLeader = await getTrailingVolumeLeader(10);
     const guarded      = applyGuards(results, minSources, sigma);
 
-    // Helper: write per-source rows with a given usedInFormula verdict. Called
-    // on every exit path so the archive captures what each exchange said,
-    // regardless of whether a composite landed.
-    const writeSourceRows = async (composed: boolean) => {
-      for (const g of guarded) {
-        if (!g.candle) continue;
-        await upsertSourceCandle({
-          timestamp: minuteTs, source: g.source, ...g.candle,
-          rejected: g.rejected, rejectedReason: g.rejectedReason,
-          usedInFormula: composed ? !g.rejected : null,
-        });
-      }
-    };
-
-    let composite;
-    try {
-      composite = await buildComposite(guarded, baseline, volumeLeader ?? undefined, minuteTs);
-    } catch (err) {
-      // All sources rejected — no composite, but the archive still gets the raw rows.
-      logError("[collector] buildComposite failed:", err);
-      await writeSourceRows(/*composed=*/false);
-      return false;
+    // Step 1: write every fetched source's row to the archive with its
+    // rejected/rejectedReason verdict from applyGuards. usedInFormula is left
+    // NULL deliberately — composeMinute sets it in a single bulk UPDATE.
+    for (const g of guarded) {
+      if (!g.candle) continue;
+      await upsertSourceCandle({
+        timestamp: minuteTs, source: g.source, ...g.candle,
+        rejected: g.rejected, rejectedReason: g.rejectedReason,
+        usedInFormula: null,
+      });
     }
 
     if (Date.now() > deadline) {
-      logError(`[collector] deadline exceeded after composite for ${minuteTs.toISOString()} — skipping write`);
-      await recordError("collector", "deadline", `Deadline exceeded after composite for ${minuteTs.toISOString()}`);
-      await writeSourceRows(/*composed=*/false);
+      logError(`[collector] deadline exceeded after archive writes for ${minuteTs.toISOString()} — skipping compose`);
+      await recordError("collector", "deadline", `Deadline exceeded after archive writes for ${minuteTs.toISOString()}`);
       return false;
     }
 
-    await upsertCandle({ timestamp: minuteTs, ...composite });
-    // Per-source writes follow the composite write so the invariant
-    // (usedInFormula IS NULL ⟺ no candles_1m row) is restored as soon as both
-    // settle. Transactional wrap of the two writes is deferred to Phase 5;
-    // current behavior leaves a sub-ms window between them.
-    await writeSourceRows(/*composed=*/true);
+    // Step 2: composeMinute reads back the archive, applies the live formula,
+    // and writes candles_1m + bulk-UPDATEs usedInFormula on every archive row
+    // at this timestamp — all in one transaction. The invariant
+    // (usedInFormula IS NULL ⟺ no candles_1m row) holds at commit.
+    const result = await composeMinute(
+      minuteTs,
+      getCurrentFormula(),
+      { baseline, minSources, volumeLeader: volumeLeader ?? undefined },
+    );
 
+    if (!result.composed) {
+      logError(`[collector] composeMinute skipped ${minuteTs.toISOString()} — only ${result.contributing} sources after formula+guards (need ${minSources})`);
+      return false;
+    }
+
+    const composite = result.composite!;
     const json = rowToJson({
       timestamp: minuteTs,
       open: composite.open,
