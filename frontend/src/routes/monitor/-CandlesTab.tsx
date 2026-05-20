@@ -95,7 +95,7 @@ function candleToLw(c: Candle): CandlestickData {
 function candleToVolume(c: Candle): HistogramData {
   return {
     time: Math.floor(c.timestamp / 1000) as Time,
-    value: c.volumeNormalized,
+    value: c.volume,
     color: c.close >= c.open ? "rgba(34,197,94,0.4)" : "rgba(239,68,68,0.4)",
   };
 }

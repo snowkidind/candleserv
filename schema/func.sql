@@ -43,7 +43,7 @@ BEGIN
       _volume numeric := 0;
       _add    boolean := false;
     BEGIN
-      SELECT MAX(high), MIN(low), SUM(volume)
+      SELECT MAX(high), MIN(low), SUM("volumeNormalized")
         INTO _high, _low, _volume
         FROM candles_1m
        WHERE timestamp <= _r.timestamp
@@ -95,7 +95,7 @@ BEGIN
       _volume numeric := 0;
       _add    boolean := false;
     BEGIN
-      SELECT MAX(high), MIN(low), SUM(volume)
+      SELECT MAX(high), MIN(low), SUM("volumeNormalized")
         INTO _high, _low, _volume
         FROM candles_1m
        WHERE timestamp <= _r.timestamp
@@ -146,7 +146,7 @@ BEGIN
       _volume numeric := 0;
       _add    boolean := false;
     BEGIN
-      SELECT MAX(high), MIN(low), SUM(volume)
+      SELECT MAX(high), MIN(low), SUM("volumeNormalized")
         INTO _high, _low, _volume
         FROM candles_1m
        WHERE timestamp <= _r.timestamp

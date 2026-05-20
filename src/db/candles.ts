@@ -1,6 +1,10 @@
 import { query } from "./pool.js";
 import type { CandleRow, CandleJson } from "../types/index.js";
 
+// Public candle JSON surface. The `volume` field carries the NORMALIZED value
+// (volume × baseline/sourceCount), not the raw cross-source sum. The internal
+// DB schema still has both columns; this is just the API projection.
+// See plan: candleserv-exchange-expansion §Phase 2.5 (volume API consolidation).
 export function rowToJson(row: Record<string, unknown>): CandleJson {
   return {
     timestamp: new Date(row.timestamp as string | Date).getTime(),
@@ -8,8 +12,7 @@ export function rowToJson(row: Record<string, unknown>): CandleJson {
     high: Number(row.high),
     low: Number(row.low),
     close: Number(row.close),
-    volume: Number(row.volume),
-    volumeNormalized: Number(row.volumeNormalized),
+    volume: Number(row.volumeNormalized),
     sourceCount: Number(row.sourceCount),
     sourceCountBaseline: Number(row.sourceCountBaseline),
     sources: Number(row.sources),
@@ -166,7 +169,11 @@ export async function getCandles(opts: {
     return res.rows.map(rowToJson);
   }
 
-  // Aggregate from 1m: align to bucket boundaries, group, aggregate
+  // Aggregate from 1m: align to bucket boundaries, group, aggregate.
+  // The `volume` output carries the NORMALIZED sum (volume × baseline/sourceCount
+  // per minute, then summed across the bucket). This corrects a latent bug
+  // where the function previously returned raw cross-source sums — fine while
+  // sourceCount was constant historically, wrong once 5→8 expansion landed.
   const windowStart = new Date(endingAt.getTime() - minutes * limit * 60 * 1000);
   const res = await query(
     `SELECT
@@ -177,8 +184,7 @@ export async function getCandles(opts: {
        MAX(high) AS high,
        MIN(low) AS low,
        (array_agg(close ORDER BY "timestamp" DESC))[1] AS close,
-       SUM(volume) AS volume,
-       SUM("volumeNormalized") AS "volumeNormalized",
+       SUM("volumeNormalized") AS volume,
        MAX("sourceCount") AS "sourceCount",
        MAX("sourceCountBaseline") AS "sourceCountBaseline",
        bit_or(sources) AS sources,
@@ -200,7 +206,6 @@ export async function getCandles(opts: {
       low: Number(row.low),
       close: Number(row.close),
       volume: Number(row.volume),
-      volumeNormalized: Number(row.volumeNormalized),
       sourceCount: Number(row.sourceCount),
       sourceCountBaseline: Number(row.sourceCountBaseline),
       sources: Number(row.sources),
@@ -217,8 +222,7 @@ async function getCalendarMonthlyCandles(endingAt: Date, limit: number): Promise
        MAX(high) AS high,
        MIN(low) AS low,
        (array_agg(close ORDER BY "timestamp" DESC))[1] AS close,
-       SUM(volume) AS volume,
-       SUM("volumeNormalized") AS "volumeNormalized",
+       SUM("volumeNormalized") AS volume,
        MAX("sourceCount") AS "sourceCount",
        MAX("sourceCountBaseline") AS "sourceCountBaseline",
        bit_or(sources) AS sources,
@@ -239,7 +243,6 @@ async function getCalendarMonthlyCandles(endingAt: Date, limit: number): Promise
       low: Number(row.low),
       close: Number(row.close),
       volume: Number(row.volume),
-      volumeNormalized: Number(row.volumeNormalized),
       sourceCount: Number(row.sourceCount),
       sourceCountBaseline: Number(row.sourceCountBaseline),
       sources: Number(row.sources),

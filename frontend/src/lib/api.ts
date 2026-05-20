@@ -36,10 +36,11 @@ export interface HealthData {
 export const getHealth = () => req<HealthData>("/health");
 
 // Candles
+// `volume` carries the normalized value (Phase 2.5 plan).
 export interface Candle {
   timestamp: number;
   open: number; high: number; low: number; close: number;
-  volume: number; volumeNormalized: number;
+  volume: number;
   sourceCount: number; sourceCountBaseline: number;
   sources: number; confidence: number;
 }
