@@ -2,9 +2,10 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   getApiKeys, createApiKey, revokeApiKey, toggleApiKey, repairApiKeyNonce,
-  getConfig, saveConfig,
+  getConfig, saveConfig, getSourcesStatus,
   type ApiKey,
 } from "@/lib/api";
+import RepairRangePanel from "./-RepairRangePanel";
 
 function KeyRow({ k }: { k: ApiKey }) {
   const qc = useQueryClient();
@@ -202,9 +203,12 @@ function ConfigSection() {
 }
 
 export default function AdminTab() {
+  const { data: sources } = useQuery({ queryKey: ["sources", "status"], queryFn: getSourcesStatus });
+  const sourceNames = Object.keys(sources?.sources ?? {});
   return (
     <div className="p-4 space-y-6 max-w-3xl">
       <ApiKeysSection />
+      <RepairRangePanel sourceNames={sourceNames} />
       <ConfigSection />
     </div>
   );

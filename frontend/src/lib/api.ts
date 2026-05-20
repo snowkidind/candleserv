@@ -63,13 +63,128 @@ export interface StatsData {
 export const getStats = () => req<StatsData>("/monitor/stats");
 
 // Sources
+// Shape matches the server's getSourceStatus() — both legacy `paused` (alias
+// for `excluded`) and the new formula-aware fields are present during the
+// Phase 6 transition window.
 export interface SourceStatus {
-  paused: boolean;
+  // Live fetch metadata — null when excluded.
+  fetching: boolean;
   failures24h: number;
-  state: string;
+  lastFetch: string | null;
+  state: string;            // legacy fine-grained "on" | "error" | "unknown"
+  paused: boolean;          // legacy alias for `excluded`
+
+  // Formula state.
+  excluded: boolean;
+  excludedReason: "manual" | "auto-suspend" | null;
+  excludedBy: string | null;
+  excludedAt: string | null;
+  reason: string | null;
+  lastKnownAtExclusion: {
+    failures24h: number | null;
+    outlierRate24h: number | null;
+    usedRate24h: number | null;
+  } | null;
 }
 export const getSourcesStatus = () =>
   req<{ sources: Record<string, SourceStatus> }>("/monitor/sources/status");
+
+// Formula
+export interface Formula { excludedSources: string[] }
+export interface FormulaChange {
+  at: string;
+  by: string;
+  exchange: string;
+  setOrUnset: "set" | "unset";
+  reason: string | null;
+}
+export interface FormulaWithMeta {
+  excludedSources: string[];
+  lastChange: FormulaChange | null;
+}
+export const getFormula = () => req<FormulaWithMeta>("/monitor/formula");
+export const setFormula = (formula: Formula) =>
+  req<FormulaWithMeta>("/monitor/formula", {
+    method: "PUT",
+    body: JSON.stringify(formula),
+  });
+
+// Per-source history (180d daily bins for the history modal)
+export interface SourceHistoryBin {
+  day: string;            // ISO start-of-day UTC
+  used: number;
+  outlierRejected: number;
+  formulaExcluded: number;
+  missing: number;
+}
+export interface SourceHistorySummary {
+  totalRows: number;
+  used: number;
+  outlierRejected: number;
+  formulaExcluded: number;
+  missing: number;
+}
+export interface SourceHistory {
+  source: string;
+  days: number;
+  bins: SourceHistoryBin[];
+  lifetime: SourceHistorySummary;
+  last30d: SourceHistorySummary;
+}
+export const getSourceHistory = (source: string, days = 180) =>
+  req<SourceHistory>(`/monitor/sources/${source}/history?days=${days}`);
+
+// Repair operations
+export interface RepairRequest {
+  from: string;          // ISO
+  to: string;            // ISO
+  sources?: string[];
+  formula?: Formula;
+  retryEmpty?: boolean;
+}
+export interface RepairPreview {
+  compositeRowsInWindow: number;
+  willBeRecomposed: number;
+  archiveHoles: number;
+  missingBySource: Record<string, number>;
+  sentinelsToRetry: number;
+  estimatedWallMs: number;
+  liveFormulaUnchanged: boolean;
+}
+export interface RepairJobState {
+  jobId: string;
+  state: "queued" | "ensuring" | "recomposing" | "done" | "failed" | "cancelled";
+  startedAt: string;
+  finishedAt: string | null;
+  from: string;
+  to: string;
+  sources?: string[];
+  formula?: Formula;
+  retryEmpty?: boolean;
+  ensure: {
+    rowsFetched: number;
+    sentinelsWritten: number;
+    skipped: number;
+    failedPerSource: Record<string, number>;
+  } | null;
+  recompose: { recomposed: number; skippedNoSources: number } | null;
+  result?: { rowsWritten: number; archiveRowsFetched: number };
+  error?: string;
+}
+export const previewRepair = (rq: RepairRequest) =>
+  req<{ preview: RepairPreview }>("/monitor/repair?dry=true", {
+    method: "POST",
+    body: JSON.stringify(rq),
+  });
+export const runRepair = (rq: RepairRequest) =>
+  req<{ jobId: string }>("/monitor/repair?dry=false", {
+    method: "POST",
+    body: JSON.stringify(rq),
+  });
+export const getRepairJob = (jobId: string) =>
+  req<RepairJobState>(`/monitor/repair/jobs/${jobId}`);
+export const cancelRepairJob = (jobId: string) =>
+  req<{ ok: boolean }>(`/monitor/repair/jobs/${jobId}/cancel`, { method: "POST" });
 
 // Gaps
 export interface Gap {

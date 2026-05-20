@@ -287,6 +287,93 @@ router.post("/repair/jobs/:jobId/cancel", ...modify, (req, res) => {
 });
 
 /**
+ * GET /monitor/sources/:source/history?days=180
+ *   → { source, days, bins: [{day, used, outlierRejected, formulaExcluded, missing}],
+ *       lifetime: {...}, last30d: {...} }
+ *
+ * Per-day breakdown from candles_1m_sources. Bins cover 1440 expected minutes
+ * each; missing = 1440 - (used + outlierRejected + formulaExcluded). Sentinel
+ * rows (rejectedReason='no_data') count toward missing in the UI's view.
+ */
+router.get("/sources/:source/history", ...view, async (req, res) => {
+  const source = req.params.source;
+  if (!SOURCE_NAMES.includes(source)) {
+    return res.status(400).json({ error: `Unknown source: ${source}` });
+  }
+  const daysParam = parseInt((req.query.days as string) ?? "180", 10);
+  if (!Number.isFinite(daysParam) || daysParam < 1 || daysParam > 365) {
+    return res.status(400).json({ error: "days must be 1..365" });
+  }
+
+  try {
+    const dailyRes = await query(
+      `SELECT
+         (date_trunc('day', timestamp) AT TIME ZONE 'UTC')::date AS day,
+         COUNT(*) FILTER (WHERE "usedInFormula" = true)                                              AS used,
+         COUNT(*) FILTER (WHERE rejected = true AND COALESCE("rejectedReason",'') <> 'no_data')      AS outlier_rejected,
+         COUNT(*) FILTER (WHERE "usedInFormula" = false AND rejected = false)                       AS formula_excluded,
+         COUNT(*) FILTER (WHERE "rejectedReason" = 'no_data')                                       AS no_data
+       FROM candles_1m_sources
+       WHERE source = $1
+         AND timestamp >= date_trunc('day', NOW()) - ($2::int - 1) * INTERVAL '1 day'
+       GROUP BY day
+       ORDER BY day`,
+      [source, daysParam],
+    );
+
+    const MINUTES_PER_DAY = 1440;
+    interface Row { day: Date; used: string; outlier_rejected: string; formula_excluded: string; no_data: string }
+    const byDay = new Map<string, Row>();
+    for (const r of dailyRes.rows as Row[]) {
+      // Postgres returns the date as a Date object; key by ISO date string.
+      const d = new Date(r.day);
+      byDay.set(d.toISOString().slice(0, 10), r);
+    }
+
+    // Fill every day in the window so the chart has no gaps.
+    const bins: Array<{ day: string; used: number; outlierRejected: number; formulaExcluded: number; missing: number }> = [];
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    for (let i = daysParam - 1; i >= 0; i--) {
+      const d = new Date(today.getTime() - i * 24 * 60 * 60 * 1000);
+      const key = d.toISOString().slice(0, 10);
+      const row = byDay.get(key);
+      const used = Number(row?.used ?? 0);
+      const outlierRejected = Number(row?.outlier_rejected ?? 0);
+      const formulaExcluded = Number(row?.formula_excluded ?? 0);
+      // Missing = expected minus everything we know about. no_data sentinels
+      // are NOT subtracted — they count as "missing" in the UI's view (the
+      // exchange had nothing for that minute, same as never trying).
+      const missing = Math.max(0, MINUTES_PER_DAY - used - outlierRejected - formulaExcluded);
+      bins.push({ day: d.toISOString(), used, outlierRejected, formulaExcluded, missing });
+    }
+
+    const sum = (sel: (b: typeof bins[number]) => number) => bins.reduce((acc, b) => acc + sel(b), 0);
+    const lifetime = {
+      totalRows: sum((b) => b.used + b.outlierRejected + b.formulaExcluded),
+      used:            sum((b) => b.used),
+      outlierRejected: sum((b) => b.outlierRejected),
+      formulaExcluded: sum((b) => b.formulaExcluded),
+      missing:         sum((b) => b.missing),
+    };
+    const last30 = bins.slice(-30);
+    const sum30 = (sel: (b: typeof bins[number]) => number) => last30.reduce((acc, b) => acc + sel(b), 0);
+    const last30d = {
+      totalRows: sum30((b) => b.used + b.outlierRejected + b.formulaExcluded),
+      used:            sum30((b) => b.used),
+      outlierRejected: sum30((b) => b.outlierRejected),
+      formulaExcluded: sum30((b) => b.formulaExcluded),
+      missing:         sum30((b) => b.missing),
+    };
+
+    return res.json({ source, days: daysParam, bins, lifetime, last30d });
+  } catch (err) {
+    logError("[monitor] GET /sources/:source/history failed:", err);
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+/**
  * POST /monitor/sources/:source/resume — legacy endpoint. Phase 3 of the
  * exchange-expansion plan replaced the in-memory pause set with the formula
  * model; this endpoint now routes to insertFormulaChange('unset') so the old
