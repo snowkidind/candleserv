@@ -7,6 +7,7 @@
  *   CANDLESERV_SECRET=<your secret> \
  *   npx tsx scripts/testCaller.ts
  */
+process.env.TZ = "UTC";        // must be set before any Date is constructed
 import crypto from "crypto";
 
 const URL    = process.env.CANDLESERV_URL    ?? "http://localhost:3007";

@@ -242,7 +242,8 @@ export async function collect(minuteTs: Date): Promise<boolean> {
     await upsertCandle({ timestamp: minuteTs, ...composite });
     // Per-source writes follow the composite write so the invariant
     // (usedInFormula IS NULL ⟺ no candles_1m row) is restored as soon as both
-    // settle. Phase 3 wraps these two writes in a single transaction.
+    // settle. Transactional wrap of the two writes is deferred to Phase 5;
+    // current behavior leaves a sub-ms window between them.
     await writeSourceRows(/*composed=*/true);
 
     const json = rowToJson({

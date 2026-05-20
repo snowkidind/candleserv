@@ -17,6 +17,7 @@ import {
   listApiKeys, createApiKey, revokeApiKey, setApiKeyEnabled,
   repairApiKeyNonce, findAndRepairBrokenNonces,
 } from "../../db/apiKeys.js";
+import { findUserById } from "../../db/users.js";
 import { getAllServiceEvents } from "../../db/serviceEvents.js";
 import { logError } from "../../lib/log.js";
 
@@ -163,9 +164,20 @@ router.put("/formula", ...modify, async (req, res) => {
   // generalize cleanly across multiple in a single PUT. Single-exchange PUTs
   // (the typical operator workflow) get the snapshot.
 
-  const userLabel = (req as { userId?: number }).userId
-    ? `manual:user-${(req as { userId?: number }).userId}`
-    : "manual";
+  // Resolve the operator's identifier for the `by` column — prefer email so
+  // UI labels read "by ken@example.com" rather than "by user-123". Fall back
+  // to numeric id if the lookup fails (defensive — auth middleware already
+  // verified the user exists).
+  const userId = (req as { userId?: number }).userId;
+  let userLabel = "manual";
+  if (userId !== undefined) {
+    try {
+      const u = await findUserById(userId);
+      userLabel = `manual:${u?.email ?? `user-${userId}`}`;
+    } catch {
+      userLabel = `manual:user-${userId}`;
+    }
+  }
 
   await applyFormulaDelta(
     { excludedSources: desired },

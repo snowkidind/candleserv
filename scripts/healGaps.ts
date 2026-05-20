@@ -19,6 +19,7 @@
  *   npx tsx scripts/healGaps.ts 14
  *   npx tsx scripts/healGaps.ts 7 --dry-run     # report only, no network/writes
  */
+process.env.TZ = "UTC";        // must be set before any Date is constructed
 import dotenv from "dotenv";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";

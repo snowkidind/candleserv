@@ -10,6 +10,7 @@
  * Single source of truth; no .env coupling.
  */
 
+process.env.TZ = 'UTC'         // must be set before any Date is constructed
 import 'dotenv/config'
 import { parseArgs } from 'node:util'
 import { getPool, query } from './pool.js'

@@ -9,6 +9,7 @@
  * Usage:
  *   npx tsx scripts/rederive.ts
  */
+process.env.TZ = "UTC";        // must be set before any Date is constructed
 import dotenv from "dotenv";
 dotenv.config();
 

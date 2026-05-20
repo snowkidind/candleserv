@@ -141,9 +141,13 @@ export async function insertFormulaChange(
   statsAtExclusion?: StatsAtExclusion | null,
 ): Promise<{ inserted: boolean; row: FormulaChange | null }> {
   const current = mirror.get(exchange);
-  if (current && current.setOrUnset === setOrUnset) {
-    // Already in the requested state — skip the insert.
-    return { inserted: false, row: current };
+  // No prior row for this exchange ≡ "included" (the default). Treat that as
+  // if the effective current state is "unset" so a redundant unset request
+  // (e.g., legacy POST /sources/:source/resume on a source that was never
+  // excluded) doesn't write a useless row.
+  const effective = current?.setOrUnset ?? "unset";
+  if (effective === setOrUnset) {
+    return { inserted: false, row: current ?? null };
   }
 
   const stats = setOrUnset === "set" ? (statsAtExclusion ?? null) : null;

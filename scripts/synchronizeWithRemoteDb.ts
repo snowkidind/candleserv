@@ -28,6 +28,7 @@
  *   npx tsx scripts/synchronizeWithRemoteDb.ts --dry-run
  *   npx tsx scripts/synchronizeWithRemoteDb.ts --batch-size 2000
  */
+process.env.TZ = "UTC";        // must be set before any Date is constructed (DB-side SET TIME ZONE 'UTC' is below at line ~376)
 import dotenv from "dotenv";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";

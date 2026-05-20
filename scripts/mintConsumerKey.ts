@@ -15,6 +15,7 @@
  *
  * Exit codes: 0 success · 1 runtime/policy error · 2 bad CLI args.
  */
+process.env.TZ = "UTC";        // must be set before any Date is constructed
 import dotenv from "dotenv";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
