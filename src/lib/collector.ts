@@ -130,27 +130,42 @@ export async function collect(minuteTs: Date): Promise<boolean> {
     const volumeLeader = await getTrailingVolumeLeader(10);
     const guarded      = applyGuards(results, minSources, sigma);
 
-    // Upsert per-source rows
-    for (const g of guarded) {
-      if (!g.candle) continue;
-      await upsertSourceCandle({
-        timestamp: minuteTs,
-        source: g.source,
-        ...g.candle,
-        rejected: g.rejected,
-        rejectedReason: g.rejectedReason,
-      });
-    }
+    // Helper: write per-source rows with a given usedInFormula verdict. Called
+    // on every exit path so the archive captures what each exchange said,
+    // regardless of whether a composite landed.
+    const writeSourceRows = async (composed: boolean) => {
+      for (const g of guarded) {
+        if (!g.candle) continue;
+        await upsertSourceCandle({
+          timestamp: minuteTs, source: g.source, ...g.candle,
+          rejected: g.rejected, rejectedReason: g.rejectedReason,
+          usedInFormula: composed ? !g.rejected : null,
+        });
+      }
+    };
 
-    const composite = await buildComposite(guarded, baseline, volumeLeader ?? undefined, minuteTs);
+    let composite;
+    try {
+      composite = await buildComposite(guarded, baseline, volumeLeader ?? undefined, minuteTs);
+    } catch (err) {
+      // All sources rejected — no composite, but the archive still gets the raw rows.
+      logError("[collector] buildComposite failed:", err);
+      await writeSourceRows(/*composed=*/false);
+      return false;
+    }
 
     if (Date.now() > deadline) {
       logError(`[collector] deadline exceeded after composite for ${minuteTs.toISOString()} — skipping write`);
       await recordError("collector", "deadline", `Deadline exceeded after composite for ${minuteTs.toISOString()}`);
+      await writeSourceRows(/*composed=*/false);
       return false;
     }
 
     await upsertCandle({ timestamp: minuteTs, ...composite });
+    // Per-source writes follow the composite write so the invariant
+    // (usedInFormula IS NULL ⟺ no candles_1m row) is restored as soon as both
+    // settle. Phase 3 wraps these two writes in a single transaction.
+    await writeSourceRows(/*composed=*/true);
 
     const json = rowToJson({
       timestamp: minuteTs,

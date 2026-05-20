@@ -100,7 +100,9 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
     tileEnd = tileStart;
   }
 
-  // Composite each minute and write
+  // Composite each minute and write composite + per-source rows. usedInFormula
+  // reflects this compose's verdict: !rejected if the composite was built,
+  // NULL if it wasn't (preserves usedInFormula IS NULL ⟺ no candles_1m row).
   for (const [tsMs, results] of byMinute) {
     if (!results.length) continue;
     const minuteTs   = new Date(tsMs);
@@ -108,6 +110,8 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
       (s) => results.find((r) => r.source === s) ?? { source: s, candle: null, error: "not_in_tile" }
     );
     const guarded = applyGuards(allResults, minSources, sigma);
+
+    let composed = false;
     try {
       const composite = await buildComposite(guarded, baseline, volumeLeader ?? undefined, minuteTs);
       if (overwrite) {
@@ -115,9 +119,22 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
       } else {
         await insertCandleIfMissing({ timestamp: minuteTs, ...composite });
       }
+      composed = true;
       written.add(tsMs);
     } catch {
-      // All sources rejected for this minute — leave it as a gap
+      // All sources rejected — no composite, but still write per-source rows
+      // below so the archive captures what each exchange said.
+    }
+
+    for (const g of guarded) {
+      if (!g.candle) continue;
+      await upsertSourceCandle({
+        timestamp: minuteTs, source: g.source,
+        open: g.candle.open, high: g.candle.high, low: g.candle.low,
+        close: g.candle.close, volume: g.candle.volume,
+        rejected: g.rejected, rejectedReason: g.rejectedReason,
+        usedInFormula: composed ? !g.rejected : null,
+      });
     }
   }
 
@@ -151,18 +168,32 @@ export async function healMinute(minuteTs: Date): Promise<boolean> {
     const volumeLeader = await getTrailingVolumeLeader(10);
     const guarded      = applyGuards(results, minSources, sigma);
 
-    for (const g of guarded) {
-      if (!g.candle) continue;
-      await upsertSourceCandle({
-        timestamp: minuteTs, source: g.source,
-        open: g.candle.open, high: g.candle.high, low: g.candle.low,
-        close: g.candle.close, volume: g.candle.volume,
-        rejected: g.rejected, rejectedReason: g.rejectedReason,
-      });
+    const writeSourceRows = async (composed: boolean) => {
+      for (const g of guarded) {
+        if (!g.candle) continue;
+        await upsertSourceCandle({
+          timestamp: minuteTs, source: g.source,
+          open: g.candle.open, high: g.candle.high, low: g.candle.low,
+          close: g.candle.close, volume: g.candle.volume,
+          rejected: g.rejected, rejectedReason: g.rejectedReason,
+          usedInFormula: composed ? !g.rejected : null,
+        });
+      }
+    };
+
+    let composite;
+    try {
+      composite = await buildComposite(guarded, baseline, volumeLeader ?? undefined, minuteTs);
+    } catch (err) {
+      // No composite possible — still persist the raw observations so the
+      // archive reflects what each exchange said.
+      await writeSourceRows(/*composed=*/false);
+      await recordError("healer", "healMinute:buildComposite", String(err));
+      return false;
     }
 
-    const composite = await buildComposite(guarded, baseline, volumeLeader ?? undefined, minuteTs);
     await upsertCandle({ timestamp: minuteTs, ...composite });
+    await writeSourceRows(/*composed=*/true);
     return true;
   } catch (err) {
     await recordError("healer", "healMinute", String(err));

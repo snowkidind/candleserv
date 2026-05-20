@@ -38,9 +38,17 @@ CREATE TABLE IF NOT EXISTS candles_1m_sources (
   "volume"         numeric      NOT NULL,
   "rejected"       boolean      NOT NULL DEFAULT false,
   "rejectedReason" varchar,
+  "usedInFormula"  boolean,
+  "createdAt"      timestamptz  NOT NULL DEFAULT NOW(),
+  "updatedAt"      timestamptz  NOT NULL DEFAULT NOW(),
   PRIMARY KEY ("timestamp", "source")
 );
 CREATE INDEX IF NOT EXISTS candles_1m_sources_ts_desc ON candles_1m_sources ("timestamp" DESC);
+
+-- Idempotent migration for installs that pre-date the usedInFormula/createdAt/updatedAt columns.
+ALTER TABLE candles_1m_sources ADD COLUMN IF NOT EXISTS "usedInFormula" boolean;
+ALTER TABLE candles_1m_sources ADD COLUMN IF NOT EXISTS "createdAt"     timestamptz NOT NULL DEFAULT NOW();
+ALTER TABLE candles_1m_sources ADD COLUMN IF NOT EXISTS "updatedAt"     timestamptz NOT NULL DEFAULT NOW();
 
 CREATE TABLE IF NOT EXISTS service_errors (
   "id"        serial       PRIMARY KEY,

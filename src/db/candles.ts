@@ -65,6 +65,12 @@ export async function insertCandleIfMissing(c: Parameters<typeof upsertCandle>[0
 
 /**
  * Upsert a per-source raw candle row.
+ *
+ * usedInFormula is a byproduct of compose, not an input — callers in the
+ * compose path pass the result of "did this row contribute to the composite
+ * just written?" Live tick and healMinute both write composite + per-source
+ * rows together, so the flag reflects that composite's verdict. NULL means
+ * "no composite has been computed for this minute" (see schema invariant).
  */
 export async function upsertSourceCandle(c: {
   timestamp: Date;
@@ -76,16 +82,19 @@ export async function upsertSourceCandle(c: {
   volume: number;
   rejected: boolean;
   rejectedReason?: string | null;
+  usedInFormula?: boolean | null;
 }): Promise<void> {
   await query(
     `INSERT INTO candles_1m_sources
-       ("timestamp","source","open","high","low","close","volume","rejected","rejectedReason")
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ("timestamp","source","open","high","low","close","volume","rejected","rejectedReason","usedInFormula")
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
      ON CONFLICT ("timestamp","source") DO UPDATE SET
        open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, close = EXCLUDED.close,
-       volume = EXCLUDED.volume, rejected = EXCLUDED.rejected, "rejectedReason" = EXCLUDED."rejectedReason"`,
+       volume = EXCLUDED.volume, rejected = EXCLUDED.rejected, "rejectedReason" = EXCLUDED."rejectedReason",
+       "usedInFormula" = EXCLUDED."usedInFormula",
+       "updatedAt" = NOW()`,
     [c.timestamp, c.source, c.open, c.high, c.low, c.close, c.volume,
-     c.rejected, c.rejectedReason ?? null]
+     c.rejected, c.rejectedReason ?? null, c.usedInFormula ?? null]
   );
 }
 
@@ -290,11 +299,13 @@ export async function getCollectionLatencyStats(sample = 60): Promise<{
 }
 
 /**
- * Prune candles_1m_sources older than 30 days.
+ * Prune candles_1m_sources older than 180 days. 180d is the hard ceiling
+ * on the repair window (Phase 5) — anything older is composite-only and
+ * effectively immutable.
  */
 export async function pruneSourceCandles(): Promise<void> {
   await query(
-    `DELETE FROM candles_1m_sources WHERE "timestamp" < NOW() - INTERVAL '30 days'`
+    `DELETE FROM candles_1m_sources WHERE "timestamp" < NOW() - INTERVAL '180 days'`
   );
 }
 
