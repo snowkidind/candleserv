@@ -136,6 +136,16 @@ CREATE TABLE IF NOT EXISTS app_settings (
   "updatedAt" timestamptz  NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS formula_changes (
+  "exchange"         varchar     NOT NULL,
+  "setOrUnset"       varchar     NOT NULL CHECK ("setOrUnset" IN ('set', 'unset')),
+  "by"               varchar     NOT NULL,
+  "reason"           text,
+  "statsAtExclusion" jsonb,
+  "createdAt"        timestamptz NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS formula_changes_exchange_ts ON formula_changes ("exchange", "createdAt" DESC);
+
 CREATE TABLE IF NOT EXISTS service_events (
   "id"              serial       PRIMARY KEY,
   "type"            varchar      NOT NULL,

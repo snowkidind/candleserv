@@ -1,5 +1,6 @@
 import { ADAPTERS, SOURCE_NAMES } from "../adapters/registry.js";
 import { applyGuards, buildComposite } from "./composite.js";
+import { getCurrentFormula } from "../db/formulaChanges.js";
 import {
   upsertCandle, upsertSourceCandle, insertCandleIfMissing,
   countCandlesInDay, getSourceCountBaseline, getRecentCloseStddev,
@@ -79,12 +80,15 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
     const tileStart   = new Date(tileStartMs);
     const limit       = Math.round((tileEnd.getTime() - tileStartMs) / 60000);
 
+    const excluded = new Set(getCurrentFormula().excludedSources);
+    const activeAdapters = ADAPTERS.filter((a) => !excluded.has(a.name));
+
     const settled = await Promise.allSettled(
-      ADAPTERS.map((a) => a.fetchRange(tileEnd, limit)),
+      activeAdapters.map((a) => a.fetchRange(tileEnd, limit)),
     );
 
-    for (let i = 0; i < ADAPTERS.length; i++) {
-      const name = ADAPTERS[i].name;
+    for (let i = 0; i < activeAdapters.length; i++) {
+      const name = activeAdapters[i].name;
       const res = settled[i];
       if (res.status === "rejected") {
         logError(`[healer] healRange: ${name} tile failed`, res.reason);
@@ -143,10 +147,15 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
 
 // ── Individual minute heal ────────────────────────────────────────────────────
 
-/** Fetch one 1m candle from every registered adapter concurrently. Never throws. */
+/**
+ * Fetch one 1m candle from every formula-included adapter concurrently. Never
+ * throws. Excluded sources don't get fetched — gap-filling for them goes
+ * through ensureSourceCoverage (Phase 5), not the heal path.
+ */
 async function fetchAllSources(minuteTs: Date): Promise<SourceResult[]> {
+  const excluded = new Set(getCurrentFormula().excludedSources);
   return Promise.all(
-    ADAPTERS.map((a) =>
+    ADAPTERS.filter((a) => !excluded.has(a.name)).map((a) =>
       a.fetchOne(minuteTs)
         .then((candle) => ({ source: a.name, candle } as SourceResult))
         .catch((err) => ({ source: a.name, candle: null, error: String(err) } as SourceResult)),

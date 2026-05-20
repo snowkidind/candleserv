@@ -10,6 +10,7 @@ import { pruneSourceCandles } from "./db/candles.js";
 import { initRedis } from "./lib/redis.js";
 import { createSchema } from "./db/schema.js";
 import { getSetting } from "./db/appSettings.js";
+import { loadFormulaIntoMemory } from "./db/formulaChanges.js";
 import { recordOutage } from "./db/serviceEvents.js";
 import { query } from "./db/pool.js";
 import { log, logError } from "./lib/log.js";
@@ -83,6 +84,10 @@ async function main(): Promise<void> {
   } else {
     // Apply any schema changes (idempotent — CREATE TABLE IF NOT EXISTS)
     await createSchema();
+
+    // Hydrate the in-memory formula mirror before the collector starts —
+    // every compose tick reads from this. Failure blocks boot deliberately.
+    await loadFormulaIntoMemory();
 
     // Detect power failures / unplanned restarts via heartbeat gap
     await detectAndRecordOutage();

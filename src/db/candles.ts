@@ -302,6 +302,41 @@ export async function getCollectionLatencyStats(sample = 60): Promise<{
 }
 
 /**
+ * Snapshot operational metrics for one source over the trailing 24h — the
+ * statsAtExclusion payload for formula_changes rows. Sentinel rows (rejected
+ * with rejectedReason='no_data') are excluded from rate denominators so they
+ * don't dilute the metric. Returns nulls on any query error so the caller
+ * can persist the exclusion regardless.
+ */
+export async function get24hSourceStats(source: string): Promise<{
+  outlierRate24h: number | null;
+  usedRate24h: number | null;
+}> {
+  try {
+    const res = await query(
+      `SELECT
+         COUNT(*) FILTER (WHERE COALESCE("rejectedReason", '') <> 'no_data')              AS total,
+         COUNT(*) FILTER (WHERE "rejectedReason" = 'outlier')                              AS outlier,
+         COUNT(*) FILTER (WHERE "usedInFormula" = true)                                    AS used
+       FROM candles_1m_sources
+      WHERE source = $1
+        AND "timestamp" >= NOW() - INTERVAL '24 hours'`,
+      [source],
+    );
+    const r = res.rows[0] as { total: string; outlier: string; used: string } | undefined;
+    if (!r) return { outlierRate24h: null, usedRate24h: null };
+    const total = Number(r.total);
+    if (total === 0) return { outlierRate24h: null, usedRate24h: null };
+    return {
+      outlierRate24h: Number(r.outlier) / total,
+      usedRate24h: Number(r.used) / total,
+    };
+  } catch {
+    return { outlierRate24h: null, usedRate24h: null };
+  }
+}
+
+/**
  * Prune candles_1m_sources older than 180 days. 180d is the hard ceiling
  * on the repair window (Phase 5) — anything older is composite-only and
  * effectively immutable.

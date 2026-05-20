@@ -4,9 +4,15 @@ import { query } from "../../db/pool.js";
 import { getAllGaps, countPendingGaps } from "../../db/gaps.js";
 import { getStreamEvents } from "../../db/streamEvents.js";
 import { getAllSettings, setSetting } from "../../db/appSettings.js";
-import { getCandles, getCollectionLatencyStats, VALID_TFS } from "../../db/candles.js";
+import { get24hSourceStats, getCandles, getCollectionLatencyStats, VALID_TFS } from "../../db/candles.js";
 import { runGapScan } from "../../lib/gapDetector.js";
 import { getSourceStatus, resumeSource } from "../../lib/collector.js";
+import {
+  applyFormulaDelta,
+  getCurrentFormula,
+  getLastChange,
+} from "../../db/formulaChanges.js";
+import { SOURCE_NAMES } from "../../adapters/registry.js";
 import {
   listApiKeys, createApiKey, revokeApiKey, setApiKeyEnabled,
   repairApiKeyNonce, findAndRepairBrokenNonces,
@@ -98,9 +104,91 @@ router.get("/sources/status", ...view, async (_req, res) => {
   return res.json({ sources: status });
 });
 
-/** POST /monitor/sources/:source/resume */
-router.post("/sources/:source/resume", ...modify, (req, res) => {
-  resumeSource(req.params.source);
+function lastChangePayload() {
+  const last = getLastChange();
+  if (!last) return null;
+  return {
+    at: last.createdAt.toISOString(),
+    by: last.by,
+    exchange: last.exchange,
+    setOrUnset: last.setOrUnset,
+    reason: last.reason,
+  };
+}
+
+/** GET /monitor/formula — current excludedSources + lastChange metadata */
+router.get("/formula", ...view, (_req, res) => {
+  return res.json({
+    excludedSources: getCurrentFormula().excludedSources,
+    lastChange: lastChangePayload(),
+  });
+});
+
+/**
+ * PUT /monitor/formula — replace the formula with the desired set.
+ * Body: { excludedSources: string[] }. Server computes diff vs current and
+ * inserts one formula_changes row per transition (idempotent on no-ops).
+ * Each 'set' transition snapshots 24h stats at the moment of insert.
+ */
+router.put("/formula", ...modify, async (req, res) => {
+  const body = req.body as { excludedSources?: unknown };
+  if (!Array.isArray(body?.excludedSources)
+      || !body.excludedSources.every((s) => typeof s === "string")) {
+    return res.status(400).json({ error: "Body must be { excludedSources: string[] }" });
+  }
+  const desired = body.excludedSources as string[];
+  const unknown = desired.filter((s) => !SOURCE_NAMES.includes(s));
+  if (unknown.length) {
+    return res.status(400).json({ error: `Unknown source(s): ${unknown.join(", ")}` });
+  }
+
+  // Snapshot stats for any newly-excluded source — done here, not in the
+  // helper, because we want the snapshot computed before the insert lands.
+  // For batch PUTs of multiple newly-excluded sources we don't try to fan out
+  // per-exchange snapshots in this handler; the typical operator workflow is
+  // single-exchange and that's where the UI's "Last seen at exclusion" panel
+  // matters most. Auto-suspend (collector.ts) does per-source snapshots.
+  const newlyExcluded = desired.filter((s) => !getCurrentFormula().excludedSources.includes(s));
+  let statsAtExclusion = null;
+  if (newlyExcluded.length === 1) {
+    const stats = await get24hSourceStats(newlyExcluded[0]);
+    statsAtExclusion = {
+      failures24h: null,
+      outlierRate24h: stats.outlierRate24h,
+      usedRate24h: stats.usedRate24h,
+    };
+  }
+  // Multi-source PUTs don't get a stats snapshot — the snapshot is "what was
+  // this one exchange's stats at the moment of exclusion" and that doesn't
+  // generalize cleanly across multiple in a single PUT. Single-exchange PUTs
+  // (the typical operator workflow) get the snapshot.
+
+  const userLabel = (req as { userId?: number }).userId
+    ? `manual:user-${(req as { userId?: number }).userId}`
+    : "manual";
+
+  await applyFormulaDelta(
+    { excludedSources: desired },
+    userLabel,
+    "operator edit via PUT /monitor/formula",
+    statsAtExclusion,
+  );
+
+  return res.json({
+    excludedSources: getCurrentFormula().excludedSources,
+    lastChange: lastChangePayload(),
+  });
+});
+
+/**
+ * POST /monitor/sources/:source/resume — legacy endpoint. Phase 3 of the
+ * exchange-expansion plan replaced the in-memory pause set with the formula
+ * model; this endpoint now routes to insertFormulaChange('unset') so the old
+ * "Resume" button keeps working. Phase 6 frontend lands the rename to
+ * PUT /monitor/formula and the endpoint is removed.
+ */
+router.post("/sources/:source/resume", ...modify, async (req, res) => {
+  await resumeSource(req.params.source);
   return res.json({ ok: true });
 });
 
