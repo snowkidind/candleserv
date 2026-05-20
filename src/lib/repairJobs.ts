@@ -16,6 +16,7 @@ import crypto from "node:crypto";
 import { ensureSourceCoverage, recomposeRange } from "./repair.js";
 import type { EnsureSourceCoverageResult, RecomposeRangeResult } from "./repair.js";
 import { getCurrentFormula } from "../db/formulaChanges.js";
+import { closeAllListeners } from "./emitter.js";
 import { query } from "../db/pool.js";
 import { log, logError } from "./log.js";
 
@@ -112,6 +113,11 @@ export function startRepairJob(req: StartRepairJobRequest): { jobId: string } {
   };
   jobs.set(jobId, { state, controller });
   repairInProgress = true;
+
+  // Drain in-flight long-poll waitForFresh subscribers and SSE consumers BEFORE
+  // the job starts. New requests will be 503'd by repairLock middleware; this
+  // closes the gap for connections that were already past middleware.
+  closeAllListeners("repair in progress");
 
   // Fire-and-forget the work loop; errors are captured in state.error.
   void runRepairJob(jobId, controller).catch((err) => {

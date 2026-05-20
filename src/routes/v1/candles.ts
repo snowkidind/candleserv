@@ -200,6 +200,7 @@ async function handleWaitForFresh(
 
   const cleanup = () => {
     candleEmitter.off("candle", onCandle);
+    candleEmitter.off("__close__", onClose);
     if (timer) clearTimeout(timer);
   };
 
@@ -222,7 +223,27 @@ async function handleWaitForFresh(
     }
   }
 
+  // Repair-job drain: when closeAllListeners fires '__close__', any in-flight
+  // waitForFresh waiters finish with 503 (matches the repair-lock middleware
+  // semantics — service unavailable for candle reads during repair). Mirrors
+  // the timeout response shape.
+  async function onClose(): Promise<void> {
+    if (resolved) return;
+    let lastAvailableTs: number | null = null;
+    try {
+      const last = await getLatest1m(1);
+      lastAvailableTs = last.length ? last[0].timestamp : null;
+    } catch {}
+    finish(503, {
+      error: "repair in progress",
+      tf,
+      endingAt: endDate.toISOString(),
+      lastAvailableTs,
+    });
+  }
+
   candleEmitter.on("candle", onCandle);
+  candleEmitter.on("__close__", onClose);
 
   timer = setTimeout(async () => {
     if (resolved) return;

@@ -12,6 +12,7 @@ import monitorAuthRouter from "./routes/monitor/auth.js";
 import monitorErrorsRouter from "./routes/monitor/errors.js";
 import monitorOperationalRouter from "./routes/monitor/operational.js";
 import monitorStreamRouter from "./routes/monitor/stream.js";
+import { repairLock } from "./middleware/repairLock.js";
 
 export function createApp(): express.Application {
   const app = express();
@@ -36,6 +37,11 @@ export function createApp(): express.Application {
       return res.status(403).json({ error: "Read-only mode: write operations are disabled on this instance" });
     });
   }
+
+  // Phase 5 repair-lock: 503 on candle-poll endpoints while a recompose/repair
+  // job is in flight. Whitelists SSE, /health, repair job status/cancel, and
+  // every other /monitor/* path. Mirrors the READONLY_MODE pattern above.
+  app.use(repairLock);
 
   app.use((req, res, next) => {
     res.on("finish", () => log(`[access] ${req.method} ${req.path} ${res.statusCode}`));
