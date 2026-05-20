@@ -4,6 +4,9 @@ import { fetchBybitCandle, fetchBybitRange } from "./bybit.js";
 import { fetchKrakenCandle, fetchKrakenRange } from "./kraken.js";
 import { fetchCoinbaseCandle, fetchCoinbaseRange } from "./coinbase.js";
 import { fetchBitfinexCandle, fetchBitfinexRange } from "./bitfinex.js";
+import { fetchOkxCandle, fetchOkxRange } from "./okx.js";
+import { fetchGateCandle, fetchGateRange } from "./gate.js";
+import { fetchBitgetCandle, fetchBitgetRange } from "./bitget.js";
 
 export interface Adapter {
   name: string;
@@ -20,6 +23,9 @@ export const ADAPTERS: Adapter[] = [
   { name: "kraken",   bit: 2, fetchOne: fetchKrakenCandle,   fetchRange: fetchKrakenRange   },
   { name: "coinbase", bit: 3, fetchOne: fetchCoinbaseCandle, fetchRange: fetchCoinbaseRange },
   { name: "bitfinex", bit: 4, fetchOne: fetchBitfinexCandle, fetchRange: fetchBitfinexRange },
+  { name: "okx",      bit: 5, fetchOne: fetchOkxCandle,      fetchRange: fetchOkxRange      },
+  { name: "gate",     bit: 6, fetchOne: fetchGateCandle,     fetchRange: fetchGateRange     },
+  { name: "bitget",   bit: 7, fetchOne: fetchBitgetCandle,   fetchRange: fetchBitgetRange   },
 ];
 
 export const SOURCE_NAMES: string[] = ADAPTERS.map((a) => a.name);
