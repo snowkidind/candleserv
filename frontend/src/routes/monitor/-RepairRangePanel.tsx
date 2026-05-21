@@ -122,6 +122,15 @@ function RepairProgressPanel({
     try { await cancelRepairJob(jobId); } finally { setCancelling(false); }
   };
 
+  // Hooks must run on every render to preserve order — keep useMemo above the
+  // early return below. The memo body guards on `data` being undefined.
+  const diverged = useMemo(() => {
+    if (!data || data.state !== "done") return false;
+    if (!liveFormula) return false;
+    const jobExcluded = data.formula?.excludedSources ?? liveFormula.excludedSources;
+    return !setEqual(jobExcluded, liveFormula.excludedSources);
+  }, [data, liveFormula]);
+
   if (!data) {
     return (
       <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 text-sm text-gray-500">
@@ -135,15 +144,6 @@ function RepairProgressPanel({
   const elapsed = data.finishedAt
     ? new Date(data.finishedAt).getTime() - startedAt.getTime()
     : Date.now() - startedAt.getTime();
-
-  // Divergence check: at job completion, compare the override formula against
-  // the live formula at THIS moment.
-  const diverged = useMemo(() => {
-    if (data.state !== "done") return false;
-    if (!liveFormula) return false;
-    const jobExcluded = data.formula?.excludedSources ?? liveFormula.excludedSources;
-    return !setEqual(jobExcluded, liveFormula.excludedSources);
-  }, [data, liveFormula]);
 
   return (
     <div className="bg-gray-900 border border-gray-700 rounded-lg p-4">
@@ -265,6 +265,13 @@ export default function RepairRangePanel({ sourceNames }: { sourceNames: string[
     return toLocalInputValue(d);
   });
 
+  // Bounds for the datetime-local inputs. Computed per-render so a long-lived
+  // page picks up the moving upper edge as minutes tick by. Server validates
+  // independently; these are purely a UX guardrail against typing a date
+  // outside the 180-day archive horizon or into the in-progress minute.
+  const dpMin = toLocalInputValue(new Date(Date.now() - 180 * 24 * 60 * 60 * 1000));
+  const dpMax = toLocalInputValue(new Date(Math.floor(Date.now() / 60000) * 60000 - 60000));
+
   const [formulaOverride, setFormulaOverride] = useState<string[]>([]);
   const [retryEmpty, setRetryEmpty] = useState(false);
   const [preview, setPreview] = useState<RepairPreview | null>(null);
@@ -350,6 +357,8 @@ export default function RepairRangePanel({ sourceNames }: { sourceNames: string[
             <input
               type="datetime-local"
               value={from}
+              min={dpMin}
+              max={dpMax}
               onChange={(e) => { setFrom(e.target.value); invalidatePreview(); }}
               className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 outline-none focus:border-blue-500"
             />
@@ -359,6 +368,8 @@ export default function RepairRangePanel({ sourceNames }: { sourceNames: string[
             <input
               type="datetime-local"
               value={to}
+              min={dpMin}
+              max={dpMax}
               onChange={(e) => { setTo(e.target.value); invalidatePreview(); }}
               className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 outline-none focus:border-blue-500"
             />
