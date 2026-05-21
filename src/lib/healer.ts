@@ -20,6 +20,11 @@ const THREE_MONTHS_MS = 90 * 24 * 60 * 60 * 1000;
 // Minutes per tile — safe for all adapters (Coinbase hard limit: 300)
 const BACKFILL_TILE = 300;
 
+// Single-flight guard: prevents the boot kick, the gap-detector trigger,
+// and the hourly tick from running runBackfill() concurrently.
+let backfillRunning = false;
+export function isBackfillRunning(): boolean { return backfillRunning; }
+
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -238,31 +243,40 @@ async function backfillDay(dayStart: Date): Promise<void> {
 }
 
 export async function runBackfill(): Promise<void> {
+  if (backfillRunning) {
+    log("[healer] backfill already in progress — skipping");
+    return;
+  }
   const alreadyDone = await getSetting("backfillComplete");
   if (alreadyDone === "true") {
     log("[healer] backfill already complete — skipping");
     return;
   }
 
-  log("[healer] starting backfill scan (3 months)");
-  const now   = new Date();
-  const start = new Date(now.getTime() - THREE_MONTHS_MS);
-  start.setUTCHours(0, 0, 0, 0);
+  backfillRunning = true;
+  try {
+    log("[healer] starting backfill scan (3 months)");
+    const now   = new Date();
+    const start = new Date(now.getTime() - THREE_MONTHS_MS);
+    start.setUTCHours(0, 0, 0, 0);
 
-  let day = new Date(start);
-  while (day < now) {
-    const count = await countCandlesInDay(day);
-    if (count < 1440) {
-      log(`[healer] backfilling ${day.toISOString().slice(0, 10)} (${count}/1440 rows)`);
-      await backfillDay(day);
+    let day = new Date(start);
+    while (day < now) {
+      const count = await countCandlesInDay(day);
+      if (count < 1440) {
+        log(`[healer] backfilling ${day.toISOString().slice(0, 10)} (${count}/1440 rows)`);
+        await backfillDay(day);
+      }
+      day = new Date(day.getTime() + 24 * 60 * 60 * 1000);
     }
-    day = new Date(day.getTime() + 24 * 60 * 60 * 1000);
-  }
 
-  await setSetting("backfillComplete", "true");
-  log("[healer] backfill complete — clearing stale detected gaps and rescanning");
-  await clearDetectedGaps();
-  await runGapScan(7);
+    await setSetting("backfillComplete", "true");
+    log("[healer] backfill complete — clearing stale detected gaps and rescanning");
+    await clearDetectedGaps();
+    await runGapScan(7);
+  } finally {
+    backfillRunning = false;
+  }
 }
 
 // ── Re-heal low-confidence rows ───────────────────────────────────────────────

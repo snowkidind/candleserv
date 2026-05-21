@@ -1,8 +1,8 @@
 import { query } from "../db/pool.js";
 import { upsertGap, setGapState, markAlertSent, getPendingGaps } from "../db/gaps.js";
-import { healRange, reHealLowConfidence } from "./healer.js";
+import { healRange, reHealLowConfidence, runBackfill, isBackfillRunning } from "./healer.js";
 import { recordError } from "../db/errors.js";
-import { getSettingInt } from "../db/appSettings.js";
+import { getSettingInt, setSetting } from "../db/appSettings.js";
 import { log, logError } from "./log.js";
 
 const ALERT_WEBHOOK_KEY = "alertWebhookUrl";
@@ -89,7 +89,14 @@ async function healPendingGaps(): Promise<void> {
   if (!gaps.length) return;
 
   if (gaps.length > 100) {
-    log(`[gapDetector] ${gaps.length} pending gaps — deferring to backfill`);
+    // Too many to heal inline — hand off to the bulk backfill loop. The
+    // backfillComplete flag is a one-way latch set after a successful scan,
+    // so on a long-outage restart it's already "true" and runBackfill would
+    // short-circuit. Clear it here so the evidence in the gaps table wins
+    // over the stale latch.
+    log(`[gapDetector] ${gaps.length} pending gaps — triggering backfill`);
+    await setSetting("backfillComplete", "false");
+    runBackfill().catch((err) => logError("[gapDetector] backfill trigger failed:", err));
     return;
   }
 
@@ -159,9 +166,15 @@ export async function startGapDetector(): Promise<void> {
   log("[gapDetector] startup scan (7 days)");
   await runGapScan(7);
 
-  // Upgrade any low-confidence rows — delayed 2s to avoid back-to-back exchange hits
+  // Upgrade any low-confidence rows — delayed 2s to avoid back-to-back exchange hits.
+  // Skip if a backfill is running: both hit the same exchange endpoints over
+  // overlapping windows and would race toward rate-limit failures.
   await new Promise(r => setTimeout(r, 2000));
-  await reHealLowConfidence(7).catch((err) => logError("[gapDetector] reHealLowConfidence failed:", err));
+  if (isBackfillRunning()) {
+    log("[gapDetector] backfill in progress — skipping reHealLowConfidence");
+  } else {
+    await reHealLowConfidence(7).catch((err) => logError("[gapDetector] reHealLowConfidence failed:", err));
+  }
 
   // Hourly scan
   setInterval(() => {
