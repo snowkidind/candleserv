@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   getStats, getSourcesStatus, getGaps, getStreamEvents, triggerHeal,
-  getFormula, setFormula,
+  getFormula, setFormula, getConfig,
   type StreamEvent, type SourceStatus,
 } from "@/lib/api";
 import { useCandleStream } from "@/lib/CandleStreamContext";
@@ -168,9 +168,12 @@ function LiveFormulaEditor({
 }) {
   const qc = useQueryClient();
   const { data: live } = useQuery({ queryKey: ["formula"], queryFn: getFormula });
+  const { data: config } = useQuery({ queryKey: ["config"], queryFn: getConfig });
   const [draft, setDraft] = useState<string[]>([]);
   const [showDiff, setShowDiff] = useState(false);
-  const [minSources] = useState<number>(3);  // mirrors server default; could be fetched from /monitor/config
+  // app_settings stores values as text. Fall back to the server default of 3
+  // until the config query resolves so the editor stays usable on first paint.
+  const minSources = Number(config?.settings?.minSources ?? 3);
 
   // Re-init draft when live formula changes (server pushed an update, or our save landed).
   useEffect(() => {
