@@ -167,7 +167,7 @@ export interface RepairJobState {
     skipped: number;
     failedPerSource: Record<string, number>;
   } | null;
-  recompose: { recomposed: number; skippedNoSources: number } | null;
+  recompose: { recomposed: number; skippedNoSources: number; failed: number } | null;
   result?: { rowsWritten: number; archiveRowsFetched: number };
   error?: string;
 }

@@ -14,10 +14,25 @@
  * The response is a JSON array of arrays (no envelope).
  */
 import type { SourceCandle } from "../types/index.js";
+import { OutOfHistoryError } from "./errors.js";
 
 const BASE = "https://api.gateio.ws";
 const TIMEOUT_MS = 6000;
 const RANGE_TIMEOUT_MS = 30000;
+
+// Gate caps historical 1m candles at 10,000 points (~6.9 days) and returns
+// HTTP 400 with label "INVALID_PARAM_VALUE" + message "Candlestick too long
+// ago…" when asked for older data. Distinct from a real failure.
+async function throwIfNotOk(res: Response): Promise<void> {
+  if (res.ok) return;
+  if (res.status === 400) {
+    const body = await res.clone().json().catch(() => null) as { label?: string; message?: string } | null;
+    if (body?.label === "INVALID_PARAM_VALUE" && /too long ago/i.test(body.message ?? "")) {
+      throw new OutOfHistoryError("gate", body.message ?? "Candlestick too long ago");
+    }
+  }
+  throw new Error(`HTTP ${res.status}`);
+}
 
 function parseRow(row: unknown[]): { timestamp: Date; candle: SourceCandle } {
   // row: [ts_str, vol_quote, close, high, low, open, vol_base, ...]
@@ -43,7 +58,7 @@ export async function fetchGateCandle(minuteTs: Date): Promise<SourceCandle> {
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await throwIfNotOk(res);
     const data = await res.json() as unknown[][];
     if (!Array.isArray(data) || !data.length) throw new Error("No candle returned");
     return parseRow(data[0]).candle;
@@ -61,7 +76,7 @@ export async function fetchGateRange(endTime: Date, limit: number): Promise<{ ti
   const timer = setTimeout(() => controller.abort(), RANGE_TIMEOUT_MS);
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await throwIfNotOk(res);
     const data = await res.json() as unknown[][];
     if (!Array.isArray(data)) throw new Error("Unexpected response shape");
     return data

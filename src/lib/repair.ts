@@ -14,6 +14,7 @@
  * clamps are the caller's responsibility (the REST handler enforces them).
  */
 import { ADAPTER_BY_NAME, SOURCE_NAMES } from "../adapters/registry.js";
+import { isOutOfHistory } from "../adapters/errors.js";
 import { composeMinute } from "./compose.js";
 import type { Formula } from "./compose.js";
 import {
@@ -79,6 +80,9 @@ export async function ensureSourceCoverage(
   let sentinelsWritten = 0;
   let skipped = 0;
   const failedPerSource: Record<string, number> = {};
+  // Out-of-history failures get aggregated, not logged per tile. Earliest tile
+  // (start time) tracks where each source's accessible history begins.
+  const outOfHistoryEarliest: Record<string, Date> = {};
 
   // Optionally delete 'no_data' sentinels in the window first so empty
   // minutes get re-fetched.
@@ -121,6 +125,13 @@ export async function ensureSourceCoverage(
       const res = settled[i];
 
       if (res.status === "rejected") {
+        // Adapter-declared out-of-history (e.g. gate caps at ~6.9 days) is
+        // expected, not a fault. Aggregate quietly; one summary line at end.
+        if (isOutOfHistory(res.reason)) {
+          const prev = outOfHistoryEarliest[source];
+          if (!prev || tileStart < prev) outOfHistoryEarliest[source] = tileStart;
+          continue;
+        }
         failedPerSource[source] = (failedPerSource[source] ?? 0) + 1;
         logError(`[repair] ensureSourceCoverage: ${source} tile [${tileStart.toISOString()}, ${tileEnd.toISOString()}) failed`, res.reason);
         // Don't write sentinels for whole-tile failures — that'd mark every
@@ -170,6 +181,11 @@ export async function ensureSourceCoverage(
     tileEnd = tileStart;
   }
 
+  // One tidy summary line per source for the venues that ran out of history.
+  for (const [source, earliest] of Object.entries(outOfHistoryEarliest)) {
+    log(`[repair] ensureSourceCoverage: ${source} has no data before ${earliest.toISOString().slice(0, 16)} (skipped)`);
+  }
+
   const result: EnsureSourceCoverageResult = { rowsFetched, sentinelsWritten, skipped, failedPerSource };
   if (clamped.from || clamped.to) result.clamped = clamped;
   log(`[repair] ensureSourceCoverage: rowsFetched=${rowsFetched} sentinels=${sentinelsWritten} skipped=${skipped} failures=${JSON.stringify(failedPerSource)}`);
@@ -179,6 +195,7 @@ export async function ensureSourceCoverage(
 export interface RecomposeRangeResult {
   recomposed: number;
   skippedNoSources: number;
+  failed: number;
   clamped?: { from?: string; to?: string };
 }
 
@@ -211,6 +228,7 @@ export async function recomposeRange(
 
   let recomposed = 0;
   let skippedNoSources = 0;
+  let failed = 0;
 
   for (let minuteMs = from.getTime(); minuteMs < to.getTime(); minuteMs += 60000) {
     if (opts?.signal?.aborted) {
@@ -226,13 +244,13 @@ export async function recomposeRange(
       else skippedNoSources++;
     } catch (err) {
       logError(`[repair] recomposeRange: ${minuteTs.toISOString()} failed`, err);
-      skippedNoSources++;
+      failed++;
     }
   }
 
-  const result: RecomposeRangeResult = { recomposed, skippedNoSources };
+  const result: RecomposeRangeResult = { recomposed, skippedNoSources, failed };
   if (clamped.from || clamped.to) result.clamped = clamped;
-  log(`[repair] recomposeRange: recomposed=${recomposed} skipped=${skippedNoSources}`);
+  log(`[repair] recomposeRange: recomposed=${recomposed} skipped=${skippedNoSources} failed=${failed}`);
   return result;
 }
 
@@ -264,7 +282,7 @@ export async function repairRange(
     signal: opts?.signal,
   });
   if (opts?.signal?.aborted) {
-    return { ensure, recompose: { recomposed: 0, skippedNoSources: 0 } };
+    return { ensure, recompose: { recomposed: 0, skippedNoSources: 0, failed: 0 } };
   }
   const recompose = await recomposeRange(from, to, {
     formula: opts?.formula,
