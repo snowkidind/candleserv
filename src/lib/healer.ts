@@ -13,6 +13,7 @@ import { recordError } from "../db/errors.js";
 import { getSetting, setSetting, getSettingInt } from "../db/appSettings.js";
 import { query } from "../db/pool.js";
 import { log, logError } from "./log.js";
+import { beginActivity, endActivity } from "./healerStatus.js";
 import type { SourceResult } from "../types/index.js";
 
 const THREE_MONTHS_MS = 90 * 24 * 60 * 60 * 1000;
@@ -257,6 +258,7 @@ export async function runBackfill(): Promise<void> {
   }
 
   backfillRunning = true;
+  beginActivity("runBackfill", { windowDays: 90 });
   try {
     log("[healer] starting backfill scan (3 months)");
     const now   = new Date();
@@ -279,6 +281,7 @@ export async function runBackfill(): Promise<void> {
     await runGapScan(7);
   } finally {
     backfillRunning = false;
+    endActivity("runBackfill");
   }
 }
 
@@ -292,37 +295,42 @@ export async function runBackfill(): Promise<void> {
  * A 20-minute power failure → 1 range → 5 HTTP requests total instead of 100.
  */
 export async function reHealLowConfidence(windowDays = 7): Promise<void> {
-  const minSources = await getSettingInt("minSources", 3);
-  const baseline   = await getSourceCountBaseline();
-  const threshold  = minSources / baseline; // e.g. 3/5 = 0.6
+  beginActivity("reHealLowConfidence", { windowDays });
+  try {
+    const minSources = await getSettingInt("minSources", 3);
+    const baseline   = await getSourceCountBaseline();
+    const threshold  = minSources / baseline; // e.g. 3/5 = 0.6
 
-  const from = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
-  const to   = new Date();
-  to.setSeconds(0, 0);
+    const from = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+    const to   = new Date();
+    to.setSeconds(0, 0);
 
-  const res = await query(
-    `SELECT "timestamp" FROM candles_1m
-     WHERE "timestamp" >= $1 AND "timestamp" < $2 AND confidence < $3
-     ORDER BY "timestamp" ASC`,
-    [from, to, threshold]
-  );
+    const res = await query(
+      `SELECT "timestamp" FROM candles_1m
+       WHERE "timestamp" >= $1 AND "timestamp" < $2 AND confidence < $3
+       ORDER BY "timestamp" ASC`,
+      [from, to, threshold]
+    );
 
-  if (!res.rows.length) {
-    log("[healer] reHealLowConfidence: no low-confidence rows found");
-    return;
+    if (!res.rows.length) {
+      log("[healer] reHealLowConfidence: no low-confidence rows found");
+      return;
+    }
+
+    const timestamps = res.rows.map((r) => new Date(r.timestamp as string));
+    const ranges     = groupIntoRanges(timestamps);
+
+    log(`[healer] reHealLowConfidence: ${res.rows.length} rows across ${ranges.length} range(s) (confidence < ${threshold.toFixed(2)}, window ${windowDays}d)`);
+
+    let totalUpgraded = 0;
+    for (const { from: rangeFrom, to: rangeTo } of ranges) {
+      log(`[healer] reHealLowConfidence: healing ${rangeFrom.toISOString().slice(0, 16)} → ${rangeTo.toISOString().slice(0, 16)}`);
+      const written = await healRange(rangeFrom, rangeTo, true);
+      totalUpgraded += written.size;
+    }
+
+    log(`[healer] reHealLowConfidence: upgraded ${totalUpgraded}/${res.rows.length} rows`);
+  } finally {
+    endActivity("reHealLowConfidence");
   }
-
-  const timestamps = res.rows.map((r) => new Date(r.timestamp as string));
-  const ranges     = groupIntoRanges(timestamps);
-
-  log(`[healer] reHealLowConfidence: ${res.rows.length} rows across ${ranges.length} range(s) (confidence < ${threshold.toFixed(2)}, window ${windowDays}d)`);
-
-  let totalUpgraded = 0;
-  for (const { from: rangeFrom, to: rangeTo } of ranges) {
-    log(`[healer] reHealLowConfidence: healing ${rangeFrom.toISOString().slice(0, 16)} → ${rangeTo.toISOString().slice(0, 16)}`);
-    const written = await healRange(rangeFrom, rangeTo, true);
-    totalUpgraded += written.size;
-  }
-
-  log(`[healer] reHealLowConfidence: upgraded ${totalUpgraded}/${res.rows.length} rows`);
 }

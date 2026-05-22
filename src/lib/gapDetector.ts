@@ -4,6 +4,7 @@ import { healRange, reHealLowConfidence, runBackfill, isBackfillRunning } from "
 import { recordError } from "../db/errors.js";
 import { getSettingInt, setSetting } from "../db/appSettings.js";
 import { log, logError } from "./log.js";
+import { beginActivity, endActivity } from "./healerStatus.js";
 
 const ALERT_WEBHOOK_KEY = "alertWebhookUrl";
 
@@ -145,6 +146,7 @@ async function healPendingGaps(): Promise<void> {
  * Full scan: detect + heal. Run on startup (7-day window) and hourly.
  */
 export async function runGapScan(windowDays = 1): Promise<void> {
+  beginActivity("gapScan", { windowDays });
   try {
     const to = new Date();
     // Round down to completed minutes
@@ -156,6 +158,8 @@ export async function runGapScan(windowDays = 1): Promise<void> {
   } catch (err) {
     logError("[gapDetector] runGapScan failed:", err);
     await recordError("healer", "runGapScan", String(err));
+  } finally {
+    endActivity("gapScan");
   }
 }
 

@@ -23,6 +23,7 @@ import {
   startRepairJob, previewRepair, getRepairJob, getActiveRepairJob, cancelRepairJob,
   isRepairInProgress, validateRepairWindow,
 } from "../../lib/repairJobs.js";
+import { getHealerActivities } from "../../lib/healerStatus.js";
 import { logError } from "../../lib/log.js";
 
 const router = Router();
@@ -270,6 +271,14 @@ router.post("/repair", ...modify, async (req, res) => {
     logError("[monitor] POST /repair start failed:", err);
     return res.status(500).json({ error: String(err) });
   }
+});
+
+/**
+ * GET /monitor/healer/status — returns the currently-running healer activities
+ * (boot backfill, hourly gap scan, low-confidence re-heal). Empty array = idle.
+ */
+router.get("/healer/status", ...view, (_req, res) => {
+  return res.json({ activities: getHealerActivities() });
 });
 
 /**

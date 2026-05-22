@@ -3,9 +3,60 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   getApiKeys, createApiKey, revokeApiKey, toggleApiKey, repairApiKeyNonce,
   getConfig, saveConfig, getSourcesStatus,
+  getHealerStatus,
   type ApiKey,
 } from "@/lib/api";
 import RepairRangePanel from "./-RepairRangePanel";
+
+// ── healer activity card ─────────────────────────────────────────────────────
+
+function formatHealerElapsed(ms: number): string {
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  const m = Math.floor(ms / 60_000);
+  if (m < 60) return `${m}m ${Math.floor((ms % 60_000) / 1000)}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+function HealerStatusCard() {
+  // Poll every 3s — healer activities can be short (gapScan often <1s) so a
+  // slow poll would frequently miss them. Cheap call: just reads an in-memory Map.
+  const { data } = useQuery({
+    queryKey: ["healer", "status"],
+    queryFn: getHealerStatus,
+    refetchInterval: 3000,
+  });
+  const activities = data?.activities ?? [];
+  const now = Date.now();
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-sm font-medium text-gray-200">Healer</h3>
+        <span className={`text-xs font-mono ${activities.length ? "text-blue-400" : "text-gray-500"}`}>
+          {activities.length ? `${activities.length} active` : "idle"}
+        </span>
+      </div>
+      {activities.length === 0 ? (
+        <div className="text-xs text-gray-500">
+          No heal activity. Runs automatically: ~30s after boot, hourly gap scan, on &gt;100 detected gaps.
+        </div>
+      ) : (
+        <ul className="space-y-1.5">
+          {activities.map((a) => (
+            <li key={a.name} className="text-sm text-gray-300 flex items-baseline justify-between">
+              <span className="font-mono">{a.name}</span>
+              <span className="text-xs text-gray-500">
+                {a.meta && Object.keys(a.meta).length > 0
+                  ? Object.entries(a.meta).map(([k, v]) => `${k}=${String(v)}`).join(" ") + " · "
+                  : null}
+                running {formatHealerElapsed(now - new Date(a.startedAt).getTime())}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 function KeyRow({ k }: { k: ApiKey }) {
   const qc = useQueryClient();
@@ -208,6 +259,7 @@ export default function AdminTab() {
   return (
     <div className="p-4 space-y-6 max-w-3xl">
       <ApiKeysSection />
+      <HealerStatusCard />
       <RepairRangePanel sourceNames={sourceNames} />
       <ConfigSection />
     </div>

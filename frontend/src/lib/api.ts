@@ -190,6 +190,15 @@ export const getRepairJob = (jobId: string) =>
   req<RepairJobState>(`/monitor/repair/jobs/${jobId}`);
 export const getActiveRepairJob = () =>
   req<RepairJobState | null>("/monitor/repair/current");
+
+// Healer activity (boot backfill, gap scan, low-confidence reheal).
+export interface HealerActivity {
+  name: string;
+  startedAt: string;
+  meta?: Record<string, unknown>;
+}
+export const getHealerStatus = () =>
+  req<{ activities: HealerActivity[] }>("/monitor/healer/status");
 export const cancelRepairJob = (jobId: string) =>
   req<{ ok: boolean }>(`/monitor/repair/jobs/${jobId}/cancel`, { method: "POST" });
 
