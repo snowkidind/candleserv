@@ -5,7 +5,8 @@
  * plus a `repairInProgress` single-flight flag. Server restart during a
  * running job means the job dies; the operator re-runs.
  *
- * State machine: queued → ensuring → recomposing → done | failed | cancelled.
+ * State machine: queued → ensuring → backfilling → recomposing → done | failed | cancelled.
+ * (backfilling = stable-rate backfill per Phase 5 of the stablecoin-aware index plan.)
  *
  * Single-flight: only one job at a time. Auto-suspend formula edits and
  * operator PUT /monitor/formula still work during a repair (the formula is
@@ -15,6 +16,8 @@
 import crypto from "node:crypto";
 import { ensureSourceCoverage, recomposeRange } from "./repair.js";
 import type { EnsureSourceCoverageResult, RecomposeRangeResult } from "./repair.js";
+import { backfillStableRates } from "./stableRateBackfill.js";
+import type { BackfillStableRatesResult } from "./stableRateBackfill.js";
 import { SOURCE_NAMES } from "../adapters/registry.js";
 import { getCurrentFormula } from "../db/formulaChanges.js";
 import { closeAllListeners } from "./emitter.js";
@@ -28,6 +31,7 @@ export interface Formula {
 export type RepairJobPhase =
   | "queued"
   | "ensuring"
+  | "backfilling"
   | "recomposing"
   | "done"
   | "failed"
@@ -48,6 +52,7 @@ export interface RepairJobState {
 
   // Per-phase results — populated as phases complete.
   ensure: EnsureSourceCoverageResult | null;
+  backfill: BackfillStableRatesResult | null;
   recompose: RecomposeRangeResult | null;
 
   // Final outcome.
@@ -110,6 +115,7 @@ export function startRepairJob(req: StartRepairJobRequest): { jobId: string } {
     formula:    req.formula,
     retryEmpty: req.retryEmpty,
     ensure:    null,
+    backfill:  null,
     recompose: null,
   };
   jobs.set(jobId, { state, controller });
@@ -156,7 +162,27 @@ async function runRepairJob(jobId: string, controller: AbortController): Promise
       return;
     }
 
-    // Phase 2: recomposeRange.
+    // Phase 2: backfillStableRates. FK-safe — only inserts rate rows where
+    // the BTC row exists, which the ensure phase has just guaranteed.
+    state.state = "backfilling";
+    const backfill = await backfillStableRates(
+      new Date(state.from),
+      new Date(state.to),
+      {
+        sources: state.sources,
+        signal: controller.signal,
+      },
+    );
+    state.backfill = backfill;
+
+    if (controller.signal.aborted) {
+      state.state = "cancelled";
+      state.finishedAt = new Date().toISOString();
+      log(`[repair-job] ${jobId} cancelled after backfill phase`);
+      return;
+    }
+
+    // Phase 3: recomposeRange.
     state.state = "recomposing";
     const recompose = await recomposeRange(
       new Date(state.from),
@@ -182,7 +208,7 @@ async function runRepairJob(jobId: string, controller: AbortController): Promise
       archiveRowsFetched: ensure.rowsFetched,
     };
     state.finishedAt = new Date().toISOString();
-    log(`[repair-job] ${jobId} done: ${recompose.recomposed} rows recomposed, ${ensure.rowsFetched} archive rows fetched`);
+    log(`[repair-job] ${jobId} done: ${recompose.recomposed} rows recomposed, ${ensure.rowsFetched} archive rows fetched, ${backfill.rowsInserted} stable rates filled`);
   } catch (err) {
     state.state = "failed";
     state.error = String(err);
