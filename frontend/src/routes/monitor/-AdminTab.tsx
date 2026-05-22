@@ -18,12 +18,13 @@ function formatHealerElapsed(ms: number): string {
 }
 
 function HealerStatusCard() {
-  // Poll every 3s — healer activities can be short (gapScan often <1s) so a
-  // slow poll would frequently miss them. Cheap call: just reads an in-memory Map.
+  // Poll every 10s. Short healer activities (gapScan, often <1s) will be
+  // missed at this cadence — that's acceptable since the card's purpose is
+  // to surface the long-running cases (boot backfill, low-confidence reheal).
   const { data } = useQuery({
     queryKey: ["healer", "status"],
     queryFn: getHealerStatus,
-    refetchInterval: 3000,
+    refetchInterval: 10_000,
   });
   const activities = data?.activities ?? [];
   const now = Date.now();
