@@ -1,7 +1,7 @@
-import { ADAPTERS, ADAPTER_BY_NAME, SOURCE_NAMES } from "../adapters/registry.js";
+import { ADAPTERS, ADAPTER_BY_NAME, SOURCE_NAMES, type Adapter } from "../adapters/registry.js";
 import { applyGuards } from "./composite.js";
 import { composeMinute } from "./compose.js";
-import { upsertSourceCandle, getSourceCountBaseline, getRecentCloseStddev, getTrailingVolumeLeader, get24hSourceStats } from "../db/candles.js";
+import { getSourceCountBaseline, getRecentCloseStddev, getTrailingVolumeLeader, get24hSourceStats } from "../db/candles.js";
 import { recordError } from "../db/errors.js";
 import { candleEmitter } from "./emitter.js";
 import { rowToJson } from "../db/candles.js";
@@ -14,8 +14,9 @@ import {
   insertFormulaChange,
   recordFailure,
 } from "../db/formulaChanges.js";
+import { withTransaction } from "../db/pool.js";
 import { log, logError, logWarn } from "./log.js";
-import type { SourceResult } from "../types/index.js";
+import type { SourceCandle, SourceResult } from "../types/index.js";
 
 const DEADLINE_MS = 15000; // 15 seconds from :00 to write
 
@@ -155,28 +156,65 @@ export function getSourceStatus(): Record<string, SourceStatus> {
 }
 
 /**
- * Fetch one 1m candle from a single source. Short-circuits when the formula
- * excludes the source — excluded adapters are never called.
+ * Per-venue bundle: the BTC candle and the venue's local USDT/USD rate are a
+ * single observation. Either both halves succeed and persist, or the venue
+ * fails for that minute. See plan: candleserv-stablecoin-aware-index §Phase 1.
  */
-async function fetchOne(source: string, minuteTs: Date): Promise<SourceResult> {
-  if (getCurrentFormula().excludedSources.includes(source)) {
-    return { source, candle: null, error: "formula-excluded" };
+interface VenueBundle {
+  source: string;
+  candle: SourceCandle | null;
+  rate: number | null;            // null when adapter.normalize.pegFetcher is null (USD-native)
+  pegSourcePair: string | null;   // provenance for the stable rate row
+  error?: string;
+  durationMs?: number;
+}
+
+/**
+ * Fetch one venue's BTC candle + local stable rate as an atomic bundle.
+ * Short-circuits when the formula excludes the source.
+ *
+ * Preserves the operational side-effects of the prior `fetchOne` exactly:
+ *   - on bundle success → lastFetchAt[source] = now + recordLiveFetchState("on")
+ *   - on bundle failure (either half) → recordLiveFetchState("error")
+ *     plus recordFailure / checkAutoSuspend
+ * The venue is the atomic unit of observation; a half-failed bundle is a
+ * venue-level error and the operational UI's status dot reflects that.
+ */
+async function fetchVenueBundle(adapter: Adapter, minuteTs: Date): Promise<VenueBundle> {
+  if (getCurrentFormula().excludedSources.includes(adapter.name)) {
+    return { source: adapter.name, candle: null, rate: null, pegSourcePair: null, error: "formula-excluded" };
   }
-  const adapter = ADAPTER_BY_NAME[source];
-  if (!adapter) return { source, candle: null, error: "unknown source" };
 
   const t0 = Date.now();
   try {
-    const candle = await adapter.fetchOne(minuteTs);
-    lastFetchAt[source] = new Date();
-    recordLiveFetchState(source, "on");
-    return { source, candle, durationMs: Date.now() - t0 };
+    const [candle, rate] = await Promise.all([
+      adapter.fetchOne(minuteTs),
+      adapter.normalize.pegFetcher
+        ? adapter.normalize.pegFetcher(minuteTs)
+        : Promise.resolve(null),
+    ]);
+    lastFetchAt[adapter.name] = new Date();
+    recordLiveFetchState(adapter.name, "on");
+    return {
+      source: adapter.name,
+      candle,
+      rate,
+      pegSourcePair: adapter.normalize.pegSourcePair,
+      durationMs: Date.now() - t0,
+    };
   } catch (err) {
-    recordFailure(source);
-    await checkAutoSuspend(source);
-    recordLiveFetchState(source, "error");
-    await recordError("collector", `fetchOne:${source}`, String(err));
-    return { source, candle: null, error: String(err), durationMs: Date.now() - t0 };
+    recordFailure(adapter.name);
+    await checkAutoSuspend(adapter.name);
+    recordLiveFetchState(adapter.name, "error");
+    await recordError("collector", `fetchVenueBundle:${adapter.name}`, String(err));
+    return {
+      source: adapter.name,
+      candle: null,
+      rate: null,
+      pegSourcePair: null,
+      error: String(err),
+      durationMs: Date.now() - t0,
+    };
   }
 }
 
@@ -194,10 +232,10 @@ export async function collect(minuteTs: Date): Promise<boolean> {
   const deadline = Date.now() + DEADLINE_MS;
 
   try {
-    const results = await Promise.all(ADAPTERS.map((a) => fetchOne(a.name, minuteTs)));
+    const bundles = await Promise.all(ADAPTERS.map((a) => fetchVenueBundle(a, minuteTs)));
 
     if (Date.now() > deadline) {
-      const timings = results.map(r => `${r.source}:${r.durationMs ?? "?"}ms`).join(" ");
+      const timings = bundles.map(b => `${b.source}:${b.durationMs ?? "?"}ms`).join(" ");
       logError(`[collector] deadline exceeded for ${minuteTs.toISOString()} — ${timings}`);
       await recordError("collector", "deadline", `Deadline exceeded for ${minuteTs.toISOString()} — ${timings}`);
       return false;
@@ -207,19 +245,62 @@ export async function collect(minuteTs: Date): Promise<boolean> {
     const baseline     = await getSourceCountBaseline();
     const sigma        = await getRecentCloseStddev();
     const volumeLeader = await getTrailingVolumeLeader(10);
-    const guarded      = applyGuards(results, minSources, sigma);
-
-    // Step 1: write every fetched source's row to the archive with its
-    // rejected/rejectedReason verdict from applyGuards. usedInFormula is left
-    // NULL deliberately — composeMinute sets it in a single bulk UPDATE.
-    for (const g of guarded) {
-      if (!g.candle) continue;
-      await upsertSourceCandle({
-        timestamp: minuteTs, source: g.source, ...g.candle,
-        rejected: g.rejected, rejectedReason: g.rejectedReason,
-        usedInFormula: null,
-      });
+    // applyGuards consumes the BTC half of each bundle; the rate half is
+    // carried alongside via the per-source map below.
+    const results: SourceResult[] = bundles.map((b) => ({
+      source: b.source,
+      candle: b.candle,
+      ...(b.error ? { error: b.error } : {}),
+      ...(b.durationMs !== undefined ? { durationMs: b.durationMs } : {}),
+    }));
+    const ratesBySource = new Map<string, { rate: number; pegSourcePair: string }>();
+    for (const b of bundles) {
+      if (b.rate !== null && b.pegSourcePair !== null) {
+        ratesBySource.set(b.source, { rate: b.rate, pegSourcePair: b.pegSourcePair });
+      }
     }
+    const guarded = applyGuards(results, minSources, sigma);
+
+    // Step 1: write every fetched source's BTC row + its paired stable rate
+    // row in a single transaction. The FK on stable_rates_1m_sources requires
+    // the BTC row to be inserted first; both inserts run on the same
+    // connection so the constraint is satisfied at commit. Rate row persists
+    // whenever the rate fetch succeeded — including when the BTC row was
+    // outlier-rejected. See plan §Phase 1 "On guard-rejection semantics for
+    // the rate row." usedInFormula is left NULL — composeMinute bulk-updates
+    // it.
+    await withTransaction(async (client) => {
+      for (const g of guarded) {
+        if (!g.candle) continue;
+        // Inline the BTC insert directly here — do NOT call upsertSourceCandle
+        // (it acquires its own pool connection and would break atomicity).
+        await client.query(
+          `INSERT INTO candles_1m_sources
+             ("timestamp","source","open","high","low","close","volume","rejected","rejectedReason","usedInFormula")
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+           ON CONFLICT ("timestamp","source") DO UPDATE SET
+             open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, close = EXCLUDED.close,
+             volume = EXCLUDED.volume, rejected = EXCLUDED.rejected, "rejectedReason" = EXCLUDED."rejectedReason",
+             "usedInFormula" = EXCLUDED."usedInFormula",
+             "updatedAt" = NOW()`,
+          [minuteTs, g.source, g.candle.open, g.candle.high, g.candle.low, g.candle.close, g.candle.volume,
+           g.rejected, g.rejectedReason ?? null, null],
+        );
+        const rate = ratesBySource.get(g.source);
+        if (rate) {
+          await client.query(
+            `INSERT INTO stable_rates_1m_sources
+               ("timestamp","source","rate","pegSourcePair")
+             VALUES ($1,$2,$3,$4)
+             ON CONFLICT ("timestamp","source") DO UPDATE SET
+               rate = EXCLUDED.rate,
+               "pegSourcePair" = EXCLUDED."pegSourcePair",
+               "updatedAt" = NOW()`,
+            [minuteTs, g.source, rate.rate, rate.pegSourcePair],
+          );
+        }
+      }
+    });
 
     if (Date.now() > deadline) {
       logError(`[collector] deadline exceeded after archive writes for ${minuteTs.toISOString()} — skipping compose`);

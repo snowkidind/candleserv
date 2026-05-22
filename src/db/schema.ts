@@ -50,6 +50,28 @@ ALTER TABLE candles_1m_sources ADD COLUMN IF NOT EXISTS "usedInFormula" boolean;
 ALTER TABLE candles_1m_sources ADD COLUMN IF NOT EXISTS "createdAt"     timestamptz NOT NULL DEFAULT NOW();
 ALTER TABLE candles_1m_sources ADD COLUMN IF NOT EXISTS "updatedAt"     timestamptz NOT NULL DEFAULT NOW();
 
+-- Per-venue local USDT/USD rate paired with each USDT BTC candle. See plan:
+-- candleserv-stablecoin-aware-index §Phase 1. The FK enforces the bundle
+-- invariant: a stable rate row cannot exist without its corresponding BTC
+-- candle row for the same (minute, venue). ON DELETE CASCADE handles symmetric
+-- cleanup (BTC row pruned → stable row goes with it).
+CREATE TABLE IF NOT EXISTS stable_rates_1m_sources (
+  "timestamp"      timestamptz  NOT NULL,
+  "source"         varchar      NOT NULL,
+  "rate"           numeric      NOT NULL,
+  "pegSourcePair"  varchar      NOT NULL,
+  "rejected"       boolean      NOT NULL DEFAULT false,
+  "rejectedReason" varchar,
+  "createdAt"      timestamptz  NOT NULL DEFAULT NOW(),
+  "updatedAt"      timestamptz  NOT NULL DEFAULT NOW(),
+  PRIMARY KEY ("timestamp", "source"),
+  FOREIGN KEY ("timestamp", "source")
+    REFERENCES candles_1m_sources ("timestamp", "source")
+    ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS stable_rates_1m_sources_ts_desc
+  ON stable_rates_1m_sources ("timestamp" DESC);
+
 CREATE TABLE IF NOT EXISTS service_errors (
   "id"        serial       PRIMARY KEY,
   "service"   text         NOT NULL,

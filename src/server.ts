@@ -8,6 +8,7 @@ import { runBackfill } from "./lib/healer.js";
 import { startGapDetector } from "./lib/gapDetector.js";
 import { pruneOldSessions } from "./db/sessions.js";
 import { pruneSourceCandles } from "./db/candles.js";
+import { pruneOldStableRates } from "./db/stableRates.js";
 import { initRedis } from "./lib/redis.js";
 import { createSchema } from "./db/schema.js";
 import { getSetting } from "./db/appSettings.js";
@@ -103,11 +104,15 @@ async function main(): Promise<void> {
       startGapDetector().catch((err) => logError("[server] gap detector error:", err));
     }, 30_000);
 
-    // Daily maintenance: prune sessions + source candles
+    // Daily maintenance: prune sessions + source candles + stable rates.
+    // ON DELETE CASCADE on stable_rates_1m_sources also fires from
+    // pruneSourceCandles; pruneOldStableRates is the symmetric direct path
+    // for safety.
     setInterval(async () => {
       try {
         await pruneOldSessions();
         await pruneSourceCandles();
+        await pruneOldStableRates();
         log("[server] daily maintenance complete");
       } catch (err) {
         logError("[server] maintenance error:", err);

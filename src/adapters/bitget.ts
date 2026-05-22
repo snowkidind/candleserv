@@ -27,6 +27,71 @@ function parseRow(row: unknown[]): { timestamp: Date; candle: SourceCandle } {
   };
 }
 
+// Local stable-rate sanity bounds. See plan: candleserv-stablecoin-aware-index
+// §Phase 1 "Sanity bounds on stable rate."
+const STABLE_RATE_MIN = 0.50;
+const STABLE_RATE_MAX = 1.50;
+
+function checkRateBound(name: string, rate: number): number {
+  if (!Number.isFinite(rate) || rate < STABLE_RATE_MIN || rate > STABLE_RATE_MAX) {
+    throw new Error(`${name}: stable rate ${rate} outside sanity bounds [${STABLE_RATE_MIN}, ${STABLE_RATE_MAX}]`);
+  }
+  return rate;
+}
+
+/**
+ * Bitget local USDT/USD rate. Derivation: rate = 1 / USDCUSDT close (USDC ≈ $1).
+ * See plan §Per-venue stable rates.
+ */
+export async function fetchBitgetStableRate(minuteTs: Date): Promise<number> {
+  const startTime = minuteTs.getTime();
+  const endTime   = startTime + 60000;
+  const url = `${BASE}/api/v2/spot/market/candles?symbol=USDCUSDT&granularity=1min&startTime=${startTime}&endTime=${endTime}&limit=1`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json() as { data?: unknown[][]; code?: string; msg?: string };
+    if (json.code && json.code !== "00000") throw new Error(`Bitget ${json.code}: ${json.msg ?? "error"}`);
+    const data = json.data ?? [];
+    if (!data.length) throw new Error("No USDCUSDT candle returned");
+    const close = Number(data[0][4]);
+    return checkRateBound("bitget.USDCUSDT", 1 / close);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Range backfill — same shape as fetchBitgetRange but reads USDCUSDT.
+ */
+export async function fetchBitgetStableRange(endTime: Date, limit: number): Promise<{ timestamp: Date; rate: number }[]> {
+  const endMs   = endTime.getTime();
+  const want    = Math.min(limit, 1000);
+  const startMs = endMs - want * 60000;
+  const url = `${BASE}/api/v2/spot/market/candles?symbol=USDCUSDT&granularity=1min&startTime=${startMs}&endTime=${endMs}&limit=${want}`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), RANGE_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json() as { data?: unknown[][]; code?: string; msg?: string };
+    if (json.code && json.code !== "00000") throw new Error(`Bitget ${json.code}: ${json.msg ?? "error"}`);
+    const data = json.data ?? [];
+    return data
+      .map((row) => ({
+        timestamp: new Date(Number(row[0])),
+        rate: checkRateBound("bitget.USDCUSDT", 1 / Number(row[4])),
+      }))
+      .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function fetchBitgetCandle(minuteTs: Date): Promise<SourceCandle> {
   const startTime = minuteTs.getTime();
   const endTime   = startTime + 60000;

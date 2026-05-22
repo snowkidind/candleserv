@@ -1,31 +1,109 @@
 import type { SourceCandle } from "../types/index.js";
-import { fetchBinanceCandle, fetchBinanceRange } from "./binance.js";
-import { fetchBybitCandle, fetchBybitRange } from "./bybit.js";
+import {
+  fetchBinanceCandle, fetchBinanceRange,
+  fetchBinanceStableRate, fetchBinanceStableRange,
+} from "./binance.js";
+import {
+  fetchBybitCandle, fetchBybitRange,
+  fetchBybitStableRate, fetchBybitStableRange,
+} from "./bybit.js";
 import { fetchKrakenCandle, fetchKrakenRange } from "./kraken.js";
 import { fetchCoinbaseCandle, fetchCoinbaseRange } from "./coinbase.js";
 import { fetchBitfinexCandle, fetchBitfinexRange } from "./bitfinex.js";
 import { fetchOkxCandle, fetchOkxRange } from "./okx.js";
-import { fetchGateCandle, fetchGateRange } from "./gate.js";
-import { fetchBitgetCandle, fetchBitgetRange } from "./bitget.js";
+import {
+  fetchGateCandle, fetchGateRange,
+  fetchGateStableRate, fetchGateStableRange,
+} from "./gate.js";
+import {
+  fetchBitgetCandle, fetchBitgetRange,
+  fetchBitgetStableRate, fetchBitgetStableRange,
+} from "./bitget.js";
+
+/**
+ * Per-venue normalization profile. See plan:
+ * candleserv-stablecoin-aware-index §Per-source normalization profile.
+ *
+ * The peg fetcher is attached directly to the adapter (rather than a separate
+ * stable-adapter registry) so the BTC quote and the local stable rate are a
+ * single typed bundle — either both succeed for the minute or neither does.
+ */
+export interface NormalizationProfile {
+  // Returns the local stable→USD rate for the given minute boundary. Throws on
+  // failure — failure bundles with BTC fetch failure in the collector.
+  // null = identity (USD-native venue; no peg adjustment).
+  pegFetcher: ((ts: Date) => Promise<number>) | null;
+  // Range backfill, mirroring the BTC fetchRange interface. null when pegFetcher is null.
+  pegFetcherRange: ((endTime: Date, limit: number) => Promise<{ timestamp: Date; rate: number }[]>) | null;
+  // Provenance — recorded on every stable_rates_1m_sources row. null when pegFetcher is null.
+  pegSourcePair: string | null;
+  // true: premium offset correction applies to O/H/L/C
+  // false: correction applies only to O/C (wicks preserved)
+  applyOffsetToWicks: boolean;
+}
 
 export interface Adapter {
   name: string;
   bit: number;
   fetchOne: (ts: Date) => Promise<SourceCandle>;
   fetchRange: (endTime: Date, limit: number) => Promise<{ timestamp: Date; candle: SourceCandle }[]>;
+  normalize: NormalizationProfile;
 }
+
+const USD_NATIVE: NormalizationProfile = {
+  pegFetcher: null,
+  pegFetcherRange: null,
+  pegSourcePair: null,
+  applyOffsetToWicks: true,
+};
 
 // Bit numbers are part of the on-disk bitmask format and must remain stable forever.
 // Only ever append to this list.
 export const ADAPTERS: Adapter[] = [
-  { name: "binance",  bit: 0, fetchOne: fetchBinanceCandle,  fetchRange: fetchBinanceRange  },
-  { name: "bybit",    bit: 1, fetchOne: fetchBybitCandle,    fetchRange: fetchBybitRange    },
-  { name: "kraken",   bit: 2, fetchOne: fetchKrakenCandle,   fetchRange: fetchKrakenRange   },
-  { name: "coinbase", bit: 3, fetchOne: fetchCoinbaseCandle, fetchRange: fetchCoinbaseRange },
-  { name: "bitfinex", bit: 4, fetchOne: fetchBitfinexCandle, fetchRange: fetchBitfinexRange },
-  { name: "okx",      bit: 5, fetchOne: fetchOkxCandle,      fetchRange: fetchOkxRange      },
-  { name: "gate",     bit: 6, fetchOne: fetchGateCandle,     fetchRange: fetchGateRange     },
-  { name: "bitget",   bit: 7, fetchOne: fetchBitgetCandle,   fetchRange: fetchBitgetRange   },
+  {
+    name: "binance",  bit: 0,
+    fetchOne: fetchBinanceCandle,  fetchRange: fetchBinanceRange,
+    normalize: {
+      pegFetcher: fetchBinanceStableRate,
+      pegFetcherRange: fetchBinanceStableRange,
+      pegSourcePair: "USDCUSDT",
+      applyOffsetToWicks: true,
+    },
+  },
+  {
+    name: "bybit",    bit: 1,
+    fetchOne: fetchBybitCandle,    fetchRange: fetchBybitRange,
+    normalize: {
+      pegFetcher: fetchBybitStableRate,
+      pegFetcherRange: fetchBybitStableRange,
+      pegSourcePair: "USDTUSD",
+      applyOffsetToWicks: true,
+    },
+  },
+  { name: "kraken",   bit: 2, fetchOne: fetchKrakenCandle,   fetchRange: fetchKrakenRange,   normalize: USD_NATIVE },
+  { name: "coinbase", bit: 3, fetchOne: fetchCoinbaseCandle, fetchRange: fetchCoinbaseRange, normalize: USD_NATIVE },
+  { name: "bitfinex", bit: 4, fetchOne: fetchBitfinexCandle, fetchRange: fetchBitfinexRange, normalize: USD_NATIVE },
+  { name: "okx",      bit: 5, fetchOne: fetchOkxCandle,      fetchRange: fetchOkxRange,      normalize: USD_NATIVE },
+  {
+    name: "gate",     bit: 6,
+    fetchOne: fetchGateCandle,     fetchRange: fetchGateRange,
+    normalize: {
+      pegFetcher: fetchGateStableRate,
+      pegFetcherRange: fetchGateStableRange,
+      pegSourcePair: "USDC_USDT",
+      applyOffsetToWicks: true,
+    },
+  },
+  {
+    name: "bitget",   bit: 7,
+    fetchOne: fetchBitgetCandle,   fetchRange: fetchBitgetRange,
+    normalize: {
+      pegFetcher: fetchBitgetStableRate,
+      pegFetcherRange: fetchBitgetStableRange,
+      pegSourcePair: "USDCUSDT",
+      applyOffsetToWicks: true,
+    },
+  },
 ];
 
 export const SOURCE_NAMES: string[] = ADAPTERS.map((a) => a.name);

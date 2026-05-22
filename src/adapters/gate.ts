@@ -49,6 +49,74 @@ function parseRow(row: unknown[]): { timestamp: Date; candle: SourceCandle } {
   };
 }
 
+// Local stable-rate sanity bounds. See plan: candleserv-stablecoin-aware-index
+// §Phase 1 "Sanity bounds on stable rate."
+const STABLE_RATE_MIN = 0.50;
+const STABLE_RATE_MAX = 1.50;
+
+function checkRateBound(name: string, rate: number): number {
+  if (!Number.isFinite(rate) || rate < STABLE_RATE_MIN || rate > STABLE_RATE_MAX) {
+    throw new Error(`${name}: stable rate ${rate} outside sanity bounds [${STABLE_RATE_MIN}, ${STABLE_RATE_MAX}]`);
+  }
+  return rate;
+}
+
+// Gate row layout: [ts_str, vol_quote, close, high, low, open, vol_base, ...]
+// "close" is at index 2 (different from every other adapter's OHLCV order).
+function parseStableRow(row: unknown[]): { timestamp: Date; rate: number } {
+  const tsSec = Number(row[0]);
+  const close = Number(row[2]);
+  return {
+    timestamp: new Date(tsSec * 1000),
+    rate: checkRateBound("gate.USDC_USDT", 1 / close),
+  };
+}
+
+/**
+ * Gate local USDT/USD rate. Derivation: rate = 1 / USDC_USDT close (USDC ≈ $1).
+ * See plan §Per-venue stable rates.
+ */
+export async function fetchGateStableRate(minuteTs: Date): Promise<number> {
+  const fromSec = Math.floor(minuteTs.getTime() / 1000);
+  const toSec   = fromSec + 60;
+  const url = `${BASE}/api/v4/spot/candlesticks?currency_pair=USDC_USDT&interval=1m&from=${fromSec}&to=${toSec}&limit=1`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    await throwIfNotOk(res);
+    const data = await res.json() as unknown[][];
+    if (!Array.isArray(data) || !data.length) throw new Error("No USDC_USDT candle returned");
+    return parseStableRow(data[0]).rate;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Range backfill — USDC_USDT candles.
+ */
+export async function fetchGateStableRange(endTime: Date, limit: number): Promise<{ timestamp: Date; rate: number }[]> {
+  const toSec   = Math.floor(endTime.getTime() / 1000);
+  const fromSec = toSec - Math.min(limit, 1000) * 60;
+  const url = `${BASE}/api/v4/spot/candlesticks?currency_pair=USDC_USDT&interval=1m&from=${fromSec}&to=${toSec}&limit=${Math.min(limit, 1000)}`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), RANGE_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    await throwIfNotOk(res);
+    const data = await res.json() as unknown[][];
+    if (!Array.isArray(data)) throw new Error("Unexpected response shape");
+    return data
+      .map(parseStableRow)
+      .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function fetchGateCandle(minuteTs: Date): Promise<SourceCandle> {
   const fromSec = Math.floor(minuteTs.getTime() / 1000);
   const toSec   = fromSec + 60;
