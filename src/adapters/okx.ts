@@ -35,7 +35,7 @@ export async function fetchOkxCandle(minuteTs: Date): Promise<SourceCandle> {
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
     const json = await res.json() as { data?: OkxRow[]; code?: string; msg?: string };
     if (json.code && json.code !== "0") throw new Error(`OKX ${json.code}: ${json.msg ?? "error"}`);
     const data = json.data ?? [];
@@ -71,7 +71,7 @@ export async function fetchOkxRange(endTime: Date, limit: number): Promise<{ tim
     let data: OkxRow[];
     try {
       const res = await fetch(url, { signal: controller.signal });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
       const json = await res.json() as { data?: OkxRow[]; code?: string; msg?: string };
       if (json.code && json.code !== "0") throw new Error(`OKX ${json.code}: ${json.msg ?? "error"}`);
       data = json.data ?? [];

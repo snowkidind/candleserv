@@ -16,7 +16,7 @@ export async function fetchBitfinexRange(endTime: Date, limit: number): Promise<
 
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
     const data = await res.json() as unknown[][];
     // Bitfinex: [mts, open, close, high, low, volume]
     return data.map((row) => ({
@@ -44,7 +44,7 @@ export async function fetchBitfinexCandle(minuteTs: Date): Promise<SourceCandle>
 
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
     const data = await res.json() as unknown[][];
     if (!data.length) throw new Error("No candle returned");
 

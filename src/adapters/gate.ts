@@ -23,15 +23,17 @@ const RANGE_TIMEOUT_MS = 30000;
 // Gate caps historical 1m candles at 10,000 points (~6.9 days) and returns
 // HTTP 400 with label "INVALID_PARAM_VALUE" + message "Candlestick too long
 // ago…" when asked for older data. Distinct from a real failure.
-async function throwIfNotOk(res: Response): Promise<void> {
+async function throwIfNotOk(res: Response, url: string): Promise<void> {
   if (res.ok) return;
-  if (res.status === 400) {
-    const body = await res.clone().json().catch(() => null) as { label?: string; message?: string } | null;
-    if (body?.label === "INVALID_PARAM_VALUE" && /too long ago/i.test(body.message ?? "")) {
-      throw new OutOfHistoryError("gate", body.message ?? "Candlestick too long ago");
+  const body = await res.clone().text().catch(() => "");
+  if (res.status === 400 && body) {
+    let parsed: { label?: string; message?: string } | null = null;
+    try { parsed = JSON.parse(body) as { label?: string; message?: string }; } catch { /* not JSON; fall through to generic throw */ }
+    if (parsed?.label === "INVALID_PARAM_VALUE" && /too long ago/i.test(parsed.message ?? "")) {
+      throw new OutOfHistoryError("gate", parsed.message ?? "Candlestick too long ago");
     }
   }
-  throw new Error(`HTTP ${res.status}`);
+  throw new Error(`HTTP ${res.status} ${url}${body ? ` body=${body.slice(0, 300)}` : ""}`);
 }
 
 function parseRow(row: unknown[]): { timestamp: Date; candle: SourceCandle } {
@@ -85,7 +87,7 @@ export async function fetchGateStableRate(minuteTs: Date): Promise<number> {
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
     const res = await fetch(url, { signal: controller.signal });
-    await throwIfNotOk(res);
+    await throwIfNotOk(res, url);
     const data = await res.json() as unknown[][];
     if (!Array.isArray(data) || !data.length) throw new Error("No USDC_USDT candle returned");
     return parseStableRow(data[0]).rate;
@@ -106,7 +108,7 @@ export async function fetchGateStableRange(endTime: Date, limit: number): Promis
   const timer = setTimeout(() => controller.abort(), RANGE_TIMEOUT_MS);
   try {
     const res = await fetch(url, { signal: controller.signal });
-    await throwIfNotOk(res);
+    await throwIfNotOk(res, url);
     const data = await res.json() as unknown[][];
     if (!Array.isArray(data)) throw new Error("Unexpected response shape");
     return data
@@ -126,7 +128,7 @@ export async function fetchGateCandle(minuteTs: Date): Promise<SourceCandle> {
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
     const res = await fetch(url, { signal: controller.signal });
-    await throwIfNotOk(res);
+    await throwIfNotOk(res, url);
     const data = await res.json() as unknown[][];
     if (!Array.isArray(data) || !data.length) throw new Error("No candle returned");
     return parseRow(data[0]).candle;
@@ -144,7 +146,7 @@ export async function fetchGateRange(endTime: Date, limit: number): Promise<{ ti
   const timer = setTimeout(() => controller.abort(), RANGE_TIMEOUT_MS);
   try {
     const res = await fetch(url, { signal: controller.signal });
-    await throwIfNotOk(res);
+    await throwIfNotOk(res, url);
     const data = await res.json() as unknown[][];
     if (!Array.isArray(data)) throw new Error("Unexpected response shape");
     return data

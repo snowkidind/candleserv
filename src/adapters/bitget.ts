@@ -52,7 +52,7 @@ export async function fetchBitgetStableRate(minuteTs: Date): Promise<number> {
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
     const json = await res.json() as { data?: unknown[][]; code?: string; msg?: string };
     if (json.code && json.code !== "00000") throw new Error(`Bitget ${json.code}: ${json.msg ?? "error"}`);
     const data = json.data ?? [];
@@ -77,7 +77,7 @@ export async function fetchBitgetStableRange(endTime: Date, limit: number): Prom
   const timer = setTimeout(() => controller.abort(), RANGE_TIMEOUT_MS);
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
     const json = await res.json() as { data?: unknown[][]; code?: string; msg?: string };
     if (json.code && json.code !== "00000") throw new Error(`Bitget ${json.code}: ${json.msg ?? "error"}`);
     const data = json.data ?? [];
@@ -101,7 +101,7 @@ export async function fetchBitgetCandle(minuteTs: Date): Promise<SourceCandle> {
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
     const json = await res.json() as { data?: unknown[][]; code?: string; msg?: string };
     if (json.code && json.code !== "00000") throw new Error(`Bitget ${json.code}: ${json.msg ?? "error"}`);
     const data = json.data ?? [];
@@ -122,7 +122,7 @@ export async function fetchBitgetRange(endTime: Date, limit: number): Promise<{ 
   const timer = setTimeout(() => controller.abort(), RANGE_TIMEOUT_MS);
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
     const json = await res.json() as { data?: unknown[][]; code?: string; msg?: string };
     if (json.code && json.code !== "00000") throw new Error(`Bitget ${json.code}: ${json.msg ?? "error"}`);
     const data = json.data ?? [];

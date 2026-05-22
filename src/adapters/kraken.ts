@@ -19,7 +19,7 @@ export async function fetchKrakenRange(endTime: Date, limit: number): Promise<{ 
 
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
     const json = await res.json() as { error?: string[]; result?: Record<string, unknown[][]> };
     if (json.error?.length) throw new Error(json.error[0]);
 
@@ -57,7 +57,7 @@ export async function fetchKrakenCandle(minuteTs: Date): Promise<SourceCandle> {
 
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
     const json = await res.json() as { error?: string[]; result?: Record<string, unknown[][]> };
     if (json.error?.length) throw new Error(json.error[0]);
 

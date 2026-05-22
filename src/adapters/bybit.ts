@@ -15,7 +15,7 @@ export async function fetchBybitRange(endTime: Date, limit: number): Promise<{ t
 
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
     const json = await res.json() as { result?: { list?: unknown[][] } };
     const list = json.result?.list ?? [];
     return list
@@ -64,7 +64,7 @@ export async function fetchBybitStableRate(_minuteTs: Date): Promise<number> {
 
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
     const json = await res.json() as { result?: { list?: { usdIndexPrice?: string; lastPrice?: string }[] } };
     const row = json.result?.list?.[0];
     if (!row) throw new Error("No USDTUSD ticker returned");
@@ -92,7 +92,7 @@ export async function fetchBybitStableRange(endTime: Date, limit: number): Promi
 
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
     const json = await res.json() as { result?: { list?: unknown[][] } };
     const list = json.result?.list ?? [];
     return list
@@ -116,7 +116,7 @@ export async function fetchBybitCandle(minuteTs: Date): Promise<SourceCandle> {
 
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
     const json = await res.json() as { result?: { list?: unknown[][] } };
     const list = json.result?.list;
     if (!list?.length) throw new Error("No candle returned");

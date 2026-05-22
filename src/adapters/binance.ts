@@ -16,7 +16,7 @@ export async function fetchBinanceCandle(minuteTs: Date): Promise<SourceCandle> 
 
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
     let data = await res.json() as unknown[][];
 
     // Binance occasionally returns empty at the daily UTC boundary (00:00).
@@ -24,7 +24,7 @@ export async function fetchBinanceCandle(minuteTs: Date): Promise<SourceCandle> 
     if (!data.length) {
       await new Promise(resolve => setTimeout(resolve, 5000));
       const res2 = await fetch(url);
-      if (!res2.ok) throw new Error(`HTTP ${res2.status}`);
+      if (!res2.ok) throw new Error(`HTTP ${res2.status} ${url} (retry)`);
       data = await res2.json() as unknown[][];
     }
 
@@ -70,7 +70,7 @@ export async function fetchBinanceStableRate(minuteTs: Date): Promise<number> {
 
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
     const data = await res.json() as unknown[][];
     if (!data.length) throw new Error("No USDCUSDT candle returned");
     const close = Number(data[0][4]);
@@ -91,7 +91,7 @@ export async function fetchBinanceStableRange(endTime: Date, limit = 1000): Prom
 
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
     const data = await res.json() as unknown[][];
     return data.map((row) => ({
       timestamp: new Date(Number(row[0])),
@@ -113,7 +113,7 @@ export async function fetchBinanceRange(endTime: Date, limit = 1000): Promise<{ 
 
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
     const data = await res.json() as unknown[][];
     return data.map((row) => ({
       timestamp: new Date(Number(row[0])),

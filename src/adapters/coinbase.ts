@@ -15,7 +15,7 @@ async function fetchCoinbaseChunk(startTime: Date, endTime: Date): Promise<{ tim
 
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
     const data = await res.json() as unknown[][];
     // Coinbase: [timestamp_unix_s, low, high, open, close, volume]
     return data.map((row) => ({
@@ -65,7 +65,7 @@ export async function fetchCoinbaseCandle(minuteTs: Date): Promise<SourceCandle>
 
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
     const data = await res.json() as unknown[][];
     if (!data.length) throw new Error("No candle returned");
 
