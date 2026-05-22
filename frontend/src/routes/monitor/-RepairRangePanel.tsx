@@ -185,10 +185,25 @@ function RepairProgressPanel({
         )}
       </div>
 
-      {/* Phase 2: recompose */}
+      {/* Phase 2: backfill stable rates */}
+      <div className="mb-3 text-sm">
+        <div className="text-gray-300 mb-1">
+          2. backfillStableRates
+          {data.backfill ? <span className="text-gray-500 ml-2 text-xs">
+            ({data.backfill.rowsInserted.toLocaleString()} inserted, {data.backfill.rowsSkippedNoBtc.toLocaleString()} skipped no-btc)
+          </span> : data.state === "backfilling" ? <span className="text-blue-400 ml-2 text-xs">running…</span> : null}
+        </div>
+        {data.backfill && Object.keys(data.backfill.failedPerSource).length > 0 && (
+          <div className="text-xs text-red-400 mt-1">
+            Failed tiles by source: {Object.entries(data.backfill.failedPerSource).map(([k, v]) => `${k}: ${v}`).join(", ")}
+          </div>
+        )}
+      </div>
+
+      {/* Phase 3: recompose */}
       <div className="mb-4 text-sm">
         <div className="text-gray-300 mb-1">
-          2. recomposeRange
+          3. recomposeRange
           {data.recompose ? <span className="text-gray-500 ml-2 text-xs">
             ({data.recompose.recomposed.toLocaleString()} recomposed, {data.recompose.skippedNoSources.toLocaleString()} skipped no-sources)
           </span> : data.state === "recomposing" ? <span className="text-blue-400 ml-2 text-xs">running…</span> : null}

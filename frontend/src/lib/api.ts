@@ -153,7 +153,7 @@ export interface RepairPreview {
 }
 export interface RepairJobState {
   jobId: string;
-  state: "queued" | "ensuring" | "recomposing" | "done" | "failed" | "cancelled";
+  state: "queued" | "ensuring" | "backfilling" | "recomposing" | "done" | "failed" | "cancelled";
   startedAt: string;
   finishedAt: string | null;
   from: string;
@@ -165,6 +165,11 @@ export interface RepairJobState {
     rowsFetched: number;
     sentinelsWritten: number;
     skipped: number;
+    failedPerSource: Record<string, number>;
+  } | null;
+  backfill: {
+    rowsInserted: number;
+    rowsSkippedNoBtc: number;
     failedPerSource: Record<string, number>;
   } | null;
   recompose: { recomposed: number; skippedNoSources: number; failed: number } | null;
