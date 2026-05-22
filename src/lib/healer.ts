@@ -155,7 +155,10 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
       // and unchanged on any pre-existing ones (a future recomposeRange will
       // reconcile).
       try {
-        const composite = await buildComposite(guarded, baseline, volumeLeader ?? undefined, minuteTs);
+        // Initial-backfill path: no peg rates available yet (Phase 5 will
+        // backfill stable_rates_1m_sources). Pass undefined so the composite
+        // is raw-quote — these rows are later replaced by recomposeRange.
+        const composite = await buildComposite(guarded, baseline, minuteTs);
         await insertCandleIfMissing({ timestamp: minuteTs, ...composite });
         written.add(tsMs);
       } catch {

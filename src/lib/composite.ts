@@ -1,7 +1,18 @@
 import type { SourceCandle, SourceResult } from "../types/index.js";
 import { recordError } from "../db/errors.js";
-import { logError } from "./log.js";
-import { SOURCE_BITS } from "../adapters/registry.js";
+import { logError, logWarn } from "./log.js";
+import { SOURCE_BITS, ADAPTER_BY_NAME } from "../adapters/registry.js";
+
+// Premium-offset correction tuning. See plan:
+// candleserv-stablecoin-aware-index §Phase 3. Pulls each venue's contribution
+// 80% of the way toward the leave-one-out consensus across its peers before
+// the final median, tightening the population on the wick fields and
+// neutralizing per-venue basis while preserving structural price moves.
+const CORRECTION_FACTOR = 0.8;
+const MIN_FOR_OFFSET_CORRECTION = 3;
+
+type Field = "open" | "high" | "low" | "close";
+const FIELDS: readonly Field[] = ["open", "high", "low", "close"] as const;
 
 export interface GuardedSource {
   source: string;
@@ -79,22 +90,28 @@ export function applyGuards(results: SourceResult[], minSources: number, histori
 
 /**
  * Build the composite candle from guarded sources.
- * dominantSource: name of the trailing volume leader (from getTrailingVolumeLeader).
- * If omitted or not present in accepted sources, falls back to the highest-volume
- * source in the current minute.
  *
  * pegRates: optional Map<sourceName, localStableToUsdRate>. When provided, each
- *   USDT venue's O/H/L/C is multiplied by its peg rate before median + dominant
- *   wick selection — so the composite is in real-USD space rather than the
- *   raw mixed-quote space. Absent keys are identity (USD-native venues).
- *   Volume is NOT peg-adjusted — venue volumes are venue-denominated base-asset
+ *   USDT venue's O/H/L/C is multiplied by its peg rate before any consensus
+ *   computation — so the composite is in real-USD space rather than the raw
+ *   mixed-quote space. Absent keys are identity (USD-native venues). Volume
+ *   is NOT peg-adjusted — venue volumes are venue-denominated base-asset
  *   quantities and the peg only applies to price.
- *   See plan: candleserv-stablecoin-aware-index §Phase 2.
+ *
+ * Pipeline (per plan: candleserv-stablecoin-aware-index §Phase 3):
+ *   1. Peg-adjust each accepted source's candle.
+ *   2. For each field (O,H,L,C) and each source, compute the leave-one-out
+ *      median across the population (its "consensus") and pull the source's
+ *      contribution toward consensus by CORRECTION_FACTOR × (value − consensus).
+ *      Wicks may pass through uncorrected when the venue's profile sets
+ *      applyOffsetToWicks=false (forward-looking for on-chain venues).
+ *   3. The final composite OHLC are medians across the post-correction
+ *      contributions — H/L come from the same population as O/C, replacing
+ *      the prior dominant-source-wick rule.
  */
 export async function buildComposite(
   guarded: GuardedSource[],
   sourceCountBaseline: number,
-  dominantSource?: string,
   candleTs?: Date,
   pegRates?: Map<string, number>,
 ): Promise<CompositeResult> {
@@ -105,9 +122,7 @@ export async function buildComposite(
     throw new Error("No accepted sources");
   }
 
-  // Peg-adjusted view of each accepted source. For USD-native venues (no peg
-  // entry) the pegged candle is identical to the raw candle. Volume passes
-  // through unchanged — peg only affects price.
+  // Step 1: peg-adjust each accepted source.
   const pegged = accepted.map((g) => {
     const rate = pegRates?.get(g.source);
     if (rate === undefined) {
@@ -125,34 +140,50 @@ export async function buildComposite(
     };
   });
 
-  const closes = pegged.map((g) => g.candle.close);
-  const opens  = pegged.map((g) => g.candle.open);
+  let open: number, high: number, low: number, close: number;
 
-  const close  = median(closes);
-  const open   = median(opens);
+  if (pegged.length < MIN_FOR_OFFSET_CORRECTION) {
+    // Leave-one-out median is undefined for N<3 — peg-adjusted values pass
+    // through unmodified. composeMinute's minSources guard (default 3) usually
+    // prevents N<3 from reaching here in live operation, but recompose-historical
+    // paths may produce smaller populations.
+    open  = median(pegged.map((p) => p.candle.open));
+    close = median(pegged.map((p) => p.candle.close));
+    high  = median(pegged.map((p) => p.candle.high));
+    low   = median(pegged.map((p) => p.candle.low));
+    if (candleTs) {
+      logWarn(`[composite] N=${pegged.length} < ${MIN_FOR_OFFSET_CORRECTION} at ${candleTs.toISOString()}; skipping premium-offset correction`);
+    }
+  } else {
+    // Step 2: per-field leave-one-out consensus + CORRECTION_FACTOR pull.
+    const contributions: Record<Field, number[]> = { open: [], high: [], low: [], close: [] };
+    for (const field of FIELDS) {
+      const values = pegged.map((p) => p.candle[field]);
+      for (let i = 0; i < pegged.length; i++) {
+        const others = values.filter((_, j) => j !== i);
+        const consensus = median(others);
+        const offset = values[i] - consensus;
+        const profile = ADAPTER_BY_NAME[pegged[i].source]?.normalize;
+        const applyCorrection = field === "open" || field === "close" || (profile?.applyOffsetToWicks ?? true);
+        contributions[field].push(applyCorrection ? values[i] - CORRECTION_FACTOR * offset : values[i]);
+      }
+    }
+    // Step 3: composite OHLC = field-wise medians of the post-correction population.
+    open  = median(contributions.open);
+    close = median(contributions.close);
+    high  = median(contributions.high);
+    low   = median(contributions.low);
+  }
 
-  // Use the trailing volume leader as the dominant H/L source.
-  // Falls back to the highest-volume source in the current minute if the leader
-  // isn't in the accepted set (e.g. it was rejected or absent this tick).
-  const dominant = (dominantSource ? pegged.find(g => g.source === dominantSource) : null)
-    ?? pegged.reduce((best, g) => g.candle.volume > best.candle.volume ? g : best, pegged[0]);
-
-  // Continuity check: log if the dominant's H/L needs expanding to contain the body.
-  // Under the peg layer the dominant's wick is in the same number space as the
-  // body, so this should fire <0.1% of the time post-Phase 2 (vs ~100% pre-Phase 2
-  // when USDT/USD drift was sliding USDT venues away from USD venues every minute).
+  // Independent per-field medians can in pathological minutes produce
+  // high < max(open, close) or low > min(open, close). Widen to enclose the
+  // body. Should be rare with median-of-population wicks but the defensive
+  // guard is cheap.
   const bodyHigh = Math.max(open, close);
   const bodyLow  = Math.min(open, close);
-  if (dominant.candle.high < bodyHigh || dominant.candle.low > bodyLow) {
-    const tsLabel = candleTs ? ` candle=${candleTs.toISOString().slice(0, 16)}` : "";
-    logError(
-      `[composite] H/L extended for OHLC consistency:${tsLabel} sources=${accepted.length}/${sourceCountBaseline} dominant=${dominant.source} ` +
-      `wick=[${dominant.candle.low.toFixed(2)}, ${dominant.candle.high.toFixed(2)}] ` +
-      `body=[${bodyLow.toFixed(2)}, ${bodyHigh.toFixed(2)}]`
-    );
-  }
-  const high = Math.max(dominant.candle.high, bodyHigh);
-  const low  = Math.min(dominant.candle.low,  bodyLow);
+  if (high < bodyHigh) high = bodyHigh;
+  if (low  > bodyLow)  low  = bodyLow;
+
   // Volume stays raw — peg adjustment applies to price only.
   const volume = accepted.reduce((sum, g) => sum + g.candle.volume, 0);
 
