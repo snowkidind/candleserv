@@ -149,7 +149,7 @@ export default function CandlesTab() {
       autoSize: true,
       layout: { background: { color: "#030712" }, textColor: "#9ca3af" },
       grid: { vertLines: { color: "#111827" }, horzLines: { color: "#111827" } },
-      crosshair: { mode: 1 },
+      crosshair: { mode: 0 },
       timeScale: { borderColor: "#1f2937", timeVisible: true, secondsVisible: false },
       rightPriceScale: { borderColor: "#1f2937" },
     });
