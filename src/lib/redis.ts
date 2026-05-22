@@ -53,6 +53,26 @@ export async function redisDel(key: string): Promise<void> {
 }
 
 /**
+ * Delete every Redis key matching `${prefix}*`. Used to flush the candles
+ * cache after a repair job (recomposeRange rewrites candles_1m, but the
+ * existing live-tick invalidator only clears `candles:latest:*` keys —
+ * historical responses cached under `candles:${tf}:${endingAt}:${n}` stay
+ * stale for up to 24h otherwise). Non-fatal: silently no-ops when Redis is
+ * unavailable.
+ */
+export async function redisDelByPrefix(prefix: string): Promise<number> {
+  if (!client || !available) return 0;
+  try {
+    const keys = await client.keys(`${prefix}*`);
+    if (!keys.length) return 0;
+    await client.del(keys);
+    return keys.length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * Compute TTL (seconds) until the next boundary for a given TF.
  * Historical queries that cannot overlap with the current open candle
  * receive a 24h TTL instead.

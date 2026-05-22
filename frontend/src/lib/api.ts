@@ -183,6 +183,8 @@ export const runRepair = (rq: RepairRequest) =>
   });
 export const getRepairJob = (jobId: string) =>
   req<RepairJobState>(`/monitor/repair/jobs/${jobId}`);
+export const getActiveRepairJob = () =>
+  req<RepairJobState | null>("/monitor/repair/current");
 export const cancelRepairJob = (jobId: string) =>
   req<{ ok: boolean }>(`/monitor/repair/jobs/${jobId}/cancel`, { method: "POST" });
 

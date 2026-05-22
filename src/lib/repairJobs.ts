@@ -21,6 +21,7 @@ import type { BackfillStableRatesResult } from "./stableRateBackfill.js";
 import { SOURCE_NAMES } from "../adapters/registry.js";
 import { getCurrentFormula } from "../db/formulaChanges.js";
 import { closeAllListeners } from "./emitter.js";
+import { redisDelByPrefix } from "./redis.js";
 import { query } from "../db/pool.js";
 import { log, logError } from "./log.js";
 
@@ -78,6 +79,22 @@ export function isRepairInProgress(): boolean {
 
 export function getRepairJob(jobId: string): RepairJobState | null {
   return jobs.get(jobId)?.state ?? null;
+}
+
+/**
+ * Returns the currently-running job's state (any non-terminal phase), or null.
+ * Used by the frontend on mount to recover from a tab-navigation away/back —
+ * the server's single-flight flag is authoritative, the client just needs the
+ * jobId to resume polling.
+ */
+export function getActiveRepairJob(): RepairJobState | null {
+  if (!repairInProgress) return null;
+  for (const { state } of jobs.values()) {
+    if (state.state !== "done" && state.state !== "failed" && state.state !== "cancelled") {
+      return state;
+    }
+  }
+  return null;
 }
 
 export function cancelRepairJob(jobId: string): { ok: boolean; error?: string } {
@@ -215,6 +232,12 @@ async function runRepairJob(jobId: string, controller: AbortController): Promise
     state.finishedAt = new Date().toISOString();
     logError(`[repair-job] ${jobId} failed:`, err);
   } finally {
+    // Flush the candles Redis cache regardless of outcome. recomposeRange may
+    // have partially rewritten candles_1m even when the overall job ended in
+    // failed/cancelled; cache entries are read-through optimizations, so
+    // dropping them costs only a few extra DB queries on the next request.
+    const flushed = await redisDelByPrefix("candles:");
+    if (flushed > 0) log(`[repair-job] ${jobId} cache flushed (${flushed} keys)`);
     repairInProgress = false;
   }
 }

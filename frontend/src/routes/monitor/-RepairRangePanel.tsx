@@ -1,23 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  getFormula, previewRepair, runRepair, getRepairJob, cancelRepairJob,
+  getFormula, previewRepair, runRepair, getRepairJob, getActiveRepairJob, cancelRepairJob,
   type RepairPreview, type RepairJobState, type Formula,
 } from "@/lib/api";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-// Format a Date into the local-tz value an <input type="datetime-local"> expects.
-function toLocalInputValue(d: Date): string {
+// Format a Date into a UTC value for an <input type="datetime-local">. The
+// HTML input has no timezone mode of its own — we populate it with the UTC
+// components, label the field "(UTC)", and parse the returned string as UTC.
+// Backend stores everything in UTC (server.ts sets TZ=UTC at boot), so the
+// picker now matches what's actually queried.
+function toUtcInputValue(d: Date): string {
   const pad = (n: number) => n.toString().padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
-// Parse from datetime-local — returns the local-tz Date the user picked.
-function fromLocalInputValue(s: string): Date | null {
+// Parse a datetime-local input value as UTC (append :00Z and let Date parse it).
+function fromUtcInputValue(s: string): Date | null {
   if (!s) return null;
-  const d = new Date(s);
+  const d = new Date(`${s}:00Z`);
   if (isNaN(d.getTime())) return null;
   return d;
+}
+// Display helper for UTC times in the confirm modal.
+function fmtUtc(d: Date): string {
+  return d.toISOString().replace("T", " ").slice(0, 16) + " UTC";
 }
 
 function formatDuration(ms: number): string {
@@ -54,7 +62,7 @@ function RepairConfirmModal({
       <div className="bg-gray-900 border border-gray-700 rounded-lg max-w-lg w-full p-5">
         <h3 className="text-lg font-medium text-gray-100 mb-3">Confirm repair operation</h3>
         <div className="text-sm text-gray-300 space-y-1.5">
-          <div>Window: <span className="font-mono">{from.toLocaleString()} → {to.toLocaleString()}</span> ({days} days, {preview.willBeRecomposed.toLocaleString()} minutes)</div>
+          <div>Window: <span className="font-mono">{fmtUtc(from)} → {fmtUtc(to)}</span> ({days} days, {preview.willBeRecomposed.toLocaleString()} minutes)</div>
           <div>Formula override: <span className="font-mono">{formulaOverride.length ? `exclude ${formulaOverride.join(", ")}` : "(matches live)"}</span></div>
           <div>Archive holes to fill: <span className="font-mono">{preview.archiveHoles.toLocaleString()}</span></div>
         </div>
@@ -235,10 +243,19 @@ function RepairProgressPanel({
         )}
         {terminal && (
           <button
-            onClick={onDismiss}
+            onClick={() => {
+              if (data.state === "done") {
+                // Recompose rewrote candles_1m for this window; the chart holds
+                // its own imperative candle map (CandlesTab.tsx), so a page
+                // reload is the simplest universal refresh.
+                window.location.reload();
+              } else {
+                onDismiss();
+              }
+            }}
             className="px-3 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 text-gray-200 rounded transition-colors"
           >
-            Dismiss
+            {data.state === "done" ? "Dismiss & refresh" : "Dismiss"}
           </button>
         )}
       </div>
@@ -258,19 +275,19 @@ export default function RepairRangePanel({ sourceNames }: { sourceNames: string[
   // Defaults: last 7 days, ending one minute ago.
   const [from, setFrom] = useState<string>(() => {
     const d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    return toLocalInputValue(d);
+    return toUtcInputValue(d);
   });
   const [to, setTo] = useState<string>(() => {
     const d = new Date(Math.floor(Date.now() / 60000) * 60000 - 60000);
-    return toLocalInputValue(d);
+    return toUtcInputValue(d);
   });
 
   // Bounds for the datetime-local inputs. Computed per-render so a long-lived
   // page picks up the moving upper edge as minutes tick by. Server validates
   // independently; these are purely a UX guardrail against typing a date
   // outside the 180-day archive horizon or into the in-progress minute.
-  const dpMin = toLocalInputValue(new Date(Date.now() - 180 * 24 * 60 * 60 * 1000));
-  const dpMax = toLocalInputValue(new Date(Math.floor(Date.now() / 60000) * 60000 - 60000));
+  const dpMin = toUtcInputValue(new Date(Date.now() - 180 * 24 * 60 * 60 * 1000));
+  const dpMax = toUtcInputValue(new Date(Math.floor(Date.now() / 60000) * 60000 - 60000));
 
   const [formulaOverride, setFormulaOverride] = useState<string[]>([]);
   const [retryEmpty, setRetryEmpty] = useState(false);
@@ -280,6 +297,21 @@ export default function RepairRangePanel({ sourceNames }: { sourceNames: string[
   const [showConfirm, setShowConfirm] = useState(false);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+
+  // Pick up an in-flight repair if the user navigated away mid-job and came
+  // back. The server's single-flight flag is authoritative; we just need the
+  // jobId to resume polling. Re-run on mount and whenever activeJobId clears
+  // (so dismissing a terminal job doesn't immediately re-pick-up itself).
+  useQuery({
+    queryKey: ["repair", "current"],
+    queryFn: async () => {
+      const job = await getActiveRepairJob();
+      if (job && !activeJobId) setActiveJobId(job.jobId);
+      return job ?? null;
+    },
+    enabled: !activeJobId,
+    staleTime: 0,
+  });
 
   // Initialize formulaOverride from live formula on first load.
   useEffect(() => {
@@ -296,8 +328,8 @@ export default function RepairRangePanel({ sourceNames }: { sourceNames: string[
     setPreviewLoading(true);
     setPreviewError(null);
     try {
-      const fromDate = fromLocalInputValue(from);
-      const toDate   = fromLocalInputValue(to);
+      const fromDate = fromUtcInputValue(from);
+      const toDate   = fromUtcInputValue(to);
       if (!fromDate || !toDate) throw new Error("Invalid window");
       const resp = await previewRepair({
         from: fromDate.toISOString(),
@@ -316,8 +348,8 @@ export default function RepairRangePanel({ sourceNames }: { sourceNames: string[
   const onRunRepair = async () => {
     setStarting(true);
     try {
-      const fromDate = fromLocalInputValue(from);
-      const toDate   = fromLocalInputValue(to);
+      const fromDate = fromUtcInputValue(from);
+      const toDate   = fromUtcInputValue(to);
       if (!fromDate || !toDate) return;
       const { jobId } = await runRepair({
         from: fromDate.toISOString(),
@@ -336,8 +368,8 @@ export default function RepairRangePanel({ sourceNames }: { sourceNames: string[
     }
   };
 
-  const fromDate = fromLocalInputValue(from);
-  const toDate = fromLocalInputValue(to);
+  const fromDate = fromUtcInputValue(from);
+  const toDate = fromUtcInputValue(to);
   const windowValid = fromDate && toDate && fromDate.getTime() < toDate.getTime();
 
   return (
@@ -353,7 +385,7 @@ export default function RepairRangePanel({ sourceNames }: { sourceNames: string[
         {/* Window picker */}
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-xs text-gray-400 block mb-1">From</label>
+            <label className="text-xs text-gray-400 block mb-1">From <span className="text-gray-500">(UTC)</span></label>
             <input
               type="datetime-local"
               value={from}
@@ -364,7 +396,7 @@ export default function RepairRangePanel({ sourceNames }: { sourceNames: string[
             />
           </div>
           <div>
-            <label className="text-xs text-gray-400 block mb-1">To</label>
+            <label className="text-xs text-gray-400 block mb-1">To <span className="text-gray-500">(UTC)</span></label>
             <input
               type="datetime-local"
               value={to}

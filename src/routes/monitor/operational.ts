@@ -20,7 +20,7 @@ import {
 import { findUserById } from "../../db/users.js";
 import { getAllServiceEvents } from "../../db/serviceEvents.js";
 import {
-  startRepairJob, previewRepair, getRepairJob, cancelRepairJob,
+  startRepairJob, previewRepair, getRepairJob, getActiveRepairJob, cancelRepairJob,
   isRepairInProgress, validateRepairWindow,
 } from "../../lib/repairJobs.js";
 import { logError } from "../../lib/log.js";
@@ -270,6 +270,17 @@ router.post("/repair", ...modify, async (req, res) => {
     logError("[monitor] POST /repair start failed:", err);
     return res.status(500).json({ error: String(err) });
   }
+});
+
+/**
+ * GET /monitor/repair/current — returns the currently-running job's state, or
+ * null when nothing is in flight. Lets the frontend recover from tab-navigation
+ * away/back: the server's single-flight flag is authoritative, the client just
+ * needs the jobId to resume polling.
+ */
+router.get("/repair/current", ...view, (_req, res) => {
+  const state = getActiveRepairJob();
+  return res.json(state ?? null);
 });
 
 /** GET /monitor/repair/jobs/:jobId — poll job state */
