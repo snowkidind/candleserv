@@ -23,6 +23,8 @@ import { buildComposite } from "./composite.js";
 import { upsertCandle } from "../db/candles.js";
 import { withTransaction, query } from "../db/pool.js";
 import { logError } from "./log.js";
+import { ADAPTER_BY_NAME } from "../adapters/registry.js";
+import { recordError } from "../db/errors.js";
 
 export interface Formula {
   excludedSources: string[];
@@ -52,6 +54,7 @@ interface ArchiveRow {
   volume: string;
   rejected: boolean;
   rejectedReason: string | null;
+  stable_rate: string | null;
 }
 
 /**
@@ -63,25 +66,60 @@ export async function composeMinute(
   formula: Formula,
   opts: ComposeMinuteOpts,
 ): Promise<ComposeMinuteResult> {
+  // Single JOIN: pulls the per-source candle and its paired stable rate
+  // (NULL for USD-native venues, and — by the bundle invariant — NEVER NULL
+  // for a non-rejected USDT BTC row, since the FK + collector transaction
+  // guarantee both halves commit together). See plan:
+  // candleserv-stablecoin-aware-index §Phase 2.
   const res = await query(
-    `SELECT source, open, high, low, close, volume, rejected, "rejectedReason"
-       FROM candles_1m_sources
-      WHERE "timestamp" = $1`,
+    `SELECT s.source, s.open, s.high, s.low, s.close, s.volume,
+            s.rejected, s."rejectedReason",
+            r.rate AS stable_rate
+       FROM candles_1m_sources s
+       LEFT JOIN stable_rates_1m_sources r
+         ON r."timestamp" = s."timestamp" AND r.source = s.source
+      WHERE s."timestamp" = $1`,
     [minuteTs],
   );
   const rows = res.rows as ArchiveRow[];
   const excluded = new Set(formula.excludedSources);
 
   const formulaExcluded = rows.filter((r) => excluded.has(r.source)).length;
-  const rejectedCount = rows.filter((r) => r.rejected).length;
 
   // Per the plan: formula-excluded rows don't appear in the composite's
   // sourcesAttempted set at all (so they don't drag confidence down).
   // Rejected rows DO appear so buildComposite can factor them into the
   // rejectedRatio component of confidence.
-  const guarded: GuardedSource[] = rows
-    .filter((r) => !excluded.has(r.source))
-    .map((r) => ({
+  //
+  // Build guarded + pegRates in one pass; detect invariant violations
+  // (a USDT venue's non-rejected BTC row without its paired rate row —
+  // possible only via direct DB manipulation, treated as operator error
+  // and dropped from this minute's composite with a loud recordError).
+  const pegRates = new Map<string, number>();
+  const guarded: GuardedSource[] = [];
+  for (const r of rows) {
+    if (excluded.has(r.source)) continue;
+
+    const adapter = ADAPTER_BY_NAME[r.source];
+    const isUsdtVenue = adapter?.normalize.pegFetcher != null;
+    const rate = r.stable_rate == null ? null : Number(r.stable_rate);
+
+    let rejected = r.rejected;
+    let rejectedReason = r.rejectedReason;
+    if (isUsdtVenue && !rejected && rate == null) {
+      rejected = true;
+      rejectedReason = "missing_paired_rate";
+      await recordError(
+        "compose", "invariant_violation:missing_paired_rate",
+        `USDT venue ${r.source} has BTC row at ${minuteTs.toISOString()} without paired stable rate row — dropping from composite`,
+      );
+    }
+
+    if (isUsdtVenue && rate != null) {
+      pegRates.set(r.source, rate);
+    }
+
+    guarded.push({
       source: r.source,
       candle: {
         open: Number(r.open),
@@ -90,10 +128,12 @@ export async function composeMinute(
         close: Number(r.close),
         volume: Number(r.volume),
       },
-      rejected: r.rejected,
-      rejectedReason: r.rejectedReason,
-    }));
+      rejected,
+      rejectedReason,
+    });
+  }
 
+  const rejectedCount = guarded.filter((g) => g.rejected).length;
   const accepted = guarded.filter((g) => !g.rejected);
 
   // Skip path — insufficient included-and-clean sources to compose.
@@ -119,7 +159,7 @@ export async function composeMinute(
   // Success path — buildComposite produces the OHLCV + bitmask.
   let composite;
   try {
-    composite = await buildComposite(guarded, opts.baseline, opts.volumeLeader, minuteTs);
+    composite = await buildComposite(guarded, opts.baseline, opts.volumeLeader, minuteTs, pegRates);
   } catch (err) {
     // Shouldn't happen given the accepted.length >= minSources check above,
     // but if buildComposite throws (e.g., all-rejected race) fall back to skip.

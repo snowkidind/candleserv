@@ -82,12 +82,21 @@ export function applyGuards(results: SourceResult[], minSources: number, histori
  * dominantSource: name of the trailing volume leader (from getTrailingVolumeLeader).
  * If omitted or not present in accepted sources, falls back to the highest-volume
  * source in the current minute.
+ *
+ * pegRates: optional Map<sourceName, localStableToUsdRate>. When provided, each
+ *   USDT venue's O/H/L/C is multiplied by its peg rate before median + dominant
+ *   wick selection — so the composite is in real-USD space rather than the
+ *   raw mixed-quote space. Absent keys are identity (USD-native venues).
+ *   Volume is NOT peg-adjusted — venue volumes are venue-denominated base-asset
+ *   quantities and the peg only applies to price.
+ *   See plan: candleserv-stablecoin-aware-index §Phase 2.
  */
 export async function buildComposite(
   guarded: GuardedSource[],
   sourceCountBaseline: number,
   dominantSource?: string,
-  candleTs?: Date
+  candleTs?: Date,
+  pegRates?: Map<string, number>,
 ): Promise<CompositeResult> {
   const accepted = guarded.filter((g) => !g.rejected && g.candle);
 
@@ -96,8 +105,28 @@ export async function buildComposite(
     throw new Error("No accepted sources");
   }
 
-  const closes = accepted.map((g) => g.candle.close);
-  const opens  = accepted.map((g) => g.candle.open);
+  // Peg-adjusted view of each accepted source. For USD-native venues (no peg
+  // entry) the pegged candle is identical to the raw candle. Volume passes
+  // through unchanged — peg only affects price.
+  const pegged = accepted.map((g) => {
+    const rate = pegRates?.get(g.source);
+    if (rate === undefined) {
+      return { source: g.source, candle: g.candle };
+    }
+    return {
+      source: g.source,
+      candle: {
+        open:   g.candle.open   * rate,
+        high:   g.candle.high   * rate,
+        low:    g.candle.low    * rate,
+        close:  g.candle.close  * rate,
+        volume: g.candle.volume,
+      },
+    };
+  });
+
+  const closes = pegged.map((g) => g.candle.close);
+  const opens  = pegged.map((g) => g.candle.open);
 
   const close  = median(closes);
   const open   = median(opens);
@@ -105,10 +134,13 @@ export async function buildComposite(
   // Use the trailing volume leader as the dominant H/L source.
   // Falls back to the highest-volume source in the current minute if the leader
   // isn't in the accepted set (e.g. it was rejected or absent this tick).
-  const dominant = (dominantSource ? accepted.find(g => g.source === dominantSource) : null)
-    ?? accepted.reduce((best, g) => g.candle.volume > best.candle.volume ? g : best, accepted[0]);
+  const dominant = (dominantSource ? pegged.find(g => g.source === dominantSource) : null)
+    ?? pegged.reduce((best, g) => g.candle.volume > best.candle.volume ? g : best, pegged[0]);
 
   // Continuity check: log if the dominant's H/L needs expanding to contain the body.
+  // Under the peg layer the dominant's wick is in the same number space as the
+  // body, so this should fire <0.1% of the time post-Phase 2 (vs ~100% pre-Phase 2
+  // when USDT/USD drift was sliding USDT venues away from USD venues every minute).
   const bodyHigh = Math.max(open, close);
   const bodyLow  = Math.min(open, close);
   if (dominant.candle.high < bodyHigh || dominant.candle.low > bodyLow) {
@@ -121,6 +153,7 @@ export async function buildComposite(
   }
   const high = Math.max(dominant.candle.high, bodyHigh);
   const low  = Math.min(dominant.candle.low,  bodyLow);
+  // Volume stays raw — peg adjustment applies to price only.
   const volume = accepted.reduce((sum, g) => sum + g.candle.volume, 0);
 
   const sourceCount = accepted.length;
