@@ -19,6 +19,9 @@ frontend/src/routeTree.gen.ts
 *.log
 npm-debug.log*
 
+# Runtime data
+appData/
+
 # macOS
 .DS_Store
 
