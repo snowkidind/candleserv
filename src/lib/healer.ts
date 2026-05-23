@@ -10,6 +10,7 @@ import {
 import { clearDetectedGaps } from "../db/gaps.js";
 import { runGapScan } from "./gapDetector.js";
 import { recordError } from "../db/errors.js";
+import { isOutOfHistory } from "../adapters/errors.js";
 import { getSetting, setSetting, getSettingInt } from "../db/appSettings.js";
 import { query } from "../db/pool.js";
 import { log, logError } from "./log.js";
@@ -76,6 +77,11 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
     byMinute.set(t, []);
   }
 
+  // Adapter-declared out-of-history (e.g. gate caps at ~6.9 days) is expected
+  // when a re-heal window reaches deeper than a venue allows, not a fault.
+  // Aggregate quietly and emit one summary line per source at the end.
+  const outOfHistoryEarliest: Record<string, Date> = {};
+
   // Walk backward through [from, to) in BACKFILL_TILE chunks
   let firstTile = true;
   for (let tileEnd = to; tileEnd > from;) {
@@ -98,6 +104,11 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
       const name = activeAdapters[i].name;
       const res = settled[i];
       if (res.status === "rejected") {
+        if (isOutOfHistory(res.reason)) {
+          const prev = outOfHistoryEarliest[name];
+          if (!prev || tileStart < prev) outOfHistoryEarliest[name] = tileStart;
+          continue;
+        }
         logError(`[healer] healRange: ${name} tile failed`, res.reason);
         continue;
       }
@@ -109,6 +120,11 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
     }
 
     tileEnd = tileStart;
+  }
+
+  // One tidy summary line per source for venues that ran out of history.
+  for (const [source, earliest] of Object.entries(outOfHistoryEarliest)) {
+    log(`[healer] healRange: ${source} has no data before ${earliest.toISOString().slice(0, 16)} (skipped)`);
   }
 
   // overwrite=true path: re-heal low confidence + manual gap heal. Uses
