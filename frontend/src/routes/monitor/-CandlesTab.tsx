@@ -117,6 +117,7 @@ export default function CandlesTab() {
   const [atHistoryStart, setAtHistoryStart]   = useState(false);
   const [showGoLive, setShowGoLive]           = useState(false);
   const [errorTooltip, setErrorTooltip]       = useState<{ x: number; y: number; messages: string[] } | null>(null);
+  const [ohlcLabel, setOhlcLabel]             = useState<{ o: number; h: number; l: number; c: number; v: number } | null>(null);
   const [aspectRatio, setAspectRatio]         = useState<string | null>(null);
   const [ma, setMaState] = useState<MaSettings>(loadMaSettings);
 
@@ -265,13 +266,27 @@ export default function CandlesTab() {
 
     instance.timeScale().subscribeVisibleLogicalRangeChange(handleRangeChange);
 
-    // ── Crosshair handler — show error tooltip when hovering a marked bar ─────
+    // ── Crosshair handler — OHLC+V label (all TFs) + error tooltip (1m only) ──
     const handleCrosshairMove = (params: MouseEventParams) => {
-      if (!params.point || !params.time || tfRef.current !== "1m") {
+      if (!params.point || !params.time) {
+        setOhlcLabel(null);
         setErrorTooltip(null);
         return;
       }
-      const msgs = errorBars.current.get(params.time as number);
+      const sec = params.time as number;
+
+      // OHLC+V label — extract the hovered bar from our local data maps.
+      const d = allCandles.current.get(sec);
+      const v = allVolume.current.get(sec);
+      if (d) setOhlcLabel({ o: d.open, h: d.high, l: d.low, c: d.close, v: v?.value ?? 0 });
+      else setOhlcLabel(null);
+
+      // Error tooltip — 1m only, marked bars only.
+      if (tfRef.current !== "1m") {
+        setErrorTooltip(null);
+        return;
+      }
+      const msgs = errorBars.current.get(sec);
       if (msgs && msgs.length > 0) {
         setErrorTooltip({ x: params.point.x, y: params.point.y, messages: msgs });
       } else {
@@ -523,6 +538,15 @@ export default function CandlesTab() {
           })()}
         >
         <div ref={chartRef} className="w-full h-full" />
+        {ohlcLabel && (
+          <div className="absolute top-2 left-2 z-10 pointer-events-none flex gap-3 text-xs font-mono">
+            <span className="text-gray-500">O <span className="text-gray-300">{ohlcLabel.o.toLocaleString()}</span></span>
+            <span className="text-gray-500">H <span className="text-gray-300">{ohlcLabel.h.toLocaleString()}</span></span>
+            <span className="text-gray-500">L <span className="text-gray-300">{ohlcLabel.l.toLocaleString()}</span></span>
+            <span className="text-gray-500">C <span className={ohlcLabel.c >= ohlcLabel.o ? "text-green-400" : "text-red-400"}>{ohlcLabel.c.toLocaleString()}</span></span>
+            <span className="text-gray-500">V <span className="text-gray-300">{ohlcLabel.v.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></span>
+          </div>
+        )}
         {errorTooltip && (
           <div
             className="absolute z-20 pointer-events-none bg-gray-900 border border-red-900 rounded px-2 py-1 text-xs text-gray-200 max-w-sm"
