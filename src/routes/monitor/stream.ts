@@ -14,6 +14,7 @@ const guard = [trackSession, authenticate, requirePerm("CAN_VIEW_CANDLESERV")];
 router.get("/candles/stream", ...guard, async (req, res) => {
   const tf = (req.query.tf as string) || "1m";
   const n  = Math.min(parseInt(req.query.n as string, 10) || 200, 1000);
+  const currency = (req.query.currency as string)?.toUpperCase() || "BTC";
   if (!VALID_TFS.includes(tf)) {
     return res.status(400).json({ error: "Invalid tf" });
   }
@@ -26,13 +27,13 @@ router.get("/candles/stream", ...guard, async (req, res) => {
   // Push full N-candle snapshot — used on connect and on every new candle
   const pushSnapshot = async () => {
     try {
-      const cacheKey = `candles:stream:${tf}:${n}`;
+      const cacheKey = `candles:stream:${currency}:${tf}:${n}`;
       const cached = await redisGet(cacheKey);
       let candles;
       if (cached) {
         candles = JSON.parse(cached);
       } else {
-        candles = await getCandles({ currency: "BTC", tf, endingAt: new Date(), limit: n });
+        candles = await getCandles({ currency, tf, endingAt: new Date(), limit: n });
         await redisSet(cacheKey, JSON.stringify(candles), 55);
       }
       res.write(`event: candles\ndata: ${JSON.stringify(candles)}\n\n`);
@@ -43,7 +44,9 @@ router.get("/candles/stream", ...guard, async (req, res) => {
 
   await pushSnapshot();
 
-  const onCandle = async () => {
+  // Only re-snapshot when the new candle is for this stream's currency.
+  const onCandle = async (candle: { currency?: string }) => {
+    if ((candle?.currency ?? "BTC") !== currency) return;
     await pushSnapshot();
   };
 

@@ -39,8 +39,9 @@ router.get("/candles", ...view, async (req, res) => {
   const end = new Date(endingAt);
   if (isNaN(end.getTime())) return res.status(400).json({ error: "Invalid endingAt" });
   const count = Math.min(parseInt(limit, 10) || 500, 2000);
+  const currency = (req.query.currency as string)?.toUpperCase() || "BTC";
   try {
-    const candles = await getCandles({ currency: "BTC", tf, endingAt: end, limit: count });
+    const candles = await getCandles({ currency, tf, endingAt: end, limit: count });
     return res.json({ candles });
   } catch (err) {
     logError("[monitor] GET /candles failed:", err);
@@ -53,8 +54,9 @@ router.get("/candles/latest", ...view, async (req, res) => {
   const { tf, n } = req.query as Record<string, string>;
   if (!tf || !VALID_TFS.includes(tf)) return res.status(400).json({ error: "Invalid tf" });
   const count = Math.min(parseInt(n, 10) || 1, 5000);
+  const currency = (req.query.currency as string)?.toUpperCase() || "BTC";
   try {
-    const candles = await getCandles({ currency: "BTC", tf, endingAt: new Date(), limit: count });
+    const candles = await getCandles({ currency, tf, endingAt: new Date(), limit: count });
     return res.json({ candles });
   } catch (err) {
     logError("[monitor] GET /candles/latest failed:", err);

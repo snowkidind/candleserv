@@ -19,6 +19,7 @@ export function getClient(apiKey: string): SseClient | undefined {
 export function getSubscriptionStatus(apiKey: string): {
   active: boolean;
   n?: number;
+  currency?: string;
   connectedSince?: string;
   lastPushAt?: string | null;
 } {
@@ -27,6 +28,7 @@ export function getSubscriptionStatus(apiKey: string): {
   return {
     active: true,
     n: c.n,
+    currency: c.currency,
     connectedSince: c.connectedSince.toISOString(),
     lastPushAt: c.lastPushAt?.toISOString() ?? null,
   };

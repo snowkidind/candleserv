@@ -1,6 +1,6 @@
 import { EventEmitter } from "events";
-import { redisDel } from "./redis.js";
-import { VALID_TFS } from "../db/candles.js";
+import { redisDelByPrefix } from "./redis.js";
+import type { CandleJson } from "../types/index.js";
 
 /**
  * Internal event bus. The live collector emits here after each successful
@@ -14,18 +14,18 @@ export const candleEmitter = new CandleEmitter();
 // would warn under normal multi-consumer load (phaseserv + oracle + dashboards).
 candleEmitter.setMaxListeners(1000);
 
-// Cache invalidation: drops every candles:latest:* key on each new candle.
-// Extracted into a named function so closeAllListeners can re-attach it
-// after a drain — without this, the first repair would silently break the
-// cache invalidation that all REST consumers depend on.
+// Cache invalidation: drops the new candle's currency `candles:latest:<currency>:*`
+// keys on each new candle. Scoped by currency so an ETH candle never busts the
+// BTC latest cache (multi-currency Phase 7.3). Historical `candles:<currency>:*`
+// entries are left to their short boundary TTL (matching the pre-multi-currency
+// behavior); the repair path does the full-prefix flush when it rewrites history.
+// Extracted into a named function so closeAllListeners can re-attach it after a
+// drain — without this, the first repair would silently break the cache
+// invalidation that all REST consumers depend on.
 function cacheInvalidationHandler() {
-  return async () => {
-    for (const tf of VALID_TFS) {
-      // Common n values — consumers using SSE won't hit REST anyway
-      for (const n of [1, 2, 3, 5, 10, 20, 50, 100, 200, 500, 1000]) {
-        await redisDel(`candles:latest:${tf}:${n}`);
-      }
-    }
+  return async (candle: CandleJson & { currency?: string }) => {
+    const currency = candle?.currency ?? "BTC";
+    await redisDelByPrefix(`candles:latest:${currency}:`);
   };
 }
 candleEmitter.on("candle", cacheInvalidationHandler());

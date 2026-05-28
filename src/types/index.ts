@@ -82,6 +82,7 @@ export interface SseClient {
   apiKeyId: number;
   apiKey: string;
   n: number;
+  currency: string;
   res: import("express").Response;
   connectedSince: Date;
   lastPushAt: Date | null;
