@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   getStats, getSourcesStatus, getGaps, triggerHeal,
-  getFormula, setFormula, getConfig,
+  getFormula, setFormula, getConfig, getCurrencies,
   type SourceStatus,
 } from "@/lib/api";
 import { useCandleStream } from "@/lib/CandleStreamContext";
@@ -285,12 +285,23 @@ function pctOrDash(v: number | null): string {
 function SourceCard({
   name,
   status,
+  pollingCurrencies,
   onOpenHistory,
 }: {
   name: string;
   status: SourceStatus | undefined;
+  pollingCurrencies: string[];   // enabled currencies this venue is actively feeding
   onOpenHistory: (source: string) => void;
 }) {
+  const pollingLine = (
+    <div className="mt-2 pt-2 border-t border-gray-800 text-xs">
+      <span className="text-gray-500">Polling: </span>
+      {pollingCurrencies.length
+        ? <span className="text-gray-300 font-mono">{pollingCurrencies.join(" ")}</span>
+        : <span className="text-gray-600">none</span>}
+    </div>
+  );
+
   if (!status) {
     return (
       <div
@@ -299,6 +310,7 @@ function SourceCard({
       >
         <div className="text-sm capitalize text-gray-200">{name}</div>
         <div className="text-xs text-gray-600 mt-1">unknown</div>
+        {pollingLine}
       </div>
     );
   }
@@ -348,6 +360,7 @@ function SourceCard({
           <div className="pt-1 text-gray-600">Formula: <span className="text-gray-400">Excluded</span></div>
         </div>
       )}
+      {pollingLine}
     </div>
   );
 }
@@ -362,9 +375,10 @@ export default function ConnectionsTab() {
   const qc = useQueryClient();
   const { sourceStateTick } = useCandleStream();
 
-  const { data: stats }   = useQuery({ queryKey: ["stats"],            queryFn: getStats,         refetchInterval: 60_000 });
-  const { data: sources } = useQuery({ queryKey: ["sources", "status"], queryFn: getSourcesStatus, refetchInterval: 30_000 });
-  const { data: gaps }    = useQuery({ queryKey: ["gaps"],             queryFn: getGaps,          refetchInterval: 60_000 });
+  const { data: stats }      = useQuery({ queryKey: ["stats"],            queryFn: getStats,         refetchInterval: 60_000 });
+  const { data: sources }    = useQuery({ queryKey: ["sources", "status"], queryFn: getSourcesStatus, refetchInterval: 30_000 });
+  const { data: gaps }       = useQuery({ queryKey: ["gaps"],             queryFn: getGaps,          refetchInterval: 60_000 });
+  const { data: currencies } = useQuery({ queryKey: ["currencies"],       queryFn: getCurrencies,    refetchInterval: 30_000 });
 
   // SSE-triggered invalidations — covers both legacy source_state and the new
   // formula-excluded / formula-included transitions.
@@ -393,6 +407,20 @@ export default function ConnectionsTab() {
     () => Object.values(sources?.sources ?? {}).filter((s) => !s.excluded).length,
     [sources],
   );
+
+  // Which enabled currencies each venue is actively feeding: enabled currency
+  // AND that venue's feed is probed-available AND operator-enabled. (The global
+  // formula kill-switch is applied per-card below via status.excluded.)
+  const pollingByVenue = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const c of currencies?.currencies ?? []) {
+      if (!c.enabled) continue;
+      for (const [venue, f] of Object.entries(c.feeds)) {
+        if (f.available && f.enabled) (map[venue] ??= []).push(c.code);
+      }
+    }
+    return map;
+  }, [currencies]);
 
   return (
     <div className="p-4 space-y-4">
@@ -429,6 +457,7 @@ export default function ConnectionsTab() {
             key={src}
             name={src}
             status={sources?.sources[src]}
+            pollingCurrencies={sources?.sources[src]?.excluded ? [] : (pollingByVenue[src] ?? [])}
             onOpenHistory={(name) => setHistorySource(name)}
           />
         ))}
