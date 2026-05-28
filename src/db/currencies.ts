@@ -5,6 +5,7 @@ export interface CurrencyRow {
   displayName: string;
   enabled: boolean;
   premiumEnabled: boolean;
+  flatFillEmpty: boolean;
   minSources: number | null;
   inceptionTs: Date | null;
   createdAt: Date;
@@ -17,6 +18,7 @@ function rowToCurrency(row: Record<string, unknown>): CurrencyRow {
     displayName: row.displayName as string,
     enabled: row.enabled as boolean,
     premiumEnabled: row.premiumEnabled as boolean,
+    flatFillEmpty: row.flatFillEmpty as boolean,
     minSources: (row.minSources as number) ?? null,
     inceptionTs: (row.inceptionTs as Date) ?? null,
     createdAt: row.createdAt as Date,
@@ -53,6 +55,16 @@ export async function setPremiumEnabled(code: string, premiumEnabled: boolean): 
   );
 }
 
+// D-FLATFILL: when true, an empty (no-trade) minute for this currency flat-fills
+// from the venue's previous close instead of counting as a fetch failure. Leave
+// false for liquid assets (BTC/ETH/SOL) where an empty minute means a glitch.
+export async function setFlatFillEmpty(code: string, flatFillEmpty: boolean): Promise<void> {
+  await query(
+    `UPDATE currencies SET "flatFillEmpty" = $2, "updatedAt" = NOW() WHERE "code" = $1`,
+    [code, flatFillEmpty]
+  );
+}
+
 export async function setMinSources(code: string, minSources: number | null): Promise<void> {
   await query(
     `UPDATE currencies SET "minSources" = $2, "updatedAt" = NOW() WHERE "code" = $1`,
@@ -79,18 +91,20 @@ export interface UpsertCurrencyInput {
   displayName: string;
   enabled?: boolean;
   premiumEnabled?: boolean;
+  flatFillEmpty?: boolean;
   minSources?: number | null;
   inceptionTs?: Date | null;
 }
 
 export async function upsertCurrency(input: UpsertCurrencyInput): Promise<CurrencyRow> {
   const res = await query(
-    `INSERT INTO currencies ("code", "displayName", "enabled", "premiumEnabled", "minSources", "inceptionTs")
-     VALUES ($1, $2, COALESCE($3, false), COALESCE($4, true), $5, $6)
+    `INSERT INTO currencies ("code", "displayName", "enabled", "premiumEnabled", "flatFillEmpty", "minSources", "inceptionTs")
+     VALUES ($1, $2, COALESCE($3, false), COALESCE($4, true), COALESCE($7, false), $5, $6)
      ON CONFLICT ("code") DO UPDATE SET
        "displayName"    = EXCLUDED."displayName",
        "enabled"        = COALESCE($3, currencies.enabled),
        "premiumEnabled" = COALESCE($4, currencies."premiumEnabled"),
+       "flatFillEmpty"  = COALESCE($7, currencies."flatFillEmpty"),
        "minSources"     = EXCLUDED."minSources",
        "inceptionTs"    = EXCLUDED."inceptionTs",
        "updatedAt"      = NOW()
@@ -102,6 +116,7 @@ export async function upsertCurrency(input: UpsertCurrencyInput): Promise<Curren
       input.premiumEnabled ?? null,
       input.minSources ?? null,
       input.inceptionTs ?? null,
+      input.flatFillEmpty ?? null,
     ]
   );
   return rowToCurrency(res.rows[0]);

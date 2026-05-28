@@ -176,6 +176,7 @@ CREATE TABLE IF NOT EXISTS currencies (
   "displayName"    varchar      NOT NULL,
   "enabled"        boolean      NOT NULL DEFAULT false,  -- chain on/off (Feeds tab)
   "premiumEnabled" boolean      NOT NULL DEFAULT true,   -- D2 per-token premium-offset toggle
+  "flatFillEmpty"  boolean      NOT NULL DEFAULT false,  -- D-FLATFILL: empty minute → carry prev close (thin tokens); false → empty = failure/strike (BTC + liquid)
   "minSources"     smallint,                             -- nullable → fall back to app_settings.minSources
   "inceptionTs"    timestamptz,                          -- B3 temporal floor; NULL → consumers COALESCE to now-90d, never epoch
   "createdAt"      timestamptz  NOT NULL DEFAULT NOW(),

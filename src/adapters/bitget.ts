@@ -9,6 +9,7 @@
  * Row order is standard OHLCV with volBase at index 5 (BTC volume).
  */
 import type { SourceCandle } from "../types/index.js";
+import { EmptyCandleError } from "./errors.js";
 
 const BASE = "https://api.bitget.com";
 const TIMEOUT_MS = 6000;
@@ -105,7 +106,7 @@ export async function fetchBitgetCandle(symbol: string, minuteTs: Date): Promise
     const json = await res.json() as { data?: unknown[][]; code?: string; msg?: string };
     if (json.code && json.code !== "00000") throw new Error(`Bitget ${json.code}: ${json.msg ?? "error"}`);
     const data = json.data ?? [];
-    if (!data.length) throw new Error("No candle returned");
+    if (!data.length) throw new EmptyCandleError("bitget");
     return parseRow(data[0]).candle;
   } finally {
     clearTimeout(timer);

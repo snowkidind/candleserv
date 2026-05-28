@@ -15,6 +15,7 @@
  *   `before` → records whose timestamp is > this value (newer than).
  */
 import type { SourceCandle } from "../types/index.js";
+import { EmptyCandleError } from "./errors.js";
 
 const BASE = "https://www.okx.com";
 const TIMEOUT_MS = 6000;
@@ -39,7 +40,7 @@ export async function fetchOkxCandle(symbol: string, minuteTs: Date): Promise<So
     const json = await res.json() as { data?: OkxRow[]; code?: string; msg?: string };
     if (json.code && json.code !== "0") throw new Error(`OKX ${json.code}: ${json.msg ?? "error"}`);
     const data = json.data ?? [];
-    if (!data.length) throw new Error("No candle returned");
+    if (!data.length) throw new EmptyCandleError("okx");
     const [, o, h, l, c, v] = data[0] as unknown as string[];
     return {
       open: Number(o),

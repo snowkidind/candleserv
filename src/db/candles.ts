@@ -380,3 +380,19 @@ export async function getTrailingVolumeLeader(currency: string, n = 10): Promise
   );
   return (res.rows[0]?.source as string) ?? null;
 }
+
+/**
+ * Most recent real (non-rejected) close for a (currency, source). Used by the
+ * collector's flat-fill path (D-FLATFILL) to seed the in-memory lastClose map
+ * on cold start. Returns null if the venue has never produced a candle for the
+ * currency (brand-new listing → caller omits the venue, no flat-fill).
+ */
+export async function getLastSourceClose(currency: string, source: string): Promise<number | null> {
+  const res = await query(
+    `SELECT close FROM candles_1m_sources
+      WHERE "currency" = $1 AND source = $2 AND rejected = false
+      ORDER BY "timestamp" DESC LIMIT 1`,
+    [currency, source]
+  );
+  return res.rows.length ? Number(res.rows[0].close) : null;
+}

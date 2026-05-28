@@ -1,9 +1,10 @@
 import { ADAPTER_BY_NAME, SOURCE_NAMES } from "../adapters/registry.js";
 import { applyGuards } from "./composite.js";
 import { composeMinute } from "./compose.js";
-import { getSourceCountBaseline, getRecentCloseStddev, getTrailingVolumeLeader, get24hSourceStats } from "../db/candles.js";
-import { getEnabledCurrencies, getCurrency } from "../db/currencies.js";
+import { getSourceCountBaseline, getRecentCloseStddev, getTrailingVolumeLeader, get24hSourceStats, getLastSourceClose } from "../db/candles.js";
+import { getEnabledCurrencies, getCurrency, type CurrencyRow } from "../db/currencies.js";
 import { getActiveFeeds } from "../db/currencyFeeds.js";
+import { isEmptyCandle } from "../adapters/errors.js";
 import { recordError } from "../db/errors.js";
 import { candleEmitter } from "./emitter.js";
 import { rowToJson } from "../db/candles.js";
@@ -30,6 +31,12 @@ let collectionRunning = false;
 // reflects the most recent fetch attempt.
 const liveFetchStates: Record<string, "on" | "error" | "unknown"> = {};
 const lastFetchAt: Record<string, Date | null> = {};
+
+// D-FLATFILL: most-recent real close per `${currency}|${source}`, used to
+// flat-fill no-trade minutes for currencies with flatFillEmpty=true. `.has(key)`
+// distinguishes "never checked" from "checked, no prior data" (null), so cold
+// start hits the DB at most once per (currency, source).
+const lastClose = new Map<string, number | null>();
 
 async function checkAutoSuspend(source: string): Promise<void> {
   const threshold = await getSettingInt("sourceAutoSuspendThreshold", 10);
@@ -191,8 +198,11 @@ export async function collect(minuteTs: Date): Promise<boolean> {
     // venues for the shared peg wave.
     const excluded = new Set(getCurrentFormula().excludedSources);
     const activeByCurrency = new Map<string, { source: string; symbol: string }[]>();
+    const metaByCurrency = new Map<string, CurrencyRow>();
     const pegVenues = new Set<string>();
     for (const currency of currencies) {
+      const meta = await getCurrency(currency);
+      if (meta) metaByCurrency.set(currency, meta);
       const feeds = (await getActiveFeeds(currency)).filter((f) => !excluded.has(f.source));
       activeByCurrency.set(currency, feeds);
       for (const f of feeds) {
@@ -249,10 +259,28 @@ export async function collect(minuteTs: Date): Promise<boolean> {
       const r = candleSettled[i];
       let arr = resultsByCurrency.get(k.currency);
       if (!arr) { arr = []; resultsByCurrency.set(k.currency, arr); }
+      const lcKey = `${k.currency}|${k.source}`;
       if (r.status === "fulfilled") {
         arr.push({ source: k.source, candle: r.value });
         fetchedSources.add(k.source);
+        lastClose.set(lcKey, r.value.close);   // D-FLATFILL: seed/refresh carry value
+      } else if (isEmptyCandle(r.reason) && metaByCurrency.get(k.currency)?.flatFillEmpty) {
+        // D-FLATFILL: no trades this minute on a flat-fill (thin) token → carry
+        // the previous close (vol 0), no strike. Seed lastClose from the DB once
+        // on cold start. A flat-fill is outlier-guard-eligible downstream.
+        if (!lastClose.has(lcKey)) {
+          lastClose.set(lcKey, await getLastSourceClose(k.currency, k.source));
+        }
+        const prev = lastClose.get(lcKey);
+        if (prev != null) {
+          arr.push({ source: k.source, candle: { open: prev, high: prev, low: prev, close: prev, volume: 0 } });
+        } else {
+          // No prior close (brand-new listing) — omit this venue, still no strike.
+          arr.push({ source: k.source, candle: null, error: "no_data" });
+        }
       } else {
+        // Real failure (HTTP/timeout/malformed), OR empty on a strict currency
+        // (BTC + liquid: an empty minute means a glitch, not a no-trade) → strike.
         arr.push({ source: k.source, candle: null, error: String(r.reason) });
         pushVenueError(k.source, `${k.currency} (${k.symbol}): ${String(r.reason)}`);
       }
@@ -304,7 +332,7 @@ export async function collect(minuteTs: Date): Promise<boolean> {
       const results = resultsByCurrency.get(currency);
       if (!results || !results.length) continue;
 
-      const meta         = await getCurrency(currency);
+      const meta         = metaByCurrency.get(currency);
       const minSources   = meta?.minSources ?? await getSettingInt("minSources", 3);
       const baseline     = await getSourceCountBaseline(currency);
       const sigma        = await getRecentCloseStddev(currency);

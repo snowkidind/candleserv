@@ -1,4 +1,5 @@
 import type { SourceCandle } from "../types/index.js";
+import { EmptyCandleError } from "./errors.js";
 
 const BASE = "https://api.bybit.com";
 const TIMEOUT_MS = 6000;
@@ -119,7 +120,7 @@ export async function fetchBybitCandle(symbol: string, minuteTs: Date): Promise<
     if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
     const json = await res.json() as { result?: { list?: unknown[][] } };
     const list = json.result?.list;
-    if (!list?.length) throw new Error("No candle returned");
+    if (!list?.length) throw new EmptyCandleError("bybit");
     // Bybit returns [startTime, open, high, low, close, volume, turnover]
     const [, o, h, l, c, v] = list[0];
     return {

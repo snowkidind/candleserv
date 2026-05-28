@@ -1,4 +1,5 @@
 import type { SourceCandle } from "../types/index.js";
+import { EmptyCandleError } from "./errors.js";
 
 const BASE = "https://api.binance.com";
 const TIMEOUT_MS = 6000;
@@ -28,7 +29,7 @@ export async function fetchBinanceCandle(symbol: string, minuteTs: Date): Promis
       data = await res2.json() as unknown[][];
     }
 
-    if (!data.length) throw new Error("No candle returned");
+    if (!data.length) throw new EmptyCandleError("binance");
     const [, o, h, l, c, v] = data[0];
     return {
       open: Number(o),

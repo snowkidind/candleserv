@@ -1,4 +1,5 @@
 import type { SourceCandle } from "../types/index.js";
+import { EmptyCandleError } from "./errors.js";
 
 const BASE = "https://api.kraken.com";
 const TIMEOUT_MS = 6000;
@@ -66,7 +67,7 @@ export async function fetchKrakenCandle(symbol: string, minuteTs: Date): Promise
     if (!key) throw new Error("No data key in Kraken response");
 
     const rows = result[key] as unknown[][];
-    if (!rows.length) throw new Error("No candle returned");
+    if (!rows.length) throw new EmptyCandleError("kraken");
 
     // Kraken: [time, open, high, low, close, vwap, volume, count]
     const row = rows[0];

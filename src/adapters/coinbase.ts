@@ -1,4 +1,5 @@
 import type { SourceCandle } from "../types/index.js";
+import { EmptyCandleError } from "./errors.js";
 
 const BASE = "https://api.exchange.coinbase.com";
 const TIMEOUT_MS = 6000;
@@ -67,7 +68,7 @@ export async function fetchCoinbaseCandle(symbol: string, minuteTs: Date): Promi
     const res = await fetch(url, { signal: controller.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
     const data = await res.json() as unknown[][];
-    if (!data.length) throw new Error("No candle returned");
+    if (!data.length) throw new EmptyCandleError("coinbase");
 
     // Coinbase: [timestamp_unix, low, high, open, close, volume]
     const row = data[0];

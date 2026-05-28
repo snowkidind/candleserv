@@ -14,7 +14,7 @@
  * The response is a JSON array of arrays (no envelope).
  */
 import type { SourceCandle } from "../types/index.js";
-import { OutOfHistoryError } from "./errors.js";
+import { OutOfHistoryError, EmptyCandleError } from "./errors.js";
 
 const BASE = "https://api.gateio.ws";
 const TIMEOUT_MS = 6000;
@@ -130,7 +130,7 @@ export async function fetchGateCandle(symbol: string, minuteTs: Date): Promise<S
     const res = await fetch(url, { signal: controller.signal });
     await throwIfNotOk(res, url);
     const data = await res.json() as unknown[][];
-    if (!Array.isArray(data) || !data.length) throw new Error("No candle returned");
+    if (!Array.isArray(data) || !data.length) throw new EmptyCandleError("gate");
     return parseRow(data[0]).candle;
   } finally {
     clearTimeout(timer);
