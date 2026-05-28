@@ -24,12 +24,12 @@ const OKX_MAX_LIMIT = 100;
 
 interface OkxRow { 0: string; 1: string; 2: string; 3: string; 4: string; 5: string; }
 
-export async function fetchOkxCandle(minuteTs: Date): Promise<SourceCandle> {
+export async function fetchOkxCandle(symbol: string, minuteTs: Date): Promise<SourceCandle> {
   // Tight window straddling the requested minute. Pulling limit=1 with both
   // bounds set means at most one record can match.
   const before = minuteTs.getTime() - 1;            // strictly newer than the previous minute
   const after  = minuteTs.getTime() + 60000;        // strictly older than the next minute
-  const url = `${BASE}/api/v5/market/history-candles?instId=BTC-USDT&bar=1m&before=${before}&after=${after}&limit=1`;
+  const url = `${BASE}/api/v5/market/history-candles?instId=${symbol}&bar=1m&before=${before}&after=${after}&limit=1`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -53,7 +53,7 @@ export async function fetchOkxCandle(minuteTs: Date): Promise<SourceCandle> {
   }
 }
 
-export async function fetchOkxRange(endTime: Date, limit: number): Promise<{ timestamp: Date; candle: SourceCandle }[]> {
+export async function fetchOkxRange(symbol: string, endTime: Date, limit: number): Promise<{ timestamp: Date; candle: SourceCandle }[]> {
   // Paginate internally because OKX caps each call at 100 rows. Walk backward
   // by setting `after` to the oldest timestamp seen so far on the next call.
   const want = Math.min(limit, 1000);
@@ -64,7 +64,7 @@ export async function fetchOkxRange(endTime: Date, limit: number): Promise<{ tim
   while (collected.length < want && safety-- > 0) {
     const remaining = want - collected.length;
     const pageLimit = Math.min(OKX_MAX_LIMIT, remaining);
-    const url = `${BASE}/api/v5/market/history-candles?instId=BTC-USDT&bar=1m&after=${cursorAfter}&limit=${pageLimit}`;
+    const url = `${BASE}/api/v5/market/history-candles?instId=${symbol}&bar=1m&after=${cursorAfter}&limit=${pageLimit}`;
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), RANGE_TIMEOUT_MS);

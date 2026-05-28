@@ -1,4 +1,5 @@
 import { ADAPTERS, SOURCE_NAMES } from "../adapters/registry.js";
+import { symbolFor } from "../adapters/symbolMap.js";
 import { applyGuards, buildComposite } from "./composite.js";
 import { composeMinute } from "./compose.js";
 import { getCurrentFormula } from "../db/formulaChanges.js";
@@ -97,7 +98,7 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
     const activeAdapters = ADAPTERS.filter((a) => !excluded.has(a.name));
 
     const settled = await Promise.allSettled(
-      activeAdapters.map((a) => a.fetchRange(tileEnd, limit)),
+      activeAdapters.map((a) => a.fetchRange(symbolFor("BTC", a.name), tileEnd, limit)),
     );
 
     for (let i = 0; i < activeAdapters.length; i++) {
@@ -198,7 +199,7 @@ async function fetchAllSources(minuteTs: Date): Promise<SourceResult[]> {
   const excluded = new Set(getCurrentFormula().excludedSources);
   return Promise.all(
     ADAPTERS.filter((a) => !excluded.has(a.name)).map((a) =>
-      a.fetchOne(minuteTs)
+      a.fetchOne(symbolFor("BTC", a.name), minuteTs)
         .then((candle) => ({ source: a.name, candle } as SourceResult))
         .catch((err) => ({ source: a.name, candle: null, error: String(err) } as SourceResult)),
     ),

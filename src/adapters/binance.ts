@@ -6,10 +6,10 @@ const TIMEOUT_MS = 6000;
 /**
  * Fetch a single 1m candle for a given UTC minute boundary.
  */
-export async function fetchBinanceCandle(minuteTs: Date): Promise<SourceCandle> {
+export async function fetchBinanceCandle(symbol: string, minuteTs: Date): Promise<SourceCandle> {
   const startTime = minuteTs.getTime();
   const endTime = startTime + 60000 - 1;
-  const url = `${BASE}/api/v3/klines?symbol=BTCUSDT&interval=1m&startTime=${startTime}&endTime=${endTime}&limit=1`;
+  const url = `${BASE}/api/v3/klines?symbol=${symbol}&interval=1m&startTime=${startTime}&endTime=${endTime}&limit=1`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -105,8 +105,8 @@ export async function fetchBinanceStableRange(endTime: Date, limit = 1000): Prom
 /**
  * Fetch up to 1000 1m candles ending at endTime (for backfill).
  */
-export async function fetchBinanceRange(endTime: Date, limit = 1000): Promise<{ timestamp: Date; candle: SourceCandle }[]> {
-  const url = `${BASE}/api/v3/klines?symbol=BTCUSDT&interval=1m&endTime=${endTime.getTime()}&limit=${limit}`;
+export async function fetchBinanceRange(symbol: string, endTime: Date, limit = 1000): Promise<{ timestamp: Date; candle: SourceCandle }[]> {
+  const url = `${BASE}/api/v3/klines?symbol=${symbol}&interval=1m&endTime=${endTime.getTime()}&limit=${limit}`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 30000);

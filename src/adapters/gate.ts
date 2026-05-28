@@ -119,10 +119,10 @@ export async function fetchGateStableRange(endTime: Date, limit: number): Promis
   }
 }
 
-export async function fetchGateCandle(minuteTs: Date): Promise<SourceCandle> {
+export async function fetchGateCandle(symbol: string, minuteTs: Date): Promise<SourceCandle> {
   const fromSec = Math.floor(minuteTs.getTime() / 1000);
   const toSec   = fromSec + 60;
-  const url = `${BASE}/api/v4/spot/candlesticks?currency_pair=BTC_USDT&interval=1m&from=${fromSec}&to=${toSec}&limit=1`;
+  const url = `${BASE}/api/v4/spot/candlesticks?currency_pair=${symbol}&interval=1m&from=${fromSec}&to=${toSec}&limit=1`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -137,10 +137,10 @@ export async function fetchGateCandle(minuteTs: Date): Promise<SourceCandle> {
   }
 }
 
-export async function fetchGateRange(endTime: Date, limit: number): Promise<{ timestamp: Date; candle: SourceCandle }[]> {
+export async function fetchGateRange(symbol: string, endTime: Date, limit: number): Promise<{ timestamp: Date; candle: SourceCandle }[]> {
   const toSec   = Math.floor(endTime.getTime() / 1000);
   const fromSec = toSec - Math.min(limit, 1000) * 60;
-  const url = `${BASE}/api/v4/spot/candlesticks?currency_pair=BTC_USDT&interval=1m&from=${fromSec}&to=${toSec}&limit=${Math.min(limit, 1000)}`;
+  const url = `${BASE}/api/v4/spot/candlesticks?currency_pair=${symbol}&interval=1m&from=${fromSec}&to=${toSec}&limit=${Math.min(limit, 1000)}`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), RANGE_TIMEOUT_MS);

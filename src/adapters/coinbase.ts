@@ -5,10 +5,10 @@ const TIMEOUT_MS = 6000;
 
 const COINBASE_CHUNK = 300; // API hard limit per call
 
-async function fetchCoinbaseChunk(startTime: Date, endTime: Date): Promise<{ timestamp: Date; candle: SourceCandle }[]> {
+async function fetchCoinbaseChunk(symbol: string, startTime: Date, endTime: Date): Promise<{ timestamp: Date; candle: SourceCandle }[]> {
   const start = startTime.toISOString().slice(0, 19) + "Z";
   const end   = endTime.toISOString().slice(0, 19) + "Z";
-  const url = `${BASE}/products/BTC-USD/candles?granularity=60&start=${start}&end=${end}`;
+  const url = `${BASE}/products/${symbol}/candles?granularity=60&start=${start}&end=${end}`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 30000);
@@ -38,7 +38,7 @@ async function fetchCoinbaseChunk(startTime: Date, endTime: Date): Promise<{ tim
  * Internally paginates in 300-candle chunks (Coinbase API limit).
  * Returns rows sorted ascending by timestamp.
  */
-export async function fetchCoinbaseRange(endTime: Date, limit: number): Promise<{ timestamp: Date; candle: SourceCandle }[]> {
+export async function fetchCoinbaseRange(symbol: string, endTime: Date, limit: number): Promise<{ timestamp: Date; candle: SourceCandle }[]> {
   const allResults: { timestamp: Date; candle: SourceCandle }[] = [];
   let remaining = limit;
   let chunkEnd = endTime;
@@ -46,7 +46,7 @@ export async function fetchCoinbaseRange(endTime: Date, limit: number): Promise<
   while (remaining > 0) {
     const chunkSize  = Math.min(remaining, COINBASE_CHUNK);
     const chunkStart = new Date(chunkEnd.getTime() - chunkSize * 60000);
-    const rows = await fetchCoinbaseChunk(chunkStart, chunkEnd);
+    const rows = await fetchCoinbaseChunk(symbol, chunkStart, chunkEnd);
     allResults.push(...rows);
     remaining -= chunkSize;
     chunkEnd   = chunkStart;
@@ -55,10 +55,10 @@ export async function fetchCoinbaseRange(endTime: Date, limit: number): Promise<
   return allResults.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 }
 
-export async function fetchCoinbaseCandle(minuteTs: Date): Promise<SourceCandle> {
+export async function fetchCoinbaseCandle(symbol: string, minuteTs: Date): Promise<SourceCandle> {
   const start = minuteTs.toISOString().slice(0, 19) + "Z";
   const end = new Date(minuteTs.getTime() + 60000).toISOString().slice(0, 19) + "Z";
-  const url = `${BASE}/products/BTC-USD/candles?granularity=60&start=${start}&end=${end}`;
+  const url = `${BASE}/products/${symbol}/candles?granularity=60&start=${start}&end=${end}`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);

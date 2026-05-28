@@ -84,3 +84,15 @@ export const SYMBOL_MAP: Record<string, Partial<Record<SourceName, string>>> = {
 };
 
 export const SUPPORTED_CURRENCIES = Object.keys(SYMBOL_MAP);
+
+/**
+ * Venue symbol for a (currency, source). Throws if unmapped — a fetch issued for
+ * an unmapped pair is a wiring bug, and silent fallbacks are banned in this
+ * codebase. The live fetch set is gated upstream by currency_sources, so this
+ * should only ever be called for mapped pairs.
+ */
+export function symbolFor(currency: string, source: string): string {
+  const sym = SYMBOL_MAP[currency]?.[source as SourceName];
+  if (!sym) throw new Error(`[symbolMap] no symbol mapped for ${currency}/${source}`);
+  return sym;
+}

@@ -1,4 +1,5 @@
 import { ADAPTERS, ADAPTER_BY_NAME, SOURCE_NAMES, type Adapter } from "../adapters/registry.js";
+import { symbolFor } from "../adapters/symbolMap.js";
 import { applyGuards } from "./composite.js";
 import { composeMinute } from "./compose.js";
 import { getSourceCountBaseline, getRecentCloseStddev, getTrailingVolumeLeader, get24hSourceStats } from "../db/candles.js";
@@ -188,7 +189,7 @@ async function fetchVenueBundle(adapter: Adapter, minuteTs: Date): Promise<Venue
   const t0 = Date.now();
   try {
     const [candle, rate] = await Promise.all([
-      adapter.fetchOne(minuteTs),
+      adapter.fetchOne(symbolFor("BTC", adapter.name), minuteTs),
       adapter.normalize.pegFetcher
         ? adapter.normalize.pegFetcher(minuteTs)
         : Promise.resolve(null),

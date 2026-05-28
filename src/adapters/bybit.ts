@@ -7,8 +7,8 @@ const TIMEOUT_MS = 6000;
  * Fetch up to 1000 1m candles ending before endTime (for backfill).
  * Returns rows sorted ascending by timestamp.
  */
-export async function fetchBybitRange(endTime: Date, limit: number): Promise<{ timestamp: Date; candle: SourceCandle }[]> {
-  const url = `${BASE}/v5/market/kline?symbol=BTCUSDT&interval=1&end=${endTime.getTime()}&limit=${Math.min(limit, 1000)}`;
+export async function fetchBybitRange(symbol: string, endTime: Date, limit: number): Promise<{ timestamp: Date; candle: SourceCandle }[]> {
+  const url = `${BASE}/v5/market/kline?symbol=${symbol}&interval=1&end=${endTime.getTime()}&limit=${Math.min(limit, 1000)}`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 30000);
@@ -106,10 +106,10 @@ export async function fetchBybitStableRange(endTime: Date, limit: number): Promi
   }
 }
 
-export async function fetchBybitCandle(minuteTs: Date): Promise<SourceCandle> {
+export async function fetchBybitCandle(symbol: string, minuteTs: Date): Promise<SourceCandle> {
   const startTime = minuteTs.getTime();
   const endTime = startTime + 60000;
-  const url = `${BASE}/v5/market/kline?symbol=BTCUSDT&interval=1&start=${startTime}&end=${endTime}&limit=1`;
+  const url = `${BASE}/v5/market/kline?symbol=${symbol}&interval=1&start=${startTime}&end=${endTime}&limit=1`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);

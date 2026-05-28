@@ -92,10 +92,10 @@ export async function fetchBitgetStableRange(endTime: Date, limit: number): Prom
   }
 }
 
-export async function fetchBitgetCandle(minuteTs: Date): Promise<SourceCandle> {
+export async function fetchBitgetCandle(symbol: string, minuteTs: Date): Promise<SourceCandle> {
   const startTime = minuteTs.getTime();
   const endTime   = startTime + 60000;
-  const url = `${BASE}/api/v2/spot/market/candles?symbol=BTCUSDT&granularity=1min&startTime=${startTime}&endTime=${endTime}&limit=1`;
+  const url = `${BASE}/api/v2/spot/market/candles?symbol=${symbol}&granularity=1min&startTime=${startTime}&endTime=${endTime}&limit=1`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -112,11 +112,11 @@ export async function fetchBitgetCandle(minuteTs: Date): Promise<SourceCandle> {
   }
 }
 
-export async function fetchBitgetRange(endTime: Date, limit: number): Promise<{ timestamp: Date; candle: SourceCandle }[]> {
+export async function fetchBitgetRange(symbol: string, endTime: Date, limit: number): Promise<{ timestamp: Date; candle: SourceCandle }[]> {
   const endMs   = endTime.getTime();
   const want    = Math.min(limit, 1000);
   const startMs = endMs - want * 60000;
-  const url = `${BASE}/api/v2/spot/market/candles?symbol=BTCUSDT&granularity=1min&startTime=${startMs}&endTime=${endMs}&limit=${want}`;
+  const url = `${BASE}/api/v2/spot/market/candles?symbol=${symbol}&granularity=1min&startTime=${startMs}&endTime=${endMs}&limit=${want}`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), RANGE_TIMEOUT_MS);

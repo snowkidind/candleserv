@@ -14,6 +14,7 @@
  * clamps are the caller's responsibility (the REST handler enforces them).
  */
 import { ADAPTER_BY_NAME, SOURCE_NAMES } from "../adapters/registry.js";
+import { symbolFor } from "../adapters/symbolMap.js";
 import { isOutOfHistory } from "../adapters/errors.js";
 import { composeMinute } from "./compose.js";
 import type { Formula } from "./compose.js";
@@ -114,7 +115,7 @@ export async function ensureSourceCoverage(
 
     // Fan out per-source fetchRange for this tile.
     const settled = await Promise.allSettled(
-      sources.map((s) => ADAPTER_BY_NAME[s].fetchRange(tileEnd, limit)),
+      sources.map((s) => ADAPTER_BY_NAME[s].fetchRange(symbolFor("BTC", s), tileEnd, limit)),
     );
 
     // Per (minute, source), either insert fetched candle or sentinel.

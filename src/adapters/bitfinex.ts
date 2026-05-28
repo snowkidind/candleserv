@@ -7,9 +7,9 @@ const TIMEOUT_MS = 6000;
  * Fetch up to `limit` 1m candles ending before endTime (for backfill).
  * Returns rows sorted ascending by timestamp (sort=1).
  */
-export async function fetchBitfinexRange(endTime: Date, limit: number): Promise<{ timestamp: Date; candle: SourceCandle }[]> {
+export async function fetchBitfinexRange(symbol: string, endTime: Date, limit: number): Promise<{ timestamp: Date; candle: SourceCandle }[]> {
   const startMs = endTime.getTime() - limit * 60000;
-  const url = `${BASE}/v2/candles/trade:1m:tBTCUSD/hist?start=${startMs}&end=${endTime.getTime()}&limit=${limit}&sort=1`;
+  const url = `${BASE}/v2/candles/trade:1m:${symbol}/hist?start=${startMs}&end=${endTime.getTime()}&limit=${limit}&sort=1`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 30000);
@@ -34,10 +34,10 @@ export async function fetchBitfinexRange(endTime: Date, limit: number): Promise<
   }
 }
 
-export async function fetchBitfinexCandle(minuteTs: Date): Promise<SourceCandle> {
+export async function fetchBitfinexCandle(symbol: string, minuteTs: Date): Promise<SourceCandle> {
   const start = minuteTs.getTime();
   const end = start + 60000;
-  const url = `${BASE}/v2/candles/trade:1m:tBTCUSD/hist?start=${start}&end=${end}&limit=1&sort=1`;
+  const url = `${BASE}/v2/candles/trade:1m:${symbol}/hist?start=${start}&end=${end}&limit=1&sort=1`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);

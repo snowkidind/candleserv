@@ -9,10 +9,10 @@ const TIMEOUT_MS = 6000;
  * forward, then filters to timestamp < endTime.
  * Returns rows sorted ascending by timestamp.
  */
-export async function fetchKrakenRange(endTime: Date, limit: number): Promise<{ timestamp: Date; candle: SourceCandle }[]> {
+export async function fetchKrakenRange(symbol: string, endTime: Date, limit: number): Promise<{ timestamp: Date; candle: SourceCandle }[]> {
   const clampedLimit = Math.min(limit, 720);
   const since = Math.floor((endTime.getTime() - clampedLimit * 60000) / 1000);
-  const url = `${BASE}/0/public/OHLC?pair=XBTUSD&interval=1&since=${since}`;
+  const url = `${BASE}/0/public/OHLC?pair=${symbol}&interval=1&since=${since}`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 30000);
@@ -47,10 +47,10 @@ export async function fetchKrakenRange(endTime: Date, limit: number): Promise<{ 
   }
 }
 
-export async function fetchKrakenCandle(minuteTs: Date): Promise<SourceCandle> {
+export async function fetchKrakenCandle(symbol: string, minuteTs: Date): Promise<SourceCandle> {
   // Kraken since = Unix seconds. Returns up to 720 candles from 'since'.
   const since = Math.floor(minuteTs.getTime() / 1000);
-  const url = `${BASE}/0/public/OHLC?pair=XBTUSD&interval=1&since=${since}`;
+  const url = `${BASE}/0/public/OHLC?pair=${symbol}&interval=1&since=${since}`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);

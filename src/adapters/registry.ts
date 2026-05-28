@@ -45,8 +45,8 @@ export interface NormalizationProfile {
 export interface Adapter {
   name: string;
   bit: number;
-  fetchOne: (ts: Date) => Promise<SourceCandle>;
-  fetchRange: (endTime: Date, limit: number) => Promise<{ timestamp: Date; candle: SourceCandle }[]>;
+  fetchOne: (symbol: string, ts: Date) => Promise<SourceCandle>;
+  fetchRange: (symbol: string, endTime: Date, limit: number) => Promise<{ timestamp: Date; candle: SourceCandle }[]>;
   normalize: NormalizationProfile;
 }
 
