@@ -48,6 +48,7 @@ interface Args {
   batchSize: number;
   skipSources: boolean;
   dryRun: boolean;
+  currency: string;   // currency to tag synced rows with (remote is single-currency BTC schema)
 }
 
 function printUsage(): void {
@@ -82,7 +83,7 @@ Options:
 
 function parseArgs(): Args {
   const argv = process.argv.slice(2);
-  const out: Args = { from: null, to: null, batchSize: 4000, skipSources: false, dryRun: false };
+  const out: Args = { from: null, to: null, batchSize: 4000, skipSources: false, dryRun: false, currency: "BTC" };
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -92,6 +93,7 @@ function parseArgs(): Args {
       case "--batch-size":  out.batchSize = Number(argv[++i]); break;
       case "--no-sources":  out.skipSources = true; break;
       case "--dry-run":     out.dryRun = true; break;
+      case "--currency":    out.currency = (argv[++i] ?? "BTC").toUpperCase(); break;
       case "-h":
       case "--help":        printUsage(); process.exit(0);
       default:              throw new Error(`Unknown argument: ${a}`);
@@ -196,19 +198,22 @@ async function fetchCandles1mBatch(
   return res.rows as Candle1mRow[];
 }
 
-async function insertCandles1mBatch(rows: Candle1mRow[]): Promise<number> {
+async function insertCandles1mBatch(rows: Candle1mRow[], currency: string): Promise<number> {
   if (!rows.length) return 0;
+  // The remote is the single-currency (BTC-only) schema with no currency
+  // column, so tag every synced row with the target currency ($14) and use the
+  // composite (currency,timestamp) conflict target.
   const res = await localQuery(
     `INSERT INTO candles_1m (
-       "timestamp","open","high","low","close","volume","volumeNormalized",
+       "currency","timestamp","open","high","low","close","volume","volumeNormalized",
        "sourceCount","sourceCountBaseline","sources","confidence","createdAt","updatedAt"
      )
-     SELECT * FROM unnest(
+     SELECT $14::varchar, * FROM unnest(
        $1::timestamptz[], $2::numeric[], $3::numeric[], $4::numeric[], $5::numeric[],
        $6::numeric[], $7::numeric[], $8::smallint[], $9::smallint[],
        $10::integer[], $11::numeric[], $12::timestamptz[], $13::timestamptz[]
      )
-     ON CONFLICT ("timestamp") DO NOTHING`,
+     ON CONFLICT ("currency","timestamp") DO NOTHING`,
     [
       rows.map(r => r.timestamp),
       rows.map(r => r.open),
@@ -223,6 +228,7 @@ async function insertCandles1mBatch(rows: Candle1mRow[]): Promise<number> {
       rows.map(r => r.confidence),
       rows.map(r => r.createdAt),
       rows.map(r => r.updatedAt),
+      currency,
     ],
   );
   return res.rowCount ?? 0;
@@ -265,17 +271,17 @@ async function fetchSourcesBatch(
   return res.rows as SourceRow[];
 }
 
-async function insertSourcesBatch(rows: SourceRow[]): Promise<number> {
+async function insertSourcesBatch(rows: SourceRow[], currency: string): Promise<number> {
   if (!rows.length) return 0;
   const res = await localQuery(
     `INSERT INTO candles_1m_sources (
-       "timestamp","source","open","high","low","close","volume","rejected","rejectedReason"
+       "currency","timestamp","source","open","high","low","close","volume","rejected","rejectedReason"
      )
-     SELECT * FROM unnest(
+     SELECT $10::varchar, * FROM unnest(
        $1::timestamptz[], $2::varchar[], $3::numeric[], $4::numeric[],
        $5::numeric[], $6::numeric[], $7::numeric[], $8::boolean[], $9::varchar[]
      )
-     ON CONFLICT ("timestamp","source") DO NOTHING`,
+     ON CONFLICT ("currency","timestamp","source") DO NOTHING`,
     [
       rows.map(r => r.timestamp),
       rows.map(r => r.source),
@@ -286,6 +292,7 @@ async function insertSourcesBatch(rows: SourceRow[]): Promise<number> {
       rows.map(r => r.volume),
       rows.map(r => r.rejected),
       rows.map(r => r.rejectedReason),
+      currency,
     ],
   );
   return res.rowCount ?? 0;
@@ -310,7 +317,7 @@ async function syncCandles1m(remote: pg.Pool, args: Args): Promise<void> {
   while (true) {
     const batch = await fetchCandles1mBatch(remote, lastTs, args);
     if (!batch.length) break;
-    const ins = await insertCandles1mBatch(batch);
+    const ins = await insertCandles1mBatch(batch, args.currency);
     inserted += ins;
     processed += batch.length;
     lastTs = batch[batch.length - 1].timestamp;
@@ -344,7 +351,7 @@ async function syncSources(remote: pg.Pool, args: Args): Promise<void> {
   while (true) {
     const batch = await fetchSourcesBatch(remote, lastTs, lastSource, args);
     if (!batch.length) break;
-    const ins = await insertSourcesBatch(batch);
+    const ins = await insertSourcesBatch(batch, args.currency);
     inserted += ins;
     processed += batch.length;
     const tail = batch[batch.length - 1];
@@ -369,6 +376,7 @@ async function main(): Promise<void> {
   console.log(`  to:          ${args.to   ?? "(unbounded)"}`);
   console.log(`  batch size:  ${args.batchSize}`);
   console.log(`  sources:     ${args.skipSources ? "skip" : "include"}`);
+  console.log(`  currency:    ${args.currency}  (remote is single-currency; rows tagged on insert)`);
   console.log(`  mode:        ${args.dryRun ? "DRY RUN" : "write"}`);
 
   const remote = new Pool({ connectionString: remoteUrl });

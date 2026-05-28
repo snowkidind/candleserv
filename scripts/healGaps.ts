@@ -31,6 +31,7 @@ dotenv.config({ path: resolve(__dirname, "../.env") });
 import { query, getPool } from "../src/db/pool";
 import { healRange } from "../src/lib/healer";
 import { upsertGap, setGapState } from "../src/db/gaps";
+import { getEnabledCurrencies } from "../src/db/currencies";
 
 interface Range {
   from: Date;
@@ -38,25 +39,27 @@ interface Range {
   minutes: Date[];
 }
 
-function parseArgs(): { days: number; dryRun: boolean } {
+function parseArgs(): { days: number; dryRun: boolean; currency?: string } {
   const args = process.argv.slice(2);
   const dryRun = args.includes("--dry-run");
+  const currencyArg = args.find((a) => a.startsWith("--currency="));
+  const currency = currencyArg ? currencyArg.split("=")[1]?.toUpperCase() : undefined;
   const positional = args.filter((a) => !a.startsWith("--"));
   const days = positional.length ? Number(positional[0]) : 7;
   if (!Number.isFinite(days) || days <= 0) {
     throw new Error(`Invalid days argument: ${positional[0]}`);
   }
-  return { days, dryRun };
+  return { days, dryRun, currency };
 }
 
-async function findMissingMinutes(from: Date, to: Date): Promise<Date[]> {
+async function findMissingMinutes(currency: string, from: Date, to: Date): Promise<Date[]> {
   const res = await query(
     `SELECT gs AS expected_ts
      FROM generate_series($1::timestamptz, $2::timestamptz - INTERVAL '1 minute', INTERVAL '1 minute') gs
-     LEFT JOIN candles_1m c ON c."timestamp" = gs
+     LEFT JOIN candles_1m c ON c."timestamp" = gs AND c."currency" = $3
      WHERE c."timestamp" IS NULL
      ORDER BY gs ASC`,
-    [from, to]
+    [from, to, currency]
   );
   return res.rows.map((r: Record<string, unknown>) => new Date(r.expected_ts as string));
 }
@@ -81,7 +84,7 @@ function groupIntoRanges(timestamps: Date[]): Range[] {
   return ranges;
 }
 
-async function reportConfidence(from: Date, to: Date): Promise<void> {
+async function reportConfidence(currency: string, from: Date, to: Date): Promise<void> {
   const res = await query(
     `SELECT
        COUNT(*)::int                                                      AS total,
@@ -90,8 +93,8 @@ async function reportConfidence(from: Date, to: Date): Promise<void> {
        COUNT(*) FILTER (WHERE confidence < 0.6)::int                      AS low_confidence,
        ROUND(AVG(confidence)::numeric, 3)                                 AS avg_confidence
      FROM candles_1m
-     WHERE "timestamp" >= $1 AND "timestamp" < $2`,
-    [from, to]
+     WHERE "currency" = $3 AND "timestamp" >= $1 AND "timestamp" < $2`,
+    [from, to, currency]
   );
   const r = res.rows[0];
   console.log(`  window rows:       ${r.total}`);
@@ -101,22 +104,18 @@ async function reportConfidence(from: Date, to: Date): Promise<void> {
   console.log(`  low (<3/5):        ${r.low_confidence}`);
 }
 
-async function main(): Promise<void> {
-  const { days, dryRun } = parseArgs();
-
+async function healCurrency(currency: string, days: number, dryRun: boolean): Promise<void> {
   const to = new Date();
   to.setSeconds(0, 0); // only scan completed minutes — never reach into the future
   const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);
 
-  console.log(`\nhealGaps: scanning ${from.toISOString()} → ${to.toISOString()} (${days}d)`);
-  if (dryRun) console.log("DRY RUN — no fetches, no writes\n");
+  console.log(`\n=== ${currency}: scanning ${from.toISOString()} → ${to.toISOString()} (${days}d) ===`);
 
-  const missing = await findMissingMinutes(from, to);
-  console.log(`\nmissing minutes: ${missing.length}`);
+  const missing = await findMissingMinutes(currency, from, to);
+  console.log(`missing minutes: ${missing.length}`);
 
   if (!missing.length) {
-    console.log("no gaps to heal.\n");
-    await getPool().end();
+    console.log("no gaps to heal.");
     return;
   }
 
@@ -128,9 +127,7 @@ async function main(): Promise<void> {
 
   if (dryRun) {
     console.log("\n(dry-run) skipping heal. confidence snapshot for window:");
-    await reportConfidence(from, to);
-    console.log();
-    await getPool().end();
+    await reportConfidence(currency, from, to);
     return;
   }
 
@@ -139,7 +136,7 @@ async function main(): Promise<void> {
   console.log("\nregistering gap rows...");
   const gapIdsByMinute = new Map<number, number>();
   for (const ts of missing) {
-    const row = await upsertGap("BTC", ts);
+    const row = await upsertGap(currency, ts);
     gapIdsByMinute.set(ts.getTime(), row.id);
     await setGapState(row.id, "healing");
   }
@@ -153,7 +150,7 @@ async function main(): Promise<void> {
       `\n[${i + 1}/${ranges.length}] healing ${r.from.toISOString()} → ${r.to.toISOString()} (${r.minutes.length}m)`
     );
 
-    const written = await healRange("BTC", r.from, r.to, true);
+    const written = await healRange(currency, r.from, r.to, true);
 
     let healed = 0;
     let unresolvable = 0;
@@ -175,12 +172,31 @@ async function main(): Promise<void> {
     totalUnresolvable += unresolvable;
   }
 
-  console.log(`\nsummary: healed=${totalHealed} unresolvable=${totalUnresolvable} of ${missing.length}`);
-  console.log("\nconfidence snapshot for window:");
-  await reportConfidence(from, to);
-  console.log();
+  console.log(`\n${currency} summary: healed=${totalHealed} unresolvable=${totalUnresolvable} of ${missing.length}`);
+  console.log("confidence snapshot for window:");
+  await reportConfidence(currency, from, to);
+}
 
-  await getPool().end();
+async function main(): Promise<void> {
+  const { days, dryRun, currency } = parseArgs();
+  const currencies = currency ? [currency] : await getEnabledCurrencies();
+
+  if (!currencies.length) {
+    console.log("no enabled currencies — nothing to do.");
+    await getPool().end();
+    return;
+  }
+
+  console.log(`\nhealGaps: ${currencies.join(", ")} (${days}d)${dryRun ? "  DRY RUN — no fetches, no writes" : ""}`);
+
+  try {
+    for (const c of currencies) {
+      await healCurrency(c, days, dryRun);
+    }
+    console.log();
+  } finally {
+    await getPool().end();
+  }
 }
 
 main().catch((err: Error) => {
