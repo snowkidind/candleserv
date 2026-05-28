@@ -42,6 +42,12 @@ export function CandleStreamProvider({ children }: { children: React.ReactNode }
   const tfRef       = useRef(tf);
   const currencyRef = useRef(currency);
   const timerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Monotonic connection generation. Every connect() bumps it; event handlers
+  // captured by a superseded connection compare against it and bail. Without
+  // this, an in-flight message from the previous currency's stream (closed but
+  // not yet GC'd) merges into the chart alongside the new currency — mixing
+  // e.g. BTC (~73k) and ETH (~$2k) bars into one out-of-order, wrong-scale set.
+  const genRef = useRef(0);
 
   useEffect(() => { tfRef.current = tf; }, [tf]);
   useEffect(() => { currencyRef.current = currency; }, [currency]);
@@ -50,10 +56,12 @@ export function CandleStreamProvider({ children }: { children: React.ReactNode }
     if (esRef.current) { esRef.current.close(); esRef.current = null; }
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
 
+    const myGen = ++genRef.current;
     const es = new EventSource(`/monitor/candles/stream?currency=${currencyRef.current}&tf=${currentTf}&n=200`);
     esRef.current = es;
 
     es.addEventListener("candles", (e) => {
+      if (myGen !== genRef.current) return; // superseded connection — ignore
       const candles = JSON.parse(e.data) as Candle[];
       if (!candles.length) return;
       setConnected(true);
@@ -63,10 +71,12 @@ export function CandleStreamProvider({ children }: { children: React.ReactNode }
     });
 
     es.addEventListener("source_state", () => {
+      if (myGen !== genRef.current) return;
       setSourceStateTick(n => n + 1);
     });
 
     es.onerror = () => {
+      if (myGen !== genRef.current) return; // superseded connection erroring — ignore
       if (document.hidden) return; // visibilitychange will reconnect
       setConnected(false);
       esRef.current?.close();

@@ -14,7 +14,10 @@ export default defineConfig({
   },
   server: {
     host: "0.0.0.0",
-    port: 5173,
+    // mc clone — 5173-5174 belongs to the canonical candleserv/frontend, 5175-5177
+    // to modelserv/tgram (ss-devops/portRegistry.md). 5180 keeps this parallel
+    // dev clone clear of all of them; strictPort fails loud on a collision.
+    port: 5180,
     strictPort: true,
     proxy: {
       "/v1": "http://localhost:3019",

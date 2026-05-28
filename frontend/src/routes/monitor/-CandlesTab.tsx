@@ -332,6 +332,15 @@ export default function CandlesTab() {
     gapRanges.current = [];
     errorBars.current = new Map();
     setAtHistoryStart(false);
+    // Blank the chart immediately so the previous tf/currency's bars don't
+    // linger (or visually mix) until the first new snapshot lands.
+    series.current?.setData([]);
+    volumeSeries.current?.setData([]);
+    gapSeries.current?.setData([]);
+    emaSlowSeries.current?.setData([]);
+    emaFastSeries.current?.setData([]);
+    smaSlowSeries.current?.setData([]);
+    smaFastSeries.current?.setData([]);
   }, [tf, currency]);
 
   // ── Fetch gap ranges and service errors on TF change ────────────────────────
@@ -427,8 +436,22 @@ export default function CandlesTab() {
 
   function sortedCandlesWithGaps(): (CandlestickData | WhitespaceData)[] {
     const gaps = getGapBars().map(t => ({ time: t as Time }));
-    return [...sortedCandles(), ...gaps]
+    const merged = [...sortedCandles(), ...gaps]
       .sort((a, b) => (a.time as number) - (b.time as number));
+    // Defensive: collapse duplicate timestamps (real candle wins over a gap
+    // whitespace bar, since candles are placed first before the stable sort) so
+    // lightweight-charts' strict-ascending setData can never throw and blank the
+    // chart. The currency stream is generation-guarded upstream, so this should
+    // be a no-op in practice — it's belt-and-suspenders.
+    const out: (CandlestickData | WhitespaceData)[] = [];
+    let lastT = -Infinity;
+    for (const d of merged) {
+      const t = d.time as number;
+      if (t === lastT) continue;
+      out.push(d);
+      lastT = t;
+    }
+    return out;
   }
 
   function sortedGapHistogram(): HistogramData[] {
