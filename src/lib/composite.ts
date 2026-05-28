@@ -108,12 +108,20 @@ export function applyGuards(results: SourceResult[], minSources: number, histori
  *   3. The final composite OHLC are medians across the post-correction
  *      contributions — H/L come from the same population as O/C, replacing
  *      the prior dominant-source-wick rule.
+ *
+ * premiumEnabled: per-currency toggle (currencies.premiumEnabled). When false,
+ *   the leave-one-out premium-offset correction (step 2) is bypassed entirely
+ *   and the composite OHLC are plain field-wise medians of the peg-adjusted
+ *   values. The peg always applies regardless — only the cross-venue premium
+ *   neutralization is gated. Defaults true so single-currency callers and the
+ *   N<3 path are unchanged.
  */
 export async function buildComposite(
   guarded: GuardedSource[],
   sourceCountBaseline: number,
   candleTs?: Date,
   pegRates?: Map<string, number>,
+  premiumEnabled: boolean = true,
 ): Promise<CompositeResult> {
   const accepted = guarded.filter((g) => !g.rejected && g.candle);
 
@@ -142,16 +150,20 @@ export async function buildComposite(
 
   let open: number, high: number, low: number, close: number;
 
-  if (pegged.length < MIN_FOR_OFFSET_CORRECTION) {
-    // Leave-one-out median is undefined for N<3 — peg-adjusted values pass
-    // through unmodified. composeMinute's minSources guard (default 3) usually
-    // prevents N<3 from reaching here in live operation, but recompose-historical
-    // paths may produce smaller populations.
+  if (!premiumEnabled || pegged.length < MIN_FOR_OFFSET_CORRECTION) {
+    // Plain field-wise medians of the peg-adjusted values. Two cases land here:
+    //   (a) premiumEnabled=false — operator disabled premium correction for this
+    //       currency; peg still applied above, only the cross-venue offset pull
+    //       is skipped.
+    //   (b) N<3 — leave-one-out median is undefined for fewer than 3 sources, so
+    //       the correction can't run. composeMinute's minSources guard (default 3)
+    //       usually prevents this live, but recompose-historical paths may
+    //       produce smaller populations.
     open  = median(pegged.map((p) => p.candle.open));
     close = median(pegged.map((p) => p.candle.close));
     high  = median(pegged.map((p) => p.candle.high));
     low   = median(pegged.map((p) => p.candle.low));
-    if (candleTs) {
+    if (premiumEnabled && candleTs) {
       logWarn(`[composite] N=${pegged.length} < ${MIN_FOR_OFFSET_CORRECTION} at ${candleTs.toISOString()}; skipping premium-offset correction`);
     }
   } else {

@@ -32,7 +32,7 @@ router.get("/candles/stream", ...guard, async (req, res) => {
       if (cached) {
         candles = JSON.parse(cached);
       } else {
-        candles = await getCandles({ tf, endingAt: new Date(), limit: n });
+        candles = await getCandles({ currency: "BTC", tf, endingAt: new Date(), limit: n });
         await redisSet(cacheKey, JSON.stringify(candles), 55);
       }
       res.write(`event: candles\ndata: ${JSON.stringify(candles)}\n\n`);

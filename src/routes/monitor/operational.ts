@@ -39,7 +39,7 @@ router.get("/candles", ...view, async (req, res) => {
   if (isNaN(end.getTime())) return res.status(400).json({ error: "Invalid endingAt" });
   const count = Math.min(parseInt(limit, 10) || 500, 2000);
   try {
-    const candles = await getCandles({ tf, endingAt: end, limit: count });
+    const candles = await getCandles({ currency: "BTC", tf, endingAt: end, limit: count });
     return res.json({ candles });
   } catch (err) {
     logError("[monitor] GET /candles failed:", err);
@@ -53,7 +53,7 @@ router.get("/candles/latest", ...view, async (req, res) => {
   if (!tf || !VALID_TFS.includes(tf)) return res.status(400).json({ error: "Invalid tf" });
   const count = Math.min(parseInt(n, 10) || 1, 5000);
   try {
-    const candles = await getCandles({ tf, endingAt: new Date(), limit: count });
+    const candles = await getCandles({ currency: "BTC", tf, endingAt: new Date(), limit: count });
     return res.json({ candles });
   } catch (err) {
     logError("[monitor] GET /candles/latest failed:", err);
@@ -87,7 +87,7 @@ router.get("/stats", ...view, async (_req, res) => {
       query(`SELECT "timestamp" FROM candles_1m ORDER BY "timestamp" ASC LIMIT 1`),
       query(`SELECT "timestamp" FROM candles_1m ORDER BY "timestamp" DESC LIMIT 1`),
       query(`SELECT "sourceCount", COUNT(*) AS cnt FROM candles_1m GROUP BY "sourceCount" ORDER BY "sourceCount"`),
-      getCollectionLatencyStats(60),
+      getCollectionLatencyStats("BTC", 60),
     ]);
     const dist: Record<string, number> = {};
     for (const row of distRes.rows) dist[String(row.sourceCount)] = Number(row.cnt);

@@ -13,7 +13,7 @@ router.get("/health", async (_req, res) => {
     const [latestRes, pendingGaps, latency, recentOutages] = await Promise.all([
       query(`SELECT "timestamp" FROM candles_1m ORDER BY "timestamp" DESC LIMIT 1`),
       countPendingGaps(),
-      getCollectionLatencyStats(60),
+      getCollectionLatencyStats("BTC", 60),
       getRecentOutages(5).catch(() => []),
     ]);
 

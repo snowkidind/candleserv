@@ -34,6 +34,9 @@ export interface ComposeMinuteOpts {
   baseline: number;
   minSources: number;
   volumeLeader?: string;
+  // Per-currency premium-offset toggle (currencies.premiumEnabled). Omitted →
+  // buildComposite defaults true, preserving single-currency behavior.
+  premiumEnabled?: boolean;
 }
 
 export interface ComposeMinuteResult {
@@ -62,6 +65,7 @@ interface ArchiveRow {
  * written. Caller pre-computes baseline / minSources / volumeLeader.
  */
 export async function composeMinute(
+  currency: string,
   minuteTs: Date,
   formula: Formula,
   opts: ComposeMinuteOpts,
@@ -78,8 +82,8 @@ export async function composeMinute(
        FROM candles_1m_sources s
        LEFT JOIN stable_rates_1m_sources r
          ON r."timestamp" = s."timestamp" AND r.source = s.source
-      WHERE s."timestamp" = $1`,
-    [minuteTs],
+      WHERE s."timestamp" = $1 AND s."currency" = $2`,
+    [minuteTs, currency],
   );
   const rows = res.rows as ArchiveRow[];
   const excluded = new Set(formula.excludedSources);
@@ -111,7 +115,7 @@ export async function composeMinute(
       rejectedReason = "missing_paired_rate";
       await recordError(
         "compose", "invariant_violation:missing_paired_rate",
-        `USDT venue ${r.source} has BTC row at ${minuteTs.toISOString()} without paired stable rate row — dropping from composite`,
+        `USDT venue ${r.source} has ${currency} row at ${minuteTs.toISOString()} without paired stable rate row — dropping from composite`,
       );
     }
 
@@ -142,10 +146,10 @@ export async function composeMinute(
       await client.query(
         `UPDATE candles_1m_sources
             SET "usedInFormula" = NULL, "updatedAt" = NOW()
-          WHERE "timestamp" = $1`,
-        [minuteTs],
+          WHERE "timestamp" = $1 AND "currency" = $2`,
+        [minuteTs, currency],
       );
-      await client.query(`DELETE FROM candles_1m WHERE "timestamp" = $1`, [minuteTs]);
+      await client.query(`DELETE FROM candles_1m WHERE "timestamp" = $1 AND "currency" = $2`, [minuteTs, currency]);
     });
     return {
       composed: false,
@@ -159,7 +163,7 @@ export async function composeMinute(
   // Success path — buildComposite produces the OHLCV + bitmask.
   let composite;
   try {
-    composite = await buildComposite(guarded, opts.baseline, minuteTs, pegRates);
+    composite = await buildComposite(guarded, opts.baseline, minuteTs, pegRates, opts.premiumEnabled);
   } catch (err) {
     // Shouldn't happen given the accepted.length >= minSources check above,
     // but if buildComposite throws (e.g., all-rejected race) fall back to skip.
@@ -168,10 +172,10 @@ export async function composeMinute(
       await client.query(
         `UPDATE candles_1m_sources
             SET "usedInFormula" = NULL, "updatedAt" = NOW()
-          WHERE "timestamp" = $1`,
-        [minuteTs],
+          WHERE "timestamp" = $1 AND "currency" = $2`,
+        [minuteTs, currency],
       );
-      await client.query(`DELETE FROM candles_1m WHERE "timestamp" = $1`, [minuteTs]);
+      await client.query(`DELETE FROM candles_1m WHERE "timestamp" = $1 AND "currency" = $2`, [minuteTs, currency]);
     });
     return {
       composed: false,
@@ -189,9 +193,9 @@ export async function composeMinute(
     // participates in the transaction.
     await client.query(
       `INSERT INTO candles_1m
-         ("timestamp","open","high","low","close","volume","volumeNormalized","sourceCount","sourceCountBaseline","sources","confidence")
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-       ON CONFLICT ("timestamp") DO UPDATE SET
+         ("currency","timestamp","open","high","low","close","volume","volumeNormalized","sourceCount","sourceCountBaseline","sources","confidence")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT ("currency","timestamp") DO UPDATE SET
          "open" = EXCLUDED."open", "high" = EXCLUDED."high",
          "low" = EXCLUDED."low",   "close" = EXCLUDED."close",
          "volume" = EXCLUDED."volume", "volumeNormalized" = EXCLUDED."volumeNormalized",
@@ -201,7 +205,7 @@ export async function composeMinute(
          "confidence" = EXCLUDED."confidence",
          "updatedAt" = NOW()`,
       [
-        minuteTs,
+        currency, minuteTs,
         composite.open, composite.high, composite.low, composite.close,
         composite.volume, composite.volumeNormalized,
         composite.sourceCount, composite.sourceCountBaseline,
@@ -215,8 +219,8 @@ export async function composeMinute(
       `UPDATE candles_1m_sources
           SET "usedInFormula" = (source != ALL($2::varchar[]) AND rejected = false),
               "updatedAt" = NOW()
-        WHERE "timestamp" = $1`,
-      [minuteTs, formula.excludedSources],
+        WHERE "timestamp" = $1 AND "currency" = $3`,
+      [minuteTs, formula.excludedSources, currency],
     );
   });
 

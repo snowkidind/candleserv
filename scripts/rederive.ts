@@ -28,7 +28,7 @@ async function main(): Promise<void> {
   // Fetch all distinct timestamps that have per-source data
   const tsRes = await query(
     `SELECT DISTINCT "timestamp" FROM candles_1m_sources
-     WHERE "timestamp" >= $1 AND "timestamp" < $2
+     WHERE "timestamp" >= $1 AND "timestamp" < $2 AND "currency" = 'BTC'
      ORDER BY "timestamp" ASC`,
     [START_DATE, END_DATE]
   );
@@ -47,7 +47,7 @@ async function main(): Promise<void> {
     const srcRes = await query(
       `SELECT source, open, high, low, close, volume, rejected, "rejectedReason"
        FROM candles_1m_sources
-       WHERE "timestamp" = $1`,
+       WHERE "timestamp" = $1 AND "currency" = 'BTC'`,
       [ts]
     );
 
@@ -67,6 +67,7 @@ async function main(): Promise<void> {
     try {
       const composite = await buildComposite(guarded, SOURCE_COUNT_BASELINE);
       await upsertCandle({
+        currency:            "BTC",
         timestamp:           ts,
         open:                composite.open,
         high:                composite.high,

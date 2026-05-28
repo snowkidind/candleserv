@@ -1,8 +1,9 @@
-import { ADAPTERS, ADAPTER_BY_NAME, SOURCE_NAMES, type Adapter } from "../adapters/registry.js";
-import { symbolFor } from "../adapters/symbolMap.js";
+import { ADAPTER_BY_NAME, SOURCE_NAMES } from "../adapters/registry.js";
 import { applyGuards } from "./composite.js";
 import { composeMinute } from "./compose.js";
 import { getSourceCountBaseline, getRecentCloseStddev, getTrailingVolumeLeader, get24hSourceStats } from "../db/candles.js";
+import { getEnabledCurrencies, getCurrency } from "../db/currencies.js";
+import { getActiveFeeds } from "../db/currencyFeeds.js";
 import { recordError } from "../db/errors.js";
 import { candleEmitter } from "./emitter.js";
 import { rowToJson } from "../db/candles.js";
@@ -17,7 +18,7 @@ import {
 } from "../db/formulaChanges.js";
 import { withTransaction } from "../db/pool.js";
 import { log, logError, logWarn } from "./log.js";
-import type { SourceCandle, SourceResult } from "../types/index.js";
+import type { SourceResult } from "../types/index.js";
 
 const DEADLINE_MS = 15000; // 15 seconds from :00 to write
 
@@ -157,71 +158,17 @@ export function getSourceStatus(): Record<string, SourceStatus> {
 }
 
 /**
- * Per-venue bundle: the BTC candle and the venue's local USDT/USD rate are a
- * single observation. Either both halves succeed and persist, or the venue
- * fails for that minute. See plan: candleserv-stablecoin-aware-index §Phase 1.
- */
-interface VenueBundle {
-  source: string;
-  candle: SourceCandle | null;
-  rate: number | null;            // null when adapter.normalize.pegFetcher is null (USD-native)
-  pegSourcePair: string | null;   // provenance for the stable rate row
-  error?: string;
-  durationMs?: number;
-}
-
-/**
- * Fetch one venue's BTC candle + local stable rate as an atomic bundle.
- * Short-circuits when the formula excludes the source.
+ * Run one collection cycle for the given minute boundary, across every enabled
+ * currency.
  *
- * Preserves the operational side-effects of the prior `fetchOne` exactly:
- *   - on bundle success → lastFetchAt[source] = now + recordLiveFetchState("on")
- *   - on bundle failure (either half) → recordLiveFetchState("error")
- *     plus recordFailure / checkAutoSuspend
- * The venue is the atomic unit of observation; a half-failed bundle is a
- * venue-level error and the operational UI's status dot reflects that.
- */
-async function fetchVenueBundle(adapter: Adapter, minuteTs: Date): Promise<VenueBundle> {
-  if (getCurrentFormula().excludedSources.includes(adapter.name)) {
-    return { source: adapter.name, candle: null, rate: null, pegSourcePair: null, error: "formula-excluded" };
-  }
-
-  const t0 = Date.now();
-  try {
-    const [candle, rate] = await Promise.all([
-      adapter.fetchOne(symbolFor("BTC", adapter.name), minuteTs),
-      adapter.normalize.pegFetcher
-        ? adapter.normalize.pegFetcher(minuteTs)
-        : Promise.resolve(null),
-    ]);
-    lastFetchAt[adapter.name] = new Date();
-    recordLiveFetchState(adapter.name, "on");
-    return {
-      source: adapter.name,
-      candle,
-      rate,
-      pegSourcePair: adapter.normalize.pegSourcePair,
-      durationMs: Date.now() - t0,
-    };
-  } catch (err) {
-    recordFailure(adapter.name);
-    await checkAutoSuspend(adapter.name);
-    recordLiveFetchState(adapter.name, "error");
-    await recordError("collector", `fetchVenueBundle:${adapter.name}`, String(err));
-    return {
-      source: adapter.name,
-      candle: null,
-      rate: null,
-      pegSourcePair: null,
-      error: String(err),
-      durationMs: Date.now() - t0,
-    };
-  }
-}
-
-/**
- * Run one collection cycle for the given minute boundary.
- * Returns true if a candle was written within the deadline, false otherwise.
+ * The peg (per-venue USDT→USD rate) is asset-independent, so it is fetched once
+ * per venue and shared across every currency that sources from that venue
+ * (D-FEEDS). Per-currency candles are fetched per (currency, venue) using the
+ * symbol declared in currency_sources. Per-venue operational state (live dot,
+ * failure count, auto-suspend) is venue-global and updated once per venue from
+ * the union of its fetches this minute.
+ *
+ * Returns true if at least one currency composed a candle within the deadline.
  */
 export async function collect(minuteTs: Date): Promise<boolean> {
   if (collectionRunning) {
@@ -233,115 +180,186 @@ export async function collect(minuteTs: Date): Promise<boolean> {
   const deadline = Date.now() + DEADLINE_MS;
 
   try {
-    const bundles = await Promise.all(ADAPTERS.map((a) => fetchVenueBundle(a, minuteTs)));
-
-    if (Date.now() > deadline) {
-      const timings = bundles.map(b => `${b.source}:${b.durationMs ?? "?"}ms`).join(" ");
-      logError(`[collector] deadline exceeded for ${minuteTs.toISOString()} — ${timings}`);
-      await recordError("collector", "deadline", `Deadline exceeded for ${minuteTs.toISOString()} — ${timings}`);
+    const currencies = await getEnabledCurrencies();
+    if (!currencies.length) {
+      logWarn("[collector] no enabled currencies — nothing to collect");
       return false;
     }
 
-    const minSources   = await getSettingInt("minSources", 3);
-    const baseline     = await getSourceCountBaseline();
-    const sigma        = await getRecentCloseStddev();
-    const volumeLeader = await getTrailingVolumeLeader(10);
-    // applyGuards consumes the BTC half of each bundle; the rate half is
-    // carried alongside via the per-source map below.
-    const results: SourceResult[] = bundles.map((b) => ({
-      source: b.source,
-      candle: b.candle,
-      ...(b.error ? { error: b.error } : {}),
-      ...(b.durationMs !== undefined ? { durationMs: b.durationMs } : {}),
-    }));
-    const ratesBySource = new Map<string, { rate: number; pegSourcePair: string }>();
-    for (const b of bundles) {
-      if (b.rate !== null && b.pegSourcePair !== null) {
-        ratesBySource.set(b.source, { rate: b.rate, pegSourcePair: b.pegSourcePair });
+    // Each currency's effective fetch set: probed-available AND enabled feeds,
+    // minus the global formula kill-switch. Collect the union of peg-capable
+    // venues for the shared peg wave.
+    const excluded = new Set(getCurrentFormula().excludedSources);
+    const activeByCurrency = new Map<string, { source: string; symbol: string }[]>();
+    const pegVenues = new Set<string>();
+    for (const currency of currencies) {
+      const feeds = (await getActiveFeeds(currency)).filter((f) => !excluded.has(f.source));
+      activeByCurrency.set(currency, feeds);
+      for (const f of feeds) {
+        if (ADAPTER_BY_NAME[f.source]?.normalize.pegFetcher) pegVenues.add(f.source);
       }
     }
-    const guarded = applyGuards(results, minSources, sigma);
 
-    // Step 1: write every fetched source's BTC row + its paired stable rate
-    // row in a single transaction. The FK on stable_rates_1m_sources requires
-    // the BTC row to be inserted first; both inserts run on the same
-    // connection so the constraint is satisfied at commit. Rate row persists
-    // whenever the rate fetch succeeded — including when the BTC row was
-    // outlier-rejected. See plan §Phase 1 "On guard-rejection semantics for
-    // the rate row." usedInFormula is left NULL — composeMinute bulk-updates
-    // it.
+    // Per-venue health for this minute: a venue is "error" if any fetch it was
+    // issued (peg or any currency's candle) failed, "on" otherwise.
+    const venueError = new Map<string, string>();
+    const venueTouched = new Set<string>();
+
+    // ── Peg wave: one fetch per peg-capable venue, shared across currencies. ──
+    const pegSources = [...pegVenues];
+    const pegSettled = await Promise.allSettled(
+      pegSources.map((s) => ADAPTER_BY_NAME[s].normalize.pegFetcher!(minuteTs)),
+    );
+    const pegMap = new Map<string, { rate: number; pegSourcePair: string }>();
+    for (let i = 0; i < pegSources.length; i++) {
+      const s = pegSources[i];
+      venueTouched.add(s);
+      const r = pegSettled[i];
+      if (r.status === "fulfilled" && r.value != null) {
+        pegMap.set(s, { rate: r.value, pegSourcePair: ADAPTER_BY_NAME[s].normalize.pegSourcePair! });
+      } else if (r.status === "rejected") {
+        venueError.set(s, String(r.reason));
+      }
+    }
+
+    // ── Candle wave: every (currency, venue) pair in parallel. ──
+    const keys: { currency: string; source: string; symbol: string }[] = [];
+    for (const currency of currencies) {
+      for (const f of activeByCurrency.get(currency)!) {
+        keys.push({ currency, source: f.source, symbol: f.symbol });
+      }
+    }
+    const candleSettled = await Promise.allSettled(
+      keys.map((k) => ADAPTER_BY_NAME[k.source].fetchOne(k.symbol, minuteTs)),
+    );
+    const resultsByCurrency = new Map<string, SourceResult[]>();
+    const fetchedSources = new Set<string>();
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i];
+      venueTouched.add(k.source);
+      const r = candleSettled[i];
+      let arr = resultsByCurrency.get(k.currency);
+      if (!arr) { arr = []; resultsByCurrency.set(k.currency, arr); }
+      if (r.status === "fulfilled") {
+        arr.push({ source: k.source, candle: r.value });
+        fetchedSources.add(k.source);
+      } else {
+        arr.push({ source: k.source, candle: null, error: String(r.reason) });
+        if (!venueError.has(k.source)) venueError.set(k.source, String(r.reason));
+      }
+    }
+
+    if (Date.now() > deadline) {
+      logError(`[collector] deadline exceeded fetching ${minuteTs.toISOString()}`);
+      await recordError("collector", "deadline", `Deadline exceeded fetching ${minuteTs.toISOString()}`);
+      return false;
+    }
+
+    // ── Per-venue operational state (venue-global). ──
+    for (const source of venueTouched) {
+      const err = venueError.get(source);
+      if (err) {
+        recordFailure(source);
+        await checkAutoSuspend(source);
+        recordLiveFetchState(source, "error");
+        await recordError("collector", `fetch:${source}`, err);
+      } else {
+        lastFetchAt[source] = new Date();
+        recordLiveFetchState(source, "on");
+      }
+    }
+
+    // ── Stable rates: one row per venue this minute, shared across currencies.
+    // Written for every peg venue that returned at least one candle (mirrors
+    // the legacy "rate row accompanies a fetched candle" semantics). The table
+    // is currency-agnostic; compose's LEFT JOIN picks it up for every currency.
     await withTransaction(async (client) => {
-      for (const g of guarded) {
-        if (!g.candle) continue;
-        // Inline the BTC insert directly here — do NOT call upsertSourceCandle
-        // (it acquires its own pool connection and would break atomicity).
+      for (const [source, peg] of pegMap) {
+        if (!fetchedSources.has(source)) continue;
         await client.query(
-          `INSERT INTO candles_1m_sources
-             ("timestamp","source","open","high","low","close","volume","rejected","rejectedReason","usedInFormula")
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          `INSERT INTO stable_rates_1m_sources
+             ("timestamp","source","rate","pegSourcePair")
+           VALUES ($1,$2,$3,$4)
            ON CONFLICT ("timestamp","source") DO UPDATE SET
-             open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, close = EXCLUDED.close,
-             volume = EXCLUDED.volume, rejected = EXCLUDED.rejected, "rejectedReason" = EXCLUDED."rejectedReason",
-             "usedInFormula" = EXCLUDED."usedInFormula",
+             rate = EXCLUDED.rate,
+             "pegSourcePair" = EXCLUDED."pegSourcePair",
              "updatedAt" = NOW()`,
-          [minuteTs, g.source, g.candle.open, g.candle.high, g.candle.low, g.candle.close, g.candle.volume,
-           g.rejected, g.rejectedReason ?? null, null],
+          [minuteTs, source, peg.rate, peg.pegSourcePair],
         );
-        const rate = ratesBySource.get(g.source);
-        if (rate) {
+      }
+    });
+
+    // ── Per-currency: guard → write archive rows → compose → emit. ──
+    let anyComposed = false;
+    for (const currency of currencies) {
+      const results = resultsByCurrency.get(currency);
+      if (!results || !results.length) continue;
+
+      const meta         = await getCurrency(currency);
+      const minSources   = meta?.minSources ?? await getSettingInt("minSources", 3);
+      const baseline     = await getSourceCountBaseline(currency);
+      const sigma        = await getRecentCloseStddev(currency);
+      const volumeLeader = await getTrailingVolumeLeader(currency, 10);
+      const guarded      = applyGuards(results, minSources, sigma);
+
+      // Write each fetched source's archive row. usedInFormula left NULL —
+      // composeMinute sets it via its bulk UPDATE. Inline the insert (do NOT
+      // call upsertSourceCandle — it acquires its own pool connection and would
+      // break atomicity). Rate rows already written above (shared).
+      await withTransaction(async (client) => {
+        for (const g of guarded) {
+          if (!g.candle) continue;
           await client.query(
-            `INSERT INTO stable_rates_1m_sources
-               ("timestamp","source","rate","pegSourcePair")
-             VALUES ($1,$2,$3,$4)
-             ON CONFLICT ("timestamp","source") DO UPDATE SET
-               rate = EXCLUDED.rate,
-               "pegSourcePair" = EXCLUDED."pegSourcePair",
+            `INSERT INTO candles_1m_sources
+               ("currency","timestamp","source","open","high","low","close","volume","rejected","rejectedReason","usedInFormula")
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+             ON CONFLICT ("currency","timestamp","source") DO UPDATE SET
+               open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, close = EXCLUDED.close,
+               volume = EXCLUDED.volume, rejected = EXCLUDED.rejected, "rejectedReason" = EXCLUDED."rejectedReason",
+               "usedInFormula" = EXCLUDED."usedInFormula",
                "updatedAt" = NOW()`,
-            [minuteTs, g.source, rate.rate, rate.pegSourcePair],
+            [currency, minuteTs, g.source, g.candle.open, g.candle.high, g.candle.low, g.candle.close, g.candle.volume,
+             g.rejected, g.rejectedReason ?? null, null],
           );
         }
+      });
+
+      // composeMinute reads back the archive, applies the live formula, writes
+      // candles_1m + bulk-UPDATEs usedInFormula — all in one transaction. The
+      // invariant (usedInFormula IS NULL ⟺ no candles_1m row) holds at commit.
+      const result = await composeMinute(
+        currency,
+        minuteTs,
+        getCurrentFormula(),
+        { baseline, minSources, volumeLeader: volumeLeader ?? undefined, premiumEnabled: meta?.premiumEnabled ?? true },
+      );
+
+      if (!result.composed) {
+        logError(`[collector] composeMinute skipped ${currency} ${minuteTs.toISOString()} — only ${result.contributing} sources after formula+guards (need ${minSources})`);
+        continue;
       }
-    });
 
-    if (Date.now() > deadline) {
-      logError(`[collector] deadline exceeded after archive writes for ${minuteTs.toISOString()} — skipping compose`);
-      await recordError("collector", "deadline", `Deadline exceeded after archive writes for ${minuteTs.toISOString()}`);
-      return false;
+      const composite = result.composite!;
+      const json = rowToJson({
+        timestamp: minuteTs,
+        open: composite.open,
+        high: composite.high,
+        low: composite.low,
+        close: composite.close,
+        volume: composite.volume,
+        volumeNormalized: composite.volumeNormalized,
+        sourceCount: composite.sourceCount,
+        sourceCountBaseline: composite.sourceCountBaseline,
+        sources: composite.sources,
+        confidence: composite.confidence,
+      });
+
+      candleEmitter.emit("candle", { ...json, currency });
+      log(`[collector] wrote candle ${currency} ${minuteTs.toISOString()} sources=${composite.sourceCount} confidence=${composite.confidence.toFixed(2)}`);
+      anyComposed = true;
     }
 
-    // Step 2: composeMinute reads back the archive, applies the live formula,
-    // and writes candles_1m + bulk-UPDATEs usedInFormula on every archive row
-    // at this timestamp — all in one transaction. The invariant
-    // (usedInFormula IS NULL ⟺ no candles_1m row) holds at commit.
-    const result = await composeMinute(
-      minuteTs,
-      getCurrentFormula(),
-      { baseline, minSources, volumeLeader: volumeLeader ?? undefined },
-    );
-
-    if (!result.composed) {
-      logError(`[collector] composeMinute skipped ${minuteTs.toISOString()} — only ${result.contributing} sources after formula+guards (need ${minSources})`);
-      return false;
-    }
-
-    const composite = result.composite!;
-    const json = rowToJson({
-      timestamp: minuteTs,
-      open: composite.open,
-      high: composite.high,
-      low: composite.low,
-      close: composite.close,
-      volume: composite.volume,
-      volumeNormalized: composite.volumeNormalized,
-      sourceCount: composite.sourceCount,
-      sourceCountBaseline: composite.sourceCountBaseline,
-      sources: composite.sources,
-      confidence: composite.confidence,
-    });
-
-    candleEmitter.emit("candle", json);
-    log(`[collector] wrote candle ${minuteTs.toISOString()} sources=${composite.sourceCount} confidence=${composite.confidence.toFixed(2)}`);
-    return true;
+    return anyComposed;
   } catch (err) {
     logError("[collector] collect failed:", err);
     await recordError("collector", "collect", String(err));

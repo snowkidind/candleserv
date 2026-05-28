@@ -156,10 +156,10 @@ export async function ensureSourceCoverage(
         if (candle) {
           const ins = await query(
             `INSERT INTO candles_1m_sources
-               ("timestamp","source","open","high","low","close","volume",
+               ("currency","timestamp","source","open","high","low","close","volume",
                 "rejected","rejectedReason","usedInFormula")
-             VALUES ($1,$2,$3,$4,$5,$6,$7,false,NULL,NULL)
-             ON CONFLICT ("timestamp","source") DO NOTHING`,
+             VALUES ('BTC',$1,$2,$3,$4,$5,$6,$7,false,NULL,NULL)
+             ON CONFLICT ("currency","timestamp","source") DO NOTHING`,
             [new Date(minuteMs), source, candle.open, candle.high, candle.low, candle.close, candle.volume],
           );
           if (ins.rowCount === 1) rowsFetched++;
@@ -167,10 +167,10 @@ export async function ensureSourceCoverage(
         } else {
           const ins = await query(
             `INSERT INTO candles_1m_sources
-               ("timestamp","source","open","high","low","close","volume",
+               ("currency","timestamp","source","open","high","low","close","volume",
                 "rejected","rejectedReason","usedInFormula")
-             VALUES ($1,$2,0,0,0,0,0,true,'no_data',NULL)
-             ON CONFLICT ("timestamp","source") DO NOTHING`,
+             VALUES ('BTC',$1,$2,0,0,0,0,0,true,'no_data',NULL)
+             ON CONFLICT ("currency","timestamp","source") DO NOTHING`,
             [new Date(minuteMs), source],
           );
           if (ins.rowCount === 1) sentinelsWritten++;
@@ -224,8 +224,8 @@ export async function recomposeRange(
 
   const formula = opts?.formula ?? getCurrentFormula();
   const minSources   = await getSettingInt("minSources", 3);
-  const baseline     = await getSourceCountBaseline();
-  const volumeLeader = await getTrailingVolumeLeader(10);
+  const baseline     = await getSourceCountBaseline("BTC");
+  const volumeLeader = await getTrailingVolumeLeader("BTC", 10);
 
   let recomposed = 0;
   let skippedNoSources = 0;
@@ -238,7 +238,7 @@ export async function recomposeRange(
     }
     const minuteTs = new Date(minuteMs);
     try {
-      const result = await composeMinute(minuteTs, formula, {
+      const result = await composeMinute("BTC", minuteTs, formula, {
         baseline, minSources, volumeLeader: volumeLeader ?? undefined,
       });
       if (result.composed) recomposed++;

@@ -31,6 +31,7 @@ BEGIN
   FOR _r IN
     SELECT * FROM candles_1m
     WHERE timestamp <= "Ending"
+    AND   currency = "Currency"
     AND   timestamp >  "Ending" - INTERVAL '1 DAY' * "Interval" * ("NumberOfRecords" + 2)
     AND   DATE_PART('day',    timestamp)::INTEGER % "Interval" = 0
     AND   DATE_PART('hour',   timestamp)::INTEGER = 0
@@ -47,6 +48,7 @@ BEGIN
         INTO _high, _low, _volume
         FROM candles_1m
        WHERE timestamp <= _r.timestamp
+         AND currency = "Currency"
          AND timestamp >  _r.timestamp - INTERVAL '1 DAY' * "Interval";
       IF _train_period > 0 THEN
         _train_period = _train_period - 1;
@@ -84,6 +86,7 @@ BEGIN
   FOR _r IN
     SELECT * FROM candles_1m
     WHERE timestamp <= "Ending"
+    AND   currency = "Currency"
     AND   timestamp >  "Ending" - INTERVAL '1 HOUR' * "Interval" * ("NumberOfRecords" + 2)
     AND   DATE_PART('hour',   timestamp)::INTEGER % "Interval" = 0
     AND   DATE_PART('minute', timestamp)::INTEGER = 0
@@ -99,6 +102,7 @@ BEGIN
         INTO _high, _low, _volume
         FROM candles_1m
        WHERE timestamp <= _r.timestamp
+         AND currency = "Currency"
          AND timestamp >  _r.timestamp - INTERVAL '1 HOUR' * "Interval";
       IF _train_period > 0 THEN
         _train_period = _train_period - 1;
@@ -136,6 +140,7 @@ BEGIN
   FOR _r IN
     SELECT * FROM candles_1m
     WHERE timestamp <= "Ending"
+    AND   currency = "Currency"
     AND   timestamp >  "Ending" - INTERVAL '1 MINUTE' * "Interval" * ("NumberOfRecords" + 2)
     AND   DATE_PART('minute', timestamp)::INTEGER % "Interval" = 0
     ORDER BY timestamp ASC LIMIT _train
@@ -150,6 +155,7 @@ BEGIN
         INTO _high, _low, _volume
         FROM candles_1m
        WHERE timestamp <= _r.timestamp
+         AND currency = "Currency"
          AND timestamp >  _r.timestamp - INTERVAL '1 MINUTE' * "Interval";
       IF _train_period > 0 THEN
         _train_period = _train_period - 1;

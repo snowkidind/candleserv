@@ -31,7 +31,7 @@ router.get("/candles/latest", async (req, res) => {
     const cached = await redisGet(cacheKey);
     if (cached) return res.json(JSON.parse(cached));
 
-    const candles = await getCandles({ tf, endingAt: new Date(), limit: count });
+    const candles = await getCandles({ currency: "BTC", tf, endingAt: new Date(), limit: count });
     const payload = { candles };
     await redisSet(cacheKey, JSON.stringify(payload), boundaryTtl(tf));
     return res.json(payload);
@@ -68,7 +68,7 @@ router.get("/candles", async (req, res) => {
     const cached = await redisGet(cacheKey);
     if (cached) return res.json(JSON.parse(cached));
 
-    const candles = await getCandles({ tf, endingAt: endDate, limit: n });
+    const candles = await getCandles({ currency: "BTC", tf, endingAt: endDate, limit: n });
     const payload = { candles };
     await redisSet(cacheKey, JSON.stringify(payload), boundaryTtl(tf, endDate));
     return res.json(payload);
@@ -145,7 +145,7 @@ router.post("/candles/multi", async (req, res) => {
           const parsed = JSON.parse(cached) as { candles: CandleJson[] };
           return { tf, endingAt: endDate.toISOString(), candles: parsed.candles };
         }
-        const candles = await getCandles({ tf, endingAt: endDate, limit: n });
+        const candles = await getCandles({ currency: "BTC", tf, endingAt: endDate, limit: n });
         await redisSet(cacheKey, JSON.stringify({ candles }), boundaryTtl(tf, endDate));
         return { tf, endingAt: endDate.toISOString(), candles };
       }),
@@ -215,7 +215,7 @@ async function handleWaitForFresh(
     if (resolved) return;
     if (json.timestamp < requiredMinuteOpenMs) return;
     try {
-      const candles = await getCandles({ tf, endingAt: endDate, limit: n });
+      const candles = await getCandles({ currency: "BTC", tf, endingAt: endDate, limit: n });
       finish(200, { candles });
     } catch (err) {
       logError("[waitForFresh] fetch on insert failed:", err);
@@ -231,7 +231,7 @@ async function handleWaitForFresh(
     if (resolved) return;
     let lastAvailableTs: number | null = null;
     try {
-      const last = await getLatest1m(1);
+      const last = await getLatest1m("BTC", 1);
       lastAvailableTs = last.length ? last[0].timestamp : null;
     } catch {}
     finish(503, {
@@ -249,7 +249,7 @@ async function handleWaitForFresh(
     if (resolved) return;
     let lastAvailableTs: number | null = null;
     try {
-      const last = await getLatest1m(1);
+      const last = await getLatest1m("BTC", 1);
       lastAvailableTs = last.length ? last[0].timestamp : null;
     } catch (err) {
       logError("[waitForFresh] timeout latest1m fetch failed:", err);
@@ -273,10 +273,10 @@ async function handleWaitForFresh(
   // Fast path runs after listener is attached so an insert during the query
   // can't slip past us.
   try {
-    const latest = await getLatest1m(1);
+    const latest = await getLatest1m("BTC", 1);
     const latestTs = latest.length ? latest[0].timestamp : -Infinity;
     if (latestTs >= requiredMinuteOpenMs) {
-      const candles = await getCandles({ tf, endingAt: endDate, limit: n });
+      const candles = await getCandles({ currency: "BTC", tf, endingAt: endDate, limit: n });
       finish(200, { candles });
     }
   } catch (err) {
@@ -310,7 +310,7 @@ router.get("/candles/stream", async (req, res) => {
 
   // Initial push — send the last N candles immediately
   try {
-    const initial = await getLatest1m(n);
+    const initial = await getLatest1m("BTC", n);
     res.write(`event: candles\ndata: ${JSON.stringify({ candles: initial, count: initial.length })}\n\n`);
     client.lastPushAt = new Date();
   } catch {
@@ -320,7 +320,7 @@ router.get("/candles/stream", async (req, res) => {
   // Fan-out: when a new candle arrives, push last N to this client
   const onCandle = async () => {
     try {
-      const candles = await getLatest1m(n);
+      const candles = await getLatest1m("BTC", n);
       pushToClient(apiKey, candles);
     } catch {
       // ignore

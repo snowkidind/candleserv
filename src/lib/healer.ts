@@ -67,9 +67,9 @@ function groupIntoRanges(timestamps: Date[]): { from: Date; to: Date }[] {
  */
 export async function healRange(from: Date, to: Date, overwrite: boolean): Promise<Set<number>> {
   const written      = new Set<number>();
-  const baseline     = await getSourceCountBaseline();
-  const sigma        = await getRecentCloseStddev();
-  const volumeLeader = await getTrailingVolumeLeader(10);
+  const baseline     = await getSourceCountBaseline("BTC");
+  const sigma        = await getRecentCloseStddev("BTC");
+  const volumeLeader = await getTrailingVolumeLeader("BTC", 10);
   const minSources   = await getSettingInt("minSources", 3);
 
   // Pre-populate every expected minute slot
@@ -151,7 +151,7 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
     for (const g of guarded) {
       if (!g.candle) continue;
       await upsertSourceCandle({
-        timestamp: minuteTs, source: g.source,
+        currency: "BTC", timestamp: minuteTs, source: g.source,
         open: g.candle.open, high: g.candle.high, low: g.candle.low,
         close: g.candle.close, volume: g.candle.volume,
         rejected: g.rejected, rejectedReason: g.rejectedReason,
@@ -161,6 +161,7 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
 
     if (overwrite) {
       const result = await composeMinute(
+        "BTC",
         minuteTs,
         getCurrentFormula(),
         { baseline, minSources, volumeLeader: volumeLeader ?? undefined },
@@ -177,7 +178,7 @@ export async function healRange(from: Date, to: Date, overwrite: boolean): Promi
         // backfill stable_rates_1m_sources). Pass undefined so the composite
         // is raw-quote — these rows are later replaced by recomposeRange.
         const composite = await buildComposite(guarded, baseline, minuteTs);
-        await insertCandleIfMissing({ timestamp: minuteTs, ...composite });
+        await insertCandleIfMissing({ currency: "BTC", timestamp: minuteTs, ...composite });
         written.add(tsMs);
       } catch {
         // All-rejected: leave the minute as a gap.
@@ -215,9 +216,9 @@ export async function healMinute(minuteTs: Date): Promise<boolean> {
   try {
     const results      = await fetchAllSources(minuteTs);
     const minSources   = await getSettingInt("minSources", 3);
-    const baseline     = await getSourceCountBaseline();
-    const sigma        = await getRecentCloseStddev();
-    const volumeLeader = await getTrailingVolumeLeader(10);
+    const baseline     = await getSourceCountBaseline("BTC");
+    const sigma        = await getRecentCloseStddev("BTC");
+    const volumeLeader = await getTrailingVolumeLeader("BTC", 10);
     const guarded      = applyGuards(results, minSources, sigma);
 
     // Step 1: write fetched archive rows with their applyGuards verdict.
@@ -225,7 +226,7 @@ export async function healMinute(minuteTs: Date): Promise<boolean> {
     for (const g of guarded) {
       if (!g.candle) continue;
       await upsertSourceCandle({
-        timestamp: minuteTs, source: g.source,
+        currency: "BTC", timestamp: minuteTs, source: g.source,
         open: g.candle.open, high: g.candle.high, low: g.candle.low,
         close: g.candle.close, volume: g.candle.volume,
         rejected: g.rejected, rejectedReason: g.rejectedReason,
@@ -235,6 +236,7 @@ export async function healMinute(minuteTs: Date): Promise<boolean> {
 
     // Step 2: composeMinute reads back, builds composite, writes both in tx.
     const result = await composeMinute(
+      "BTC",
       minuteTs,
       getCurrentFormula(),
       { baseline, minSources, volumeLeader: volumeLeader ?? undefined },
@@ -284,7 +286,7 @@ export async function runBackfill(): Promise<void> {
 
     let day = new Date(start);
     while (day < now) {
-      const count = await countCandlesInDay(day);
+      const count = await countCandlesInDay("BTC", day);
       if (count < 1440) {
         log(`[healer] backfilling ${day.toISOString().slice(0, 10)} (${count}/1440 rows)`);
         await backfillDay(day);
@@ -315,7 +317,7 @@ export async function reHealLowConfidence(windowDays = 7): Promise<void> {
   beginActivity("reHealLowConfidence", { windowDays });
   try {
     const minSources = await getSettingInt("minSources", 3);
-    const baseline   = await getSourceCountBaseline();
+    const baseline   = await getSourceCountBaseline("BTC");
     const threshold  = minSources / baseline; // e.g. 3/5 = 0.6
 
     const from = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);

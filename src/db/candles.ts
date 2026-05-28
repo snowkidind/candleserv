@@ -24,6 +24,7 @@ export function rowToJson(row: Record<string, unknown>): CandleJson {
  * Upsert a composite 1m candle.
  */
 export async function upsertCandle(c: {
+  currency: string;
   timestamp: Date;
   open: number;
   high: number;
@@ -38,15 +39,15 @@ export async function upsertCandle(c: {
 }): Promise<void> {
   await query(
     `INSERT INTO candles_1m
-       ("timestamp","open","high","low","close","volume","volumeNormalized","sourceCount","sourceCountBaseline","sources","confidence","createdAt","updatedAt")
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW(),NOW())
-     ON CONFLICT ("timestamp") DO UPDATE SET
+       ("currency","timestamp","open","high","low","close","volume","volumeNormalized","sourceCount","sourceCountBaseline","sources","confidence","createdAt","updatedAt")
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW(),NOW())
+     ON CONFLICT ("currency","timestamp") DO UPDATE SET
        open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, close = EXCLUDED.close,
        volume = EXCLUDED.volume, "volumeNormalized" = EXCLUDED."volumeNormalized",
        "sourceCount" = EXCLUDED."sourceCount", "sourceCountBaseline" = EXCLUDED."sourceCountBaseline",
        sources = EXCLUDED.sources, confidence = EXCLUDED.confidence,
        "updatedAt" = NOW()`,
-    [c.timestamp, c.open, c.high, c.low, c.close, c.volume, c.volumeNormalized,
+    [c.currency, c.timestamp, c.open, c.high, c.low, c.close, c.volume, c.volumeNormalized,
      c.sourceCount, c.sourceCountBaseline, c.sources, c.confidence]
   );
 }
@@ -58,10 +59,10 @@ export async function upsertCandle(c: {
 export async function insertCandleIfMissing(c: Parameters<typeof upsertCandle>[0]): Promise<void> {
   await query(
     `INSERT INTO candles_1m
-       ("timestamp","open","high","low","close","volume","volumeNormalized","sourceCount","sourceCountBaseline","sources","confidence","createdAt","updatedAt")
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW(),NOW())
-     ON CONFLICT ("timestamp") DO NOTHING`,
-    [c.timestamp, c.open, c.high, c.low, c.close, c.volume, c.volumeNormalized,
+       ("currency","timestamp","open","high","low","close","volume","volumeNormalized","sourceCount","sourceCountBaseline","sources","confidence","createdAt","updatedAt")
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW(),NOW())
+     ON CONFLICT ("currency","timestamp") DO NOTHING`,
+    [c.currency, c.timestamp, c.open, c.high, c.low, c.close, c.volume, c.volumeNormalized,
      c.sourceCount, c.sourceCountBaseline, c.sources, c.confidence]
   );
 }
@@ -76,6 +77,7 @@ export async function insertCandleIfMissing(c: Parameters<typeof upsertCandle>[0
  * "no composite has been computed for this minute" (see schema invariant).
  */
 export async function upsertSourceCandle(c: {
+  currency: string;
   timestamp: Date;
   source: string;
   open: number;
@@ -89,14 +91,14 @@ export async function upsertSourceCandle(c: {
 }): Promise<void> {
   await query(
     `INSERT INTO candles_1m_sources
-       ("timestamp","source","open","high","low","close","volume","rejected","rejectedReason","usedInFormula")
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-     ON CONFLICT ("timestamp","source") DO UPDATE SET
+       ("currency","timestamp","source","open","high","low","close","volume","rejected","rejectedReason","usedInFormula")
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     ON CONFLICT ("currency","timestamp","source") DO UPDATE SET
        open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, close = EXCLUDED.close,
        volume = EXCLUDED.volume, rejected = EXCLUDED.rejected, "rejectedReason" = EXCLUDED."rejectedReason",
        "usedInFormula" = EXCLUDED."usedInFormula",
        "updatedAt" = NOW()`,
-    [c.timestamp, c.source, c.open, c.high, c.low, c.close, c.volume,
+    [c.currency, c.timestamp, c.source, c.open, c.high, c.low, c.close, c.volume,
      c.rejected, c.rejectedReason ?? null, c.usedInFormula ?? null]
   );
 }
@@ -104,14 +106,14 @@ export async function upsertSourceCandle(c: {
 /**
  * Get the mode of sourceCount over the trailing 1440 rows (24h baseline).
  */
-export async function getSourceCountBaseline(): Promise<number> {
+export async function getSourceCountBaseline(currency: string): Promise<number> {
   const res = await query(`
     SELECT "sourceCount", COUNT(*) as cnt
-    FROM (SELECT "sourceCount" FROM candles_1m ORDER BY "timestamp" DESC LIMIT 1440) sub
+    FROM (SELECT "sourceCount" FROM candles_1m WHERE "currency" = $1 ORDER BY "timestamp" DESC LIMIT 1440) sub
     GROUP BY "sourceCount"
     ORDER BY cnt DESC
     LIMIT 1
-  `);
+  `, [currency]);
   if (!res.rows.length) return 5; // cold-start default
   return Number(res.rows[0].sourceCount);
 }
@@ -120,11 +122,11 @@ export async function getSourceCountBaseline(): Promise<number> {
  * Standard deviation of close prices over the trailing 1440 rows (24h).
  * Used as the outlier rejection threshold in the composite engine.
  */
-export async function getRecentCloseStddev(): Promise<number> {
+export async function getRecentCloseStddev(currency: string): Promise<number> {
   const res = await query(`
     SELECT STDDEV(close) as sigma
-    FROM (SELECT close FROM candles_1m ORDER BY "timestamp" DESC LIMIT 1440) sub
-  `);
+    FROM (SELECT close FROM candles_1m WHERE "currency" = $1 ORDER BY "timestamp" DESC LIMIT 1440) sub
+  `, [currency]);
   const sigma = Number(res.rows[0]?.sigma);
   return isNaN(sigma) || sigma < 10 ? 10 : sigma; // $10 floor for cold-start
 }
@@ -132,11 +134,11 @@ export async function getRecentCloseStddev(): Promise<number> {
 /**
  * Fetch the latest N 1m candles, oldest first.
  */
-export async function getLatest1m(n: number): Promise<CandleJson[]> {
+export async function getLatest1m(currency: string, n: number): Promise<CandleJson[]> {
   const res = await query(
-    `SELECT * FROM (SELECT * FROM candles_1m ORDER BY "timestamp" DESC LIMIT $1) sub
+    `SELECT * FROM (SELECT * FROM candles_1m WHERE "currency" = $1 ORDER BY "timestamp" DESC LIMIT $2) sub
      ORDER BY "timestamp" ASC`,
-    [n]
+    [currency, n]
   );
   return res.rows.map(rowToJson);
 }
@@ -146,25 +148,26 @@ export async function getLatest1m(n: number): Promise<CandleJson[]> {
  * Higher TFs are aggregated from 1m rows on the fly.
  */
 export async function getCandles(opts: {
+  currency: string;
   tf: string;
   endingAt: Date;
   limit: number;
 }): Promise<CandleJson[]> {
-  const { tf, endingAt, limit } = opts;
+  const { currency, tf, endingAt, limit } = opts;
   const minutes = tfToMinutes(tf);
 
   if (tf === "30d") {
-    return getCalendarMonthlyCandles(endingAt, limit);
+    return getCalendarMonthlyCandles(currency, endingAt, limit);
   }
 
   if (minutes === 1) {
     const res = await query(
       `SELECT * FROM (
          SELECT * FROM candles_1m
-         WHERE "timestamp" <= $1
-         ORDER BY "timestamp" DESC LIMIT $2
+         WHERE "currency" = $1 AND "timestamp" <= $2
+         ORDER BY "timestamp" DESC LIMIT $3
        ) sub ORDER BY "timestamp" ASC`,
-      [endingAt, limit]
+      [currency, endingAt, limit]
     );
     return res.rows.map(rowToJson);
   }
@@ -190,12 +193,13 @@ export async function getCandles(opts: {
        bit_or(sources) AS sources,
        AVG(confidence) AS confidence
      FROM candles_1m
-     WHERE "timestamp" <= $2
+     WHERE "currency" = $5
+       AND "timestamp" <= $2
        AND "timestamp" > $3
      GROUP BY bucket
      ORDER BY bucket DESC
      LIMIT $4`,
-    [minutes, endingAt, windowStart, limit]
+    [minutes, endingAt, windowStart, limit, currency]
   );
 
   return res.rows
@@ -214,7 +218,7 @@ export async function getCandles(opts: {
     .reverse();
 }
 
-async function getCalendarMonthlyCandles(endingAt: Date, limit: number): Promise<CandleJson[]> {
+async function getCalendarMonthlyCandles(currency: string, endingAt: Date, limit: number): Promise<CandleJson[]> {
   const res = await query(
     `SELECT
        date_trunc('month', "timestamp") AS bucket,
@@ -228,12 +232,13 @@ async function getCalendarMonthlyCandles(endingAt: Date, limit: number): Promise
        bit_or(sources) AS sources,
        AVG(confidence) AS confidence
      FROM candles_1m
-     WHERE "timestamp" <  date_trunc('month', $1::timestamptz) + INTERVAL '1 month'
+     WHERE "currency" = $3
+       AND "timestamp" <  date_trunc('month', $1::timestamptz) + INTERVAL '1 month'
        AND "timestamp" >= date_trunc('month', $1::timestamptz) - ($2 * INTERVAL '1 month')
      GROUP BY bucket
      ORDER BY bucket DESC
      LIMIT $2`,
-    [endingAt, limit]
+    [endingAt, limit, currency]
   );
   return res.rows
     .map((row: Record<string, unknown>) => ({
@@ -265,11 +270,11 @@ export const VALID_TFS = ["1m","5m","10m","15m","30m","1h","2h","4h","6h","12h",
 /**
  * Count candles in a day window (for backfill check).
  */
-export async function countCandlesInDay(dayStart: Date): Promise<number> {
+export async function countCandlesInDay(currency: string, dayStart: Date): Promise<number> {
   const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
   const res = await query(
-    `SELECT COUNT(*) FROM candles_1m WHERE "timestamp" >= $1 AND "timestamp" < $2`,
-    [dayStart, dayEnd]
+    `SELECT COUNT(*) FROM candles_1m WHERE "currency" = $1 AND "timestamp" >= $2 AND "timestamp" < $3`,
+    [currency, dayStart, dayEnd]
   );
   return Number(res.rows[0].count);
 }
@@ -277,7 +282,7 @@ export async function countCandlesInDay(dayStart: Date): Promise<number> {
 /**
  * Get collection latency stats over the last N rows.
  */
-export async function getCollectionLatencyStats(sample = 60): Promise<{
+export async function getCollectionLatencyStats(currency: string, sample = 60): Promise<{
   avgMs: number;
   minMs: number;
   maxMs: number;
@@ -289,8 +294,8 @@ export async function getCollectionLatencyStats(sample = 60): Promise<{
        MIN(EXTRACT(EPOCH FROM ("createdAt" - "timestamp")) * 1000) AS min_ms,
        MAX(EXTRACT(EPOCH FROM ("createdAt" - "timestamp")) * 1000) AS max_ms,
        COUNT(*) AS cnt
-     FROM (SELECT "timestamp", "createdAt" FROM candles_1m ORDER BY "timestamp" DESC LIMIT $1) sub`,
-    [sample]
+     FROM (SELECT "timestamp", "createdAt" FROM candles_1m WHERE "currency" = $1 ORDER BY "timestamp" DESC LIMIT $2) sub`,
+    [currency, sample]
   );
   const row = res.rows[0];
   return {
@@ -307,6 +312,10 @@ export async function getCollectionLatencyStats(sample = 60): Promise<{
  * with rejectedReason='no_data') are excluded from rate denominators so they
  * don't dilute the metric. Returns nulls on any query error so the caller
  * can persist the exclusion regardless.
+ *
+ * Deliberately currency-agnostic: auto-suspend is a venue kill-switch that
+ * excludes a source across every currency, so the health snapshot aggregates
+ * the venue's rows over all currencies rather than filtering to one.
  */
 export async function get24hSourceStats(source: string): Promise<{
   outlierRate24h: number | null;
@@ -352,22 +361,22 @@ export async function pruneSourceCandles(): Promise<void> {
  * 1m source-candle rows. Used by the collector to select the dominant H/L source.
  * Returns null if candles_1m_sources is empty (cold start).
  */
-export async function getTrailingVolumeLeader(n = 10): Promise<string | null> {
+export async function getTrailingVolumeLeader(currency: string, n = 10): Promise<string | null> {
   const res = await query(
     `SELECT source, SUM(volume) AS total_vol
      FROM candles_1m_sources
-     WHERE rejected = false
+     WHERE "currency" = $1 AND rejected = false
        AND "timestamp" IN (
          SELECT DISTINCT "timestamp"
          FROM candles_1m_sources
-         WHERE rejected = false
+         WHERE "currency" = $1 AND rejected = false
          ORDER BY "timestamp" DESC
-         LIMIT $1
+         LIMIT $2
        )
      GROUP BY source
      ORDER BY total_vol DESC
      LIMIT 1`,
-    [n]
+    [currency, n]
   );
   return (res.rows[0]?.source as string) ?? null;
 }
