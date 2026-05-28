@@ -16,6 +16,7 @@ import { getFeedMap, setFeedEnabled, setAvailability } from "../../db/currencyFe
 import { onboardCurrency } from "../../lib/healer.js";
 import { ADAPTER_BY_NAME } from "../../adapters/registry.js";
 import { getSourceStatus, resumeSource } from "../../lib/collector.js";
+import { RATE_LIMIT_DEFAULTS } from "../../lib/rateLimit.js";
 import {
   applyFormulaDelta,
   getCurrentFormula,
@@ -515,6 +516,25 @@ router.post("/config", ...modify, async (req, res) => {
   return res.json({ ok: true });
 });
 
+/**
+ * GET /monitor/rate-limits — per-venue API rate gate intervals (ms). defaultMs is
+ * the built-in const; overrideMs is the app_settings rateLimit.<venue> value (or
+ * null if unset). Edits go through POST /config writing rateLimit.<venue>.
+ */
+router.get("/rate-limits", ...view, async (_req, res) => {
+  const rateLimits = await Promise.all(
+    SOURCE_NAMES.map(async (source) => {
+      const ov = await getSetting(`rateLimit.${source}`);
+      return {
+        source,
+        defaultMs: RATE_LIMIT_DEFAULTS[source] ?? 0,
+        overrideMs: ov != null && ov !== "" ? Number(ov) : null,
+      };
+    }),
+  );
+  return res.json({ rateLimits });
+});
+
 /** GET /monitor/admin/keys */
 router.get("/admin/keys", ...modify, async (_req, res) => {
   const keys = await listApiKeys();
@@ -576,7 +596,8 @@ router.get("/admin/actions", ...view, async (req, res) => {
     const limit = req.query.limit ? Math.max(1, parseInt(req.query.limit as string, 10) || 200) : 200;
     const action = typeof req.query.action === "string" ? req.query.action : undefined;
     const actor  = typeof req.query.actor === "string" ? req.query.actor : undefined;
-    const actions = await listAdminActions({ limit, action, actor });
+    const targetPrefix = typeof req.query.targetPrefix === "string" ? req.query.targetPrefix : undefined;
+    const actions = await listAdminActions({ limit, action, actor, targetPrefix });
     return res.json({
       actions: actions.map((a) => ({ ...a, createdAt: a.createdAt.toISOString() })),
     });

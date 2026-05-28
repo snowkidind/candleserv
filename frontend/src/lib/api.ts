@@ -276,10 +276,21 @@ export interface AdminActionRow {
   detail: Record<string, unknown> | null;
   createdAt: string;
 }
-export const getAdminActions = (limit = 200, action?: string) =>
+export const getAdminActions = (limit = 200, action?: string, targetPrefix?: string) =>
   req<{ actions: AdminActionRow[] }>(
-    `/monitor/admin/actions?limit=${limit}${action ? `&action=${encodeURIComponent(action)}` : ""}`,
+    `/monitor/admin/actions?limit=${limit}` +
+    `${action ? `&action=${encodeURIComponent(action)}` : ""}` +
+    `${targetPrefix ? `&targetPrefix=${encodeURIComponent(targetPrefix)}` : ""}`,
   );
+
+// Per-venue rate-gate intervals (ms). overrideMs from app_settings rateLimit.<venue>;
+// defaultMs is the built-in const fallback. Saved via saveConfig (rateLimit.<venue>).
+export interface RateLimit {
+  source: string;
+  defaultMs: number;
+  overrideMs: number | null;
+}
+export const getRateLimits = () => req<{ rateLimits: RateLimit[] }>("/monitor/rate-limits");
 
 // Current user — permission map + demo flag, for tab gating (B5).
 export interface Me {

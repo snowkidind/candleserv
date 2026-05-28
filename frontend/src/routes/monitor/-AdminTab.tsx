@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   getApiKeys, createApiKey, revokeApiKey, toggleApiKey, repairApiKeyNonce,
   getConfig, saveConfig, getSourcesStatus,
-  getHealerStatus, getAdminActions,
+  getHealerStatus, getAdminActions, getRateLimits,
   type ApiKey,
 } from "@/lib/api";
 import RepairRangePanel from "./-RepairRangePanel";
@@ -254,6 +254,79 @@ function ConfigSection() {
   );
 }
 
+// ── rate limits ──────────────────────────────────────────────────────────────
+
+function RateLimitsSection() {
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ["rate-limits"], queryFn: getRateLimits });
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [saved, setSaved] = useState(false);
+  const rows = data?.rateLimits ?? [];
+
+  const save = useMutation({
+    mutationFn: () => {
+      const payload: Record<string, string> = {};
+      for (const [source, v] of Object.entries(draft)) payload[`rateLimit.${source}`] = v;
+      return saveConfig(payload);
+    },
+    onSuccess: () => {
+      setSaved(true);
+      setDraft({});
+      qc.invalidateQueries({ queryKey: ["rate-limits"] });
+      setTimeout(() => setSaved(false), 2000);
+    },
+  });
+
+  return (
+    <div className="space-y-3">
+      <h2 className="text-sm font-medium text-gray-300">Rate limits</h2>
+      <p className="text-xs text-gray-600">
+        Minimum ms between API calls per venue (per-IP gate, applied across live / backfill / repair / probe).
+        Blank = built-in default; 0 = no limit.
+      </p>
+      <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
+        <table className="w-full text-xs">
+          <thead className="border-b border-gray-800">
+            <tr className="text-gray-500 text-left">
+              <th className="px-3 py-2 font-normal">Venue</th>
+              <th className="px-3 py-2 font-normal">Default</th>
+              <th className="px-3 py-2 font-normal">Override (ms)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.source} className="border-b border-gray-800/50">
+                <td className="px-3 py-1.5 text-gray-300">{r.source}</td>
+                <td className="px-3 py-1.5 text-gray-500 font-mono">{r.defaultMs}</td>
+                <td className="px-3 py-1.5">
+                  <input
+                    type="number"
+                    min={0}
+                    defaultValue={r.overrideMs ?? ""}
+                    placeholder={String(r.defaultMs)}
+                    onChange={(e) => setDraft((d) => ({ ...d, [r.source]: e.target.value }))}
+                    className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-200 w-24"
+                  />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => save.mutate()}
+          disabled={!Object.keys(draft).length || save.isPending}
+          className="px-4 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded transition-colors"
+        >
+          Save
+        </button>
+        {saved && <span className="text-xs text-green-400">Saved</span>}
+      </div>
+    </div>
+  );
+}
+
 // ── audit log ────────────────────────────────────────────────────────────────
 
 function actionColor(action: string): string {
@@ -355,7 +428,12 @@ export default function AdminTab() {
             <RepairRangePanel sourceNames={sourceNames} />
           </div>
         )}
-        {sub === "Config" && <ConfigSection />}
+        {sub === "Config" && (
+          <div className="space-y-8">
+            <ConfigSection />
+            <RateLimitsSection />
+          </div>
+        )}
         {sub === "Audit"  && <AuditSection />}
       </div>
     </div>

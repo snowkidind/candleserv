@@ -1,11 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import {
   getCurrencies, updateCurrency, setCurrencyFeed, probeCurrency, getHealerStatus,
+  getAdminActions,
 } from "@/lib/api";
-import type { CurrencyInfo } from "@/lib/api";
+import type { CurrencyInfo, AdminActionRow } from "@/lib/api";
 
 // Stable venue order for the feed table.
 const SOURCES = ["binance", "bybit", "kraken", "coinbase", "bitfinex", "okx", "gate", "bitget"];
+
+function ago(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
 
 export default function FeedsTab() {
   const [currencies, setCurrencies] = useState<CurrencyInfo[]>([]);
@@ -17,13 +28,30 @@ export default function FeedsTab() {
   // finishes) we re-pull currencies so the latch value + updatedAt stay fresh.
   const prevBfSig = useRef("");
 
+  // source → most-recent feed.enable/disable action for the selected currency
+  // (from the admin_actions audit log), surfaced inline as "who changed it".
+  const [feedHistory, setFeedHistory] = useState<Record<string, AdminActionRow>>({});
+
   async function reload() {
     const r = await getCurrencies();
     setCurrencies(r.currencies);
     setSelected(prev => prev ?? (r.currencies.find(c => c.code !== "BTC")?.code ?? r.currencies[0]?.code ?? null));
   }
 
+  async function loadHistory(code: string) {
+    try {
+      const r = await getAdminActions(100, undefined, `${code}/`);
+      const map: Record<string, AdminActionRow> = {};
+      for (const a of r.actions) { // DESC order → first seen per source is latest
+        const src = a.target?.split("/")[1];
+        if (src && !map[src] && a.action.startsWith("feed.")) map[src] = a;
+      }
+      setFeedHistory(map);
+    } catch { setFeedHistory({}); }
+  }
+
   useEffect(() => { reload().catch(e => flash(String(e))); }, []);
+  useEffect(() => { if (selected) loadHistory(selected); }, [selected]);
 
   // Poll healer status to surface which currency is actively backfilling. The
   // runBackfill activity is tagged with { currency } (Phase 5.5).
@@ -91,7 +119,7 @@ export default function FeedsTab() {
   }
 
   async function toggleFeed(code: string, source: string, enabled: boolean) {
-    await withBusy(async () => { await setCurrencyFeed(code, source, enabled); await reload(); });
+    await withBusy(async () => { await setCurrencyFeed(code, source, enabled); await reload(); await loadHistory(code); });
   }
 
   async function probe(code: string) {
@@ -220,6 +248,7 @@ export default function FeedsTab() {
                   <th className="font-normal">Symbol</th>
                   <th className="font-normal">Availability</th>
                   <th className="font-normal">Sync</th>
+                  <th className="font-normal">Last change</th>
                 </tr>
               </thead>
               <tbody>
@@ -242,6 +271,12 @@ export default function FeedsTab() {
                           disabled={busy || !f.available}
                           onChange={e => toggleFeed(cur.code, src, e.target.checked)}
                         />
+                      </td>
+                      <td className="text-gray-500">
+                        {feedHistory[src]
+                          ? <span>{feedHistory[src].action === "feed.enable" ? "enabled" : "disabled"} by{" "}
+                              <span className="text-gray-400">{feedHistory[src].actor}</span> · {ago(feedHistory[src].createdAt)}</span>
+                          : <span className="text-gray-700">—</span>}
                       </td>
                     </tr>
                   );

@@ -53,12 +53,14 @@ export async function listAdminActions(opts?: {
   limit?: number;
   action?: string;
   actor?: string;
+  targetPrefix?: string;
 }): Promise<AdminAction[]> {
   const limit = Math.min(opts?.limit ?? 200, 1000);
   const where: string[] = [];
   const params: unknown[] = [];
   if (opts?.action) { params.push(opts.action); where.push(`"action" = $${params.length}`); }
   if (opts?.actor)  { params.push(opts.actor);  where.push(`"actor" = $${params.length}`); }
+  if (opts?.targetPrefix) { params.push(opts.targetPrefix + "%"); where.push(`"target" LIKE $${params.length}`); }
   params.push(limit);
   const res = await query(
     `SELECT * FROM admin_actions

@@ -10,13 +10,16 @@
  * `venueGate(source)` enforces a minimum interval between successive calls to a
  * venue across ALL call paths (it's wrapped around every adapter fetch in the
  * registry). Concurrent callers each reserve the next slot, so they end up
- * spaced MIN_INTERVAL_MS apart rather than bursting. Venues with no entry (and
- * interval 0) are a no-op — zero added latency.
+ * spaced apart rather than bursting. Interval 0 (no default, no override) is a
+ * no-op — zero added latency.
  *
- * Module-level const per project convention: tuning knobs are plain consts, not
- * env vars or DB flags.
+ * The interval is operator-tunable per deploy via the app_settings key
+ * `rateLimit.<venue>` (ms), since rate limits are deploy-specific (IP, API tier,
+ * host region). The built-in const is the fallback default when unset.
  */
-const MIN_INTERVAL_MS: Record<string, number> = {
+import { getSettingInt } from "../db/appSettings.js";
+
+export const RATE_LIMIT_DEFAULTS: Record<string, number> = {
   kraken: 1100, // ~1 req/s public limit, with margin
 };
 
@@ -24,11 +27,14 @@ const MIN_INTERVAL_MS: Record<string, number> = {
 const nextAllowedAt: Record<string, number> = {};
 
 export async function venueGate(source: string): Promise<void> {
-  const interval = MIN_INTERVAL_MS[source] ?? 0;
+  // app_settings override (cached 1h, invalidated on save) → const default → 0.
+  const interval = await getSettingInt(`rateLimit.${source}`, RATE_LIMIT_DEFAULTS[source] ?? 0);
   if (interval <= 0) return;
+  // read+reserve is synchronous after the await, so concurrent callers can't
+  // race the slot — each advances nextAllowedAt atomically.
   const now = Date.now();
   const start = Math.max(now, nextAllowedAt[source] ?? 0);
-  nextAllowedAt[source] = start + interval; // reserve this slot for the next caller
+  nextAllowedAt[source] = start + interval;
   const wait = start - now;
   if (wait > 0) await new Promise((r) => setTimeout(r, wait));
 }
