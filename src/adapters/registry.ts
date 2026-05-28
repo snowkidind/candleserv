@@ -1,4 +1,5 @@
 import type { SourceCandle } from "../types/index.js";
+import { venueGate } from "../lib/rateLimit.js";
 import {
   fetchBinanceCandle, fetchBinanceRange,
   fetchBinanceStableRate, fetchBinanceStableRange,
@@ -105,6 +106,22 @@ export const ADAPTERS: Adapter[] = [
     },
   },
 ];
+
+// Wrap every adapter call (live collector, peg wave, backfill, repair, probe)
+// in the per-venue rate gate so concurrent same-venue requests across
+// currencies and code paths can't burst a venue past its per-IP limit. Venues
+// with no configured interval (all but kraken) no-op. Done once here so no call
+// site has to remember to gate. Each `a` is a fresh per-iteration binding.
+for (const a of ADAPTERS) {
+  const fetchOne = a.fetchOne;
+  const fetchRange = a.fetchRange;
+  a.fetchOne   = async (symbol, ts)            => { await venueGate(a.name); return fetchOne(symbol, ts); };
+  a.fetchRange = async (symbol, endTime, limit) => { await venueGate(a.name); return fetchRange(symbol, endTime, limit); };
+  const pf = a.normalize.pegFetcher;
+  if (pf) a.normalize.pegFetcher = async (ts) => { await venueGate(a.name); return pf(ts); };
+  const pfr = a.normalize.pegFetcherRange;
+  if (pfr) a.normalize.pegFetcherRange = async (endTime, limit) => { await venueGate(a.name); return pfr(endTime, limit); };
+}
 
 export const SOURCE_NAMES: string[] = ADAPTERS.map((a) => a.name);
 
