@@ -44,12 +44,12 @@ export interface Candle {
   sourceCount: number; sourceCountBaseline: number;
   sources: number; confidence: number;
 }
-export const getLatestCandles = (tf: string, n: number) =>
-  req<{ candles: Candle[] }>(`/monitor/candles/latest?tf=${tf}&n=${n}`);
+export const getLatestCandles = (tf: string, n: number, currency = "BTC") =>
+  req<{ candles: Candle[] }>(`/monitor/candles/latest?tf=${tf}&n=${n}&currency=${currency}`);
 
-export const getCandlesBefore = (tf: string, endingAtMs: number, limit: number) =>
+export const getCandlesBefore = (tf: string, endingAtMs: number, limit: number, currency = "BTC") =>
   req<{ candles: Candle[] }>(
-    `/monitor/candles?tf=${tf}&endingAt=${new Date(endingAtMs).toISOString()}&limit=${limit}`
+    `/monitor/candles?tf=${tf}&endingAt=${new Date(endingAtMs).toISOString()}&limit=${limit}&currency=${currency}`
   );
 
 // Stats
@@ -264,6 +264,57 @@ export const resumeSource = (source: string) =>
 
 // Session keepalive
 export const ping = () => req<{ ok: boolean }>("/monitor/ping");
+
+// Current user — permission map + demo flag, for tab gating (B5).
+export interface Me {
+  perms: Record<string, boolean>;
+  isDemo: boolean;
+}
+export const getMe = () => req<Me>("/monitor/me");
+
+// Currencies / Feeds control plane (Phase 9.3 API).
+export interface CurrencyFeed {
+  symbol: string;
+  available: boolean;
+  enabled: boolean;
+}
+export interface CurrencyInfo {
+  code: string;
+  displayName: string;
+  enabled: boolean;
+  premiumEnabled: boolean;
+  minSources: number | null;
+  inceptionTs: string | null;
+  createdAt: string;
+  updatedAt: string;
+  feeds: Record<string, CurrencyFeed>;
+}
+export const getCurrencies = () =>
+  req<{ currencies: CurrencyInfo[] }>("/monitor/currencies");
+
+export interface CurrencyPatch {
+  enabled?: boolean;
+  premiumEnabled?: boolean;
+  minSources?: number | null;
+  inceptionTs?: string | null;
+}
+export const updateCurrency = (code: string, patch: CurrencyPatch) =>
+  req<{ ok: boolean; currency: CurrencyInfo; backfill?: "started" | "deferred" }>(
+    `/monitor/currencies/${code}`,
+    { method: "PUT", body: JSON.stringify(patch) },
+  );
+
+export const setCurrencyFeed = (code: string, source: string, enabled: boolean) =>
+  req<{ ok: boolean; feeds: Record<string, CurrencyFeed> }>(
+    `/monitor/currencies/${code}/feeds`,
+    { method: "PUT", body: JSON.stringify({ source, enabled }) },
+  );
+
+export const probeCurrency = (code: string) =>
+  req<{ ok: boolean; code: string; probedAt: string; results: { source: string; available: boolean; error?: string }[] }>(
+    `/monitor/currencies/${code}/probe`,
+    { method: "POST" },
+  );
 
 // Service events
 export interface ServiceEvent {

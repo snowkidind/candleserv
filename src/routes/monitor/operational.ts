@@ -3,7 +3,8 @@ import { trackSession, authenticate, requirePerm } from "../../middleware/sessio
 import { query } from "../../db/pool.js";
 import { getAllGaps, countPendingGaps } from "../../db/gaps.js";
 import { getStreamEvents } from "../../db/streamEvents.js";
-import { getAllSettings, setSetting } from "../../db/appSettings.js";
+import { getAllSettings, getSetting, setSetting } from "../../db/appSettings.js";
+import { getPermissionsForUser } from "../../db/permissions.js";
 import { get24hSourceStats, getCandles, getCollectionLatencyStats, VALID_TFS } from "../../db/candles.js";
 import { runGapScan } from "../../lib/gapDetector.js";
 import {
@@ -431,6 +432,20 @@ router.get("/stream-events", ...view, async (req, res) => {
 /** GET /monitor/ping — lightweight session keepalive */
 router.get("/ping", ...view, (_req, res) => {
   return res.json({ ok: true });
+});
+
+/**
+ * GET /monitor/me — the authed user's permission map + demo flag, for frontend
+ * tab gating (finding B5). Returns the real permission map (not a fabricated
+ * isAdmin) so the UI gates Connections/Feeds/Admin on CAN_MODIFY_CANDLESERV,
+ * consistent with the requirePerm guards on the modify routes.
+ */
+router.get("/me", ...view, async (req, res) => {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: "Not authenticated" });
+  const perms = await getPermissionsForUser(userId);
+  const isDemo = (await getSetting("IS_DEMO")) === "true" || process.env.IS_DEMO === "true";
+  return res.json({ perms, isDemo });
 });
 
 /** GET /monitor/service-events */

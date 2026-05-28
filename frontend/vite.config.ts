@@ -17,9 +17,9 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
-      "/v1": "http://localhost:3007",
-      "/monitor": "http://localhost:3007",
-      "/health": "http://localhost:3007",
+      "/v1": "http://localhost:3019",
+      "/monitor": "http://localhost:3019",
+      "/health": "http://localhost:3019",
     },
   },
 });

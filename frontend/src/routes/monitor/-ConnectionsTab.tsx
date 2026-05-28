@@ -1,15 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  getStats, getSourcesStatus, getGaps, getStreamEvents, triggerHeal,
+  getStats, getSourcesStatus, getGaps, triggerHeal,
   getFormula, setFormula, getConfig,
-  type StreamEvent, type SourceStatus,
+  type SourceStatus,
 } from "@/lib/api";
 import { useCandleStream } from "@/lib/CandleStreamContext";
 import SourceHistoryModal from "./-SourceHistoryModal";
-
-const TIMELINE_MINUTES = [10, 60, 720, 1440, 10080] as const;
-const TIMELINE_LABELS  = ["10m", "1h", "12h", "1d", "7d"] as const;
 
 // Local-storage key for dismissing auto-suspend banners on a per-(source, ts) basis
 const DISMISS_KEY_PREFIX = "candleserv:autosuspend-dismissed:";
@@ -355,74 +352,9 @@ function SourceCard({
   );
 }
 
-// ── TimelineCanvas (unchanged — kept from prior implementation) ──────────────
-
-function TimelineCanvas({
-  events, minutes, sources,
-}: { events: StreamEvent[]; minutes: number; sources: string[] }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    if (sources.length === 0) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      return;
-    }
-    const W = canvas.width, H = canvas.height;
-    const rowH = Math.floor(H / sources.length);
-    const now = Date.now();
-    const windowMs = minutes * 60 * 1000;
-
-    ctx.clearRect(0, 0, W, H);
-    sources.forEach((_, i) => {
-      ctx.fillStyle = i % 2 === 0 ? "#111827" : "#0f172a";
-      ctx.fillRect(0, i * rowH, W, rowH);
-    });
-
-    const bySource: Record<string, StreamEvent[]> = {};
-    for (const s of sources) bySource[s] = [];
-    for (const e of events) if (bySource[e.source]) bySource[e.source].push(e);
-
-    sources.forEach((src, i) => {
-      const evts = bySource[src].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-      const y = i * rowH + 2;
-      const h = rowH - 4;
-      for (let j = 0; j < evts.length; j++) {
-        const evtTs = new Date(evts[j].createdAt).getTime();
-        const nextTs = j + 1 < evts.length ? new Date(evts[j + 1].createdAt).getTime() : now;
-        const x1 = Math.max(0, ((evtTs - (now - windowMs)) / windowMs) * W);
-        const x2 = Math.min(W, ((nextTs - (now - windowMs)) / windowMs) * W);
-        if (x2 <= 0 || x1 >= W) continue;
-        const st = evts[j].state;
-        ctx.fillStyle = st === "on" ? "#166534"
-          : st === "error" ? "#7f1d1d"
-          : st === "paused" || st === "formula-excluded" ? "#1e3a5f"
-          : "#374151";
-        ctx.fillRect(x1, y, x2 - x1, h);
-      }
-      ctx.fillStyle = "#6b7280";
-      ctx.font = "10px monospace";
-      ctx.fillText(src, 4, i * rowH + rowH / 2 + 4);
-    });
-
-    ctx.strokeStyle = "#4b5563";
-    ctx.setLineDash([3, 3]);
-    ctx.beginPath();
-    ctx.moveTo(W - 1, 0);
-    ctx.lineTo(W - 1, H);
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }, [events, minutes, sources]);
-
-  return <canvas ref={canvasRef} width={800} height={120} className="w-full rounded" />;
-}
-
 // ── ConnectionsTab ───────────────────────────────────────────────────────────
 
 export default function ConnectionsTab() {
-  const [timelineMin, setTimelineMin] = useState<number>(60);
   const [healing, setHealing] = useState(false);
   const [historySource, setHistorySource] = useState<string | null>(null);
   // External-prefill nonce lets the editor re-react to the same source being clicked twice.
@@ -433,11 +365,6 @@ export default function ConnectionsTab() {
   const { data: stats }   = useQuery({ queryKey: ["stats"],            queryFn: getStats,         refetchInterval: 60_000 });
   const { data: sources } = useQuery({ queryKey: ["sources", "status"], queryFn: getSourcesStatus, refetchInterval: 30_000 });
   const { data: gaps }    = useQuery({ queryKey: ["gaps"],             queryFn: getGaps,          refetchInterval: 60_000 });
-  const { data: events }  = useQuery({
-    queryKey: ["stream-events", timelineMin],
-    queryFn: () => getStreamEvents(timelineMin),
-    refetchInterval: 30_000,
-  });
 
   // SSE-triggered invalidations — covers both legacy source_state and the new
   // formula-excluded / formula-included transitions.
@@ -445,7 +372,6 @@ export default function ConnectionsTab() {
     if (!sourceStateTick) return;
     qc.invalidateQueries({ queryKey: ["sources", "status"] });
     qc.invalidateQueries({ queryKey: ["formula"] });
-    qc.invalidateQueries({ queryKey: ["stream-events"] });
   }, [sourceStateTick, qc]);
 
   const heal = async () => {
@@ -506,33 +432,6 @@ export default function ConnectionsTab() {
             onOpenHistory={(name) => setHistorySource(name)}
           />
         ))}
-      </div>
-
-      {/* Timeline */}
-      <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-        <div className="flex items-center justify-between mb-3">
-          <span className="text-sm text-gray-300 font-medium">Connection timeline</span>
-          <div className="flex gap-1">
-            {TIMELINE_MINUTES.map((m, i) => (
-              <button
-                key={m}
-                onClick={() => setTimelineMin(m)}
-                className={`px-2 py-1 text-xs rounded transition-colors ${
-                  timelineMin === m ? "bg-gray-700 text-white" : "text-gray-500 hover:text-gray-300"
-                }`}
-              >
-                {TIMELINE_LABELS[i]}
-              </button>
-            ))}
-          </div>
-        </div>
-        <TimelineCanvas events={events?.events ?? []} minutes={timelineMin} sources={sourceNames} />
-        <div className="flex gap-4 mt-2 text-xs text-gray-600">
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded bg-green-800 inline-block" /> on</span>
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded bg-red-900 inline-block" /> error</span>
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded bg-blue-900 inline-block" /> excluded</span>
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded bg-gray-700 inline-block" /> unknown</span>
-        </div>
       </div>
 
       {/* Heal button + recent gaps */}

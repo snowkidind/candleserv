@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createChart, IChartApi, ISeriesApi, CandlestickData, HistogramData, WhitespaceData, LineData, Time, LogicalRange, MouseEventParams } from "lightweight-charts";
 import type { Candle } from "@/lib/api";
-import { getCandlesBefore, getGaps, getErrors } from "@/lib/api";
+import { getCandlesBefore, getGaps, getErrors, getCurrencies } from "@/lib/api";
 import { useCandleStream } from "@/lib/CandleStreamContext";
 
 const TFS = ["1m","5m","10m","15m","1h","2h","4h","6h","12h","1d","3d","7d","30d"];
@@ -101,7 +101,7 @@ function candleToVolume(c: Candle): HistogramData {
 }
 
 export default function CandlesTab() {
-  const { snapshot, latestCandle: latest, tf, setTf } = useCandleStream();
+  const { snapshot, latestCandle: latest, tf, setTf, currency, setCurrency } = useCandleStream();
   const chartRef       = useRef<HTMLDivElement>(null);
   const chart          = useRef<IChartApi | null>(null);
   const series         = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -139,8 +139,18 @@ export default function CandlesTab() {
   // Keep current tf accessible inside effects without re-subscribing
   const tfRef = useRef(tf);
   useEffect(() => { tfRef.current = tf; }, [tf]);
+  const currencyRef = useRef(currency);
+  useEffect(() => { currencyRef.current = currency; }, [currency]);
   const maRef = useRef(ma);
   useEffect(() => { maRef.current = ma; }, [ma]);
+
+  // Enabled-currency list for the selector dropdown.
+  const [currencyOptions, setCurrencyOptions] = useState<string[]>([currency]);
+  useEffect(() => {
+    getCurrencies()
+      .then(r => setCurrencyOptions(r.currencies.filter(c => c.enabled).map(c => c.code)))
+      .catch(() => {});
+  }, []);
 
   // ── Chart init — runs once ──────────────────────────────────────────────────
   useEffect(() => {
@@ -229,7 +239,7 @@ export default function CandlesTab() {
         if (!sorted.length) return;
         // Fetch candles strictly before the oldest loaded bar
         const endingAtMs = sorted[0] * 1000 - 1;
-        const result = await getCandlesBefore(tfRef.current, endingAtMs, HISTORY_FETCH_LIMIT);
+        const result = await getCandlesBefore(tfRef.current, endingAtMs, HISTORY_FETCH_LIMIT, currencyRef.current);
 
         if (!result.candles.length) {
           noMoreHistory.current = true;
@@ -322,7 +332,7 @@ export default function CandlesTab() {
     gapRanges.current = [];
     errorBars.current = new Map();
     setAtHistoryStart(false);
-  }, [tf]);
+  }, [tf, currency]);
 
   // ── Fetch gap ranges and service errors on TF change ────────────────────────
   useEffect(() => {
@@ -351,7 +361,7 @@ export default function CandlesTab() {
       errorBars.current = bars;
       updateErrorMarkers();
     }).catch(err => console.error("[CandlesTab] getErrors error:", err));
-  }, [tf]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tf, currency]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Merge SSE snapshot from context into the chart candle map ───────────────
   useEffect(() => {
@@ -495,6 +505,14 @@ export default function CandlesTab() {
     <div className="flex flex-col h-full">
       {/* Toolbar */}
       <div className="flex items-center gap-4 px-4 py-2 border-b border-gray-800 shrink-0">
+        <select
+          value={currency}
+          onChange={e => setCurrency(e.target.value)}
+          className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-medium"
+          title="Currency"
+        >
+          {currencyOptions.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
         <div className="flex gap-1">
           {TFS.map(t => (
             <button
