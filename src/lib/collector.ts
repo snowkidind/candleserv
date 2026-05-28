@@ -292,16 +292,28 @@ export async function collect(minuteTs: Date): Promise<boolean> {
       return false;
     }
 
-    // ── Per-venue operational state (venue-global). ──
+    // ── Per-venue operational state. Auto-suspend fires only when a venue is
+    // WHOLLY unreachable this minute — no candle from ANY currency and no peg —
+    // i.e. the venue is actually down. A venue that returned at least one
+    // response is demonstrably up, so per-pair errors (a thin or delisted
+    // altcoin pair) are surfaced but must NOT suspend it for BTC and every other
+    // currency. (Thin no-trade minutes don't even reach here — D-FLATFILL.) ──
     for (const source of venueTouched) {
       const errs = venueErrors.get(source);
+      const reachable = fetchedSources.has(source) || pegMap.has(source);
+      if (reachable) lastFetchAt[source] = new Date();
       if (errs && errs.length) {
-        recordFailure(source);
-        await checkAutoSuspend(source);
-        recordLiveFetchState(source, "error");
         await recordError("collector", `fetch:${source}`, errs.join("; "));
+        if (reachable) {
+          // Up, but one or more pairs errored — a pair problem, not venue health.
+          recordLiveFetchState(source, "on");
+        } else {
+          // Nothing succeeded → venue down → strike toward global auto-suspend.
+          recordFailure(source);
+          await checkAutoSuspend(source);
+          recordLiveFetchState(source, "error");
+        }
       } else {
-        lastFetchAt[source] = new Date();
         recordLiveFetchState(source, "on");
       }
     }
