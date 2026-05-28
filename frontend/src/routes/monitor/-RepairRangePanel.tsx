@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getFormula, previewRepair, runRepair, getRepairJob, getActiveRepairJob, cancelRepairJob,
+  getCurrencies,
   type RepairPreview, type RepairJobState, type Formula,
 } from "@/lib/api";
 
@@ -109,7 +110,7 @@ function RepairProgressPanel({
   // Called with the original from/to from the completed job — the parent
   // re-runs runRepair with no formula override to bring the window back to
   // live-formula composites. One-click loop closure for the divergence case.
-  onReconcile: (from: string, to: string) => void;
+  onReconcile: (from: string, to: string, currency: string) => void;
   liveFormula: Formula | null;
 }) {
   // Poll every 2s while not in a terminal state. React Query handles this via
@@ -231,7 +232,7 @@ function RepairProgressPanel({
               </div>
               <div className="mt-3">
                 <button
-                  onClick={() => onReconcile(data.from, data.to)}
+                  onClick={() => onReconcile(data.from, data.to, data.currency)}
                   className="px-3 py-1.5 text-xs bg-yellow-700 hover:bg-yellow-600 text-yellow-100 rounded transition-colors"
                 >
                   Reconcile: rerun with live formula
@@ -286,6 +287,14 @@ export default function RepairRangePanel({ sourceNames }: { sourceNames: string[
   const liveFormula: Formula | null = liveFormulaResp
     ? { excludedSources: liveFormulaResp.excludedSources }
     : null;
+
+  // Which currency to repair. Enabled currencies only; defaults to BTC.
+  const { data: currenciesResp } = useQuery({ queryKey: ["currencies"], queryFn: getCurrencies });
+  const currencyOptions = useMemo(
+    () => (currenciesResp?.currencies ?? []).filter((c) => c.enabled).map((c) => c.code),
+    [currenciesResp],
+  );
+  const [currency, setCurrency] = useState("BTC");
 
   // Defaults: last 7 days, ending one minute ago.
   const [from, setFrom] = useState<string>(() => {
@@ -347,6 +356,7 @@ export default function RepairRangePanel({ sourceNames }: { sourceNames: string[
       const toDate   = fromUtcInputValue(to);
       if (!fromDate || !toDate) throw new Error("Invalid window");
       const resp = await previewRepair({
+        currency,
         from: fromDate.toISOString(),
         to: toDate.toISOString(),
         formula: { excludedSources: formulaOverride },
@@ -367,6 +377,7 @@ export default function RepairRangePanel({ sourceNames }: { sourceNames: string[
       const toDate   = fromUtcInputValue(to);
       if (!fromDate || !toDate) return;
       const { jobId } = await runRepair({
+        currency,
         from: fromDate.toISOString(),
         to: toDate.toISOString(),
         formula: { excludedSources: formulaOverride },
@@ -396,6 +407,18 @@ export default function RepairRangePanel({ sourceNames }: { sourceNames: string[
           Live formula is not modified. Window is bounded by the 180-day archive retention and
           cannot extend into the current in-progress minute.
         </p>
+
+        {/* Currency */}
+        <div>
+          <label className="text-xs text-gray-400 block mb-1">Currency</label>
+          <select
+            value={currency}
+            onChange={(e) => { setCurrency(e.target.value); invalidatePreview(); }}
+            className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 outline-none focus:border-blue-500"
+          >
+            {currencyOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
 
         {/* Window picker */}
         <div className="grid grid-cols-2 gap-3">
@@ -544,12 +567,13 @@ export default function RepairRangePanel({ sourceNames }: { sourceNames: string[
             setActiveJobId(null);
             qc.invalidateQueries({ queryKey: ["sources", "status"] });
           }}
-          onReconcile={async (origFrom, origTo) => {
-            // One-click "rerun with live formula" — same window, no override.
-            // Replaces the active job; the previous progress panel unmounts
-            // and a fresh one mounts against the new jobId.
+          onReconcile={async (origFrom, origTo, origCurrency) => {
+            // One-click "rerun with live formula" — same window + currency, no
+            // override. Replaces the active job; the previous progress panel
+            // unmounts and a fresh one mounts against the new jobId.
             try {
               const { jobId } = await runRepair({
+                currency: origCurrency,
                 from: origFrom,
                 to: origTo,
                 // No formula override → server defaults to getCurrentFormula().

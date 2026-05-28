@@ -136,6 +136,7 @@ export const getSourceHistory = (source: string, days = 180) =>
 
 // Repair operations
 export interface RepairRequest {
+  currency?: string;     // default BTC server-side
   from: string;          // ISO
   to: string;            // ISO
   sources?: string[];
@@ -156,6 +157,7 @@ export interface RepairJobState {
   state: "queued" | "ensuring" | "backfilling" | "recomposing" | "done" | "failed" | "cancelled";
   startedAt: string;
   finishedAt: string | null;
+  currency: string;
   from: string;
   to: string;
   sources?: string[];

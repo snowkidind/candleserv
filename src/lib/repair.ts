@@ -13,8 +13,9 @@
  * All three are hard-bounded by the 180-day retention window. Window-end
  * clamps are the caller's responsibility (the REST handler enforces them).
  */
-import { ADAPTER_BY_NAME, SOURCE_NAMES } from "../adapters/registry.js";
-import { symbolFor } from "../adapters/symbolMap.js";
+import { ADAPTER_BY_NAME } from "../adapters/registry.js";
+import { getActiveFeeds } from "../db/currencyFeeds.js";
+import { getCurrency } from "../db/currencies.js";
 import { isOutOfHistory } from "../adapters/errors.js";
 import { composeMinute } from "./compose.js";
 import type { Formula } from "./compose.js";
@@ -61,6 +62,7 @@ export interface EnsureSourceCoverageOpts {
  * overwritten (ON CONFLICT DO NOTHING).
  */
 export async function ensureSourceCoverage(
+  currency: string,
   from: Date,
   to: Date,
   opts?: EnsureSourceCoverageOpts,
@@ -74,8 +76,12 @@ export async function ensureSourceCoverage(
   }
   // Window-end clamp (must end in the past) is the REST layer's job; we trust the caller here.
 
+  // Effective fetch set for this currency: probed-available AND enabled feeds,
+  // minus the global formula kill-switch, optionally restricted by opts.sources.
   const excluded = new Set(getCurrentFormula().excludedSources);
-  const sources = (opts?.sources ?? SOURCE_NAMES).filter((s) => !excluded.has(s));
+  const restrict = opts?.sources ? new Set(opts.sources) : null;
+  const feeds = (await getActiveFeeds(currency))
+    .filter((f) => !excluded.has(f.source) && (!restrict || restrict.has(f.source)));
 
   let rowsFetched = 0;
   let sentinelsWritten = 0;
@@ -90,10 +96,10 @@ export async function ensureSourceCoverage(
   if (opts?.retryEmpty) {
     const del = await query(
       `DELETE FROM candles_1m_sources
-        WHERE "currency" = 'BTC'
+        WHERE "currency" = $3
           AND "timestamp" >= $1 AND "timestamp" < $2
           AND "rejectedReason" = 'no_data'`,
-      [from, to],
+      [from, to, currency],
     );
     log(`[repair] ensureSourceCoverage: cleared ${del.rowCount ?? 0} 'no_data' sentinels`);
   }
@@ -116,14 +122,14 @@ export async function ensureSourceCoverage(
 
     // Fan out per-source fetchRange for this tile.
     const settled = await Promise.allSettled(
-      sources.map((s) => ADAPTER_BY_NAME[s].fetchRange(symbolFor("BTC", s), tileEnd, limit)),
+      feeds.map((f) => ADAPTER_BY_NAME[f.source].fetchRange(f.symbol, tileEnd, limit)),
     );
 
     // Per (minute, source), either insert fetched candle or sentinel.
     // ON CONFLICT DO NOTHING preserves existing rows (live tick, prior heal,
     // prior sentinel that wasn't retryEmpty-cleared).
-    for (let i = 0; i < sources.length; i++) {
-      const source = sources[i];
+    for (let i = 0; i < feeds.length; i++) {
+      const source = feeds[i].source;
       const res = settled[i];
 
       if (res.status === "rejected") {
@@ -135,7 +141,7 @@ export async function ensureSourceCoverage(
           continue;
         }
         failedPerSource[source] = (failedPerSource[source] ?? 0) + 1;
-        logError(`[repair] ensureSourceCoverage: ${source} tile [${tileStart.toISOString()}, ${tileEnd.toISOString()}) failed`, res.reason);
+        logError(`[repair] ensureSourceCoverage: ${currency}/${source} tile [${tileStart.toISOString()}, ${tileEnd.toISOString()}) failed`, res.reason);
         // Don't write sentinels for whole-tile failures — that'd mark every
         // minute in the tile as 'no_data', losing the distinction between
         // "exchange returned empty" and "network/auth failure." The next
@@ -159,9 +165,9 @@ export async function ensureSourceCoverage(
             `INSERT INTO candles_1m_sources
                ("currency","timestamp","source","open","high","low","close","volume",
                 "rejected","rejectedReason","usedInFormula")
-             VALUES ('BTC',$1,$2,$3,$4,$5,$6,$7,false,NULL,NULL)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,false,NULL,NULL)
              ON CONFLICT ("currency","timestamp","source") DO NOTHING`,
-            [new Date(minuteMs), source, candle.open, candle.high, candle.low, candle.close, candle.volume],
+            [currency, new Date(minuteMs), source, candle.open, candle.high, candle.low, candle.close, candle.volume],
           );
           if (ins.rowCount === 1) rowsFetched++;
           else skipped++;
@@ -170,9 +176,9 @@ export async function ensureSourceCoverage(
             `INSERT INTO candles_1m_sources
                ("currency","timestamp","source","open","high","low","close","volume",
                 "rejected","rejectedReason","usedInFormula")
-             VALUES ('BTC',$1,$2,0,0,0,0,0,true,'no_data',NULL)
+             VALUES ($1,$2,$3,0,0,0,0,0,true,'no_data',NULL)
              ON CONFLICT ("currency","timestamp","source") DO NOTHING`,
-            [new Date(minuteMs), source],
+            [currency, new Date(minuteMs), source],
           );
           if (ins.rowCount === 1) sentinelsWritten++;
           else skipped++;
@@ -185,7 +191,7 @@ export async function ensureSourceCoverage(
 
   // One tidy summary line per source for the venues that ran out of history.
   for (const [source, earliest] of Object.entries(outOfHistoryEarliest)) {
-    log(`[repair] ensureSourceCoverage: ${source} has no data before ${earliest.toISOString().slice(0, 16)} (skipped)`);
+    log(`[repair] ensureSourceCoverage: ${currency}/${source} has no data before ${earliest.toISOString().slice(0, 16)} (skipped)`);
   }
 
   const result: EnsureSourceCoverageResult = { rowsFetched, sentinelsWritten, skipped, failedPerSource };
@@ -212,6 +218,7 @@ export interface RecomposeRangeOpts {
  * windowed-only; live formula state in formula_changes is untouched.
  */
 export async function recomposeRange(
+  currency: string,
   from: Date,
   to: Date,
   opts?: RecomposeRangeOpts,
@@ -224,9 +231,11 @@ export async function recomposeRange(
   }
 
   const formula = opts?.formula ?? getCurrentFormula();
-  const minSources   = await getSettingInt("minSources", 3);
-  const baseline     = await getSourceCountBaseline("BTC");
-  const volumeLeader = await getTrailingVolumeLeader("BTC", 10);
+  const meta           = await getCurrency(currency);
+  const minSources     = meta?.minSources ?? await getSettingInt("minSources", 3);
+  const baseline       = await getSourceCountBaseline(currency);
+  const volumeLeader   = await getTrailingVolumeLeader(currency, 10);
+  const premiumEnabled = meta?.premiumEnabled ?? true;
 
   let recomposed = 0;
   let skippedNoSources = 0;
@@ -239,8 +248,8 @@ export async function recomposeRange(
     }
     const minuteTs = new Date(minuteMs);
     try {
-      const result = await composeMinute("BTC", minuteTs, formula, {
-        baseline, minSources, volumeLeader: volumeLeader ?? undefined,
+      const result = await composeMinute(currency, minuteTs, formula, {
+        baseline, minSources, volumeLeader: volumeLeader ?? undefined, premiumEnabled,
       });
       if (result.composed) recomposed++;
       else skippedNoSources++;
@@ -274,11 +283,12 @@ export interface RepairRangeResult {
  * fetch set (applied only to the ensure phase).
  */
 export async function repairRange(
+  currency: string,
   from: Date,
   to: Date,
   opts?: RepairRangeOpts,
 ): Promise<RepairRangeResult> {
-  const ensure = await ensureSourceCoverage(from, to, {
+  const ensure = await ensureSourceCoverage(currency, from, to, {
     sources: opts?.sources,
     retryEmpty: opts?.retryEmpty,
     signal: opts?.signal,
@@ -286,7 +296,7 @@ export async function repairRange(
   if (opts?.signal?.aborted) {
     return { ensure, recompose: { recomposed: 0, skippedNoSources: 0, failed: 0 } };
   }
-  const recompose = await recomposeRange(from, to, {
+  const recompose = await recomposeRange(currency, from, to, {
     formula: opts?.formula,
     signal: opts?.signal,
   });

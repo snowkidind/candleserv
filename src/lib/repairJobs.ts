@@ -18,7 +18,7 @@ import { ensureSourceCoverage, recomposeRange } from "./repair.js";
 import type { EnsureSourceCoverageResult, RecomposeRangeResult } from "./repair.js";
 import { backfillStableRates } from "./stableRateBackfill.js";
 import type { BackfillStableRatesResult } from "./stableRateBackfill.js";
-import { SOURCE_NAMES } from "../adapters/registry.js";
+import { getActiveFeeds } from "../db/currencyFeeds.js";
 import { getCurrentFormula } from "../db/formulaChanges.js";
 import { closeAllListeners } from "./emitter.js";
 import { redisDelByPrefix } from "./redis.js";
@@ -45,6 +45,7 @@ export interface RepairJobState {
   finishedAt: string | null;  // ISO when terminal, null otherwise
 
   // Original request — snapshot taken at job start.
+  currency: string;
   from: string;
   to: string;
   sources?: string[];
@@ -108,6 +109,7 @@ export function cancelRepairJob(jobId: string): { ok: boolean; error?: string } 
 }
 
 export interface StartRepairJobRequest {
+  currency: string;
   from: Date;
   to: Date;
   sources?: string[];
@@ -126,6 +128,7 @@ export function startRepairJob(req: StartRepairJobRequest): { jobId: string } {
     state: "queued",
     startedAt: new Date().toISOString(),
     finishedAt: null,
+    currency:   req.currency,
     from: req.from.toISOString(),
     to:   req.to.toISOString(),
     sources:    req.sources,
@@ -149,7 +152,7 @@ export function startRepairJob(req: StartRepairJobRequest): { jobId: string } {
     logError(`[repair-job] ${jobId} fatal uncaught:`, err);
   });
 
-  log(`[repair-job] ${jobId} started: ${state.from} → ${state.to}${req.formula ? ` formula-override=${JSON.stringify(req.formula.excludedSources)}` : ""}`);
+  log(`[repair-job] ${jobId} started: ${state.currency} ${state.from} → ${state.to}${req.formula ? ` formula-override=${JSON.stringify(req.formula.excludedSources)}` : ""}`);
   return { jobId };
 }
 
@@ -162,6 +165,7 @@ async function runRepairJob(jobId: string, controller: AbortController): Promise
     // Phase 1: ensureSourceCoverage.
     state.state = "ensuring";
     const ensure = await ensureSourceCoverage(
+      state.currency,
       new Date(state.from),
       new Date(state.to),
       {
@@ -202,6 +206,7 @@ async function runRepairJob(jobId: string, controller: AbortController): Promise
     // Phase 3: recomposeRange.
     state.state = "recomposing";
     const recompose = await recomposeRange(
+      state.currency,
       new Date(state.from),
       new Date(state.to),
       {
@@ -259,16 +264,14 @@ export interface RepairPreview {
  * Pure DB reads, no exchange fetches.
  */
 export async function previewRepair(req: StartRepairJobRequest): Promise<RepairPreview> {
-  const { from, to, sources, formula, retryEmpty } = req;
+  const { currency, from, to, sources, formula, retryEmpty } = req;
 
-  // Repair is BTC-only until currency-awareness lands, so every count here is
-  // pinned to currency='BTC' — otherwise the preview is inflated by the other
-  // currencies' rows and the ensure/recompose phases (which only touch BTC)
-  // wouldn't match the numbers shown.
+  // Every count is scoped to the requested currency so the preview matches what
+  // the ensure/recompose phases (which only touch that currency) will do.
   // 1. How many candles_1m rows live in the window?
   const compRes = await query(
-    `SELECT COUNT(*) AS n FROM candles_1m WHERE currency = 'BTC' AND timestamp >= $1 AND timestamp < $2`,
-    [from, to],
+    `SELECT COUNT(*) AS n FROM candles_1m WHERE currency = $3 AND timestamp >= $1 AND timestamp < $2`,
+    [from, to, currency],
   );
   const compositeRowsInWindow = Number(compRes.rows[0]?.n ?? 0);
 
@@ -286,14 +289,17 @@ export async function previewRepair(req: StartRepairJobRequest): Promise<RepairP
   // SOURCE_NAMES from the registry is the source of truth so a future 9th
   // adapter gets included in the preview without touching this file.
   const excluded = new Set(getCurrentFormula().excludedSources);
-  const requestedSources = (sources ?? SOURCE_NAMES).filter((s) => !excluded.has(s));
+  const restrict = sources ? new Set(sources) : null;
+  const requestedSources = (await getActiveFeeds(currency))
+    .map((f) => f.source)
+    .filter((s) => !excluded.has(s) && (!restrict || restrict.has(s)));
 
   const sentinelsRes = await query(
     `SELECT COUNT(*) AS n FROM candles_1m_sources
-      WHERE "currency" = 'BTC'
+      WHERE "currency" = $3
         AND timestamp >= $1 AND timestamp < $2
         AND "rejectedReason" = 'no_data'`,
-    [from, to],
+    [from, to, currency],
   );
   const sentinelsToRetry = retryEmpty ? Number(sentinelsRes.rows[0]?.n ?? 0) : 0;
 
@@ -305,10 +311,10 @@ export async function previewRepair(req: StartRepairJobRequest): Promise<RepairP
     : ``;
   const perSourceRes = await query(
     `SELECT source, COUNT(*) AS n FROM candles_1m_sources
-      WHERE "currency" = 'BTC'
+      WHERE "currency" = $3
         AND timestamp >= $1 AND timestamp < $2 ${existingClause}
       GROUP BY source`,
-    [from, to],
+    [from, to, currency],
   );
   const existingBySource: Record<string, number> = {};
   for (const r of perSourceRes.rows) {

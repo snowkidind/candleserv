@@ -226,6 +226,7 @@ router.put("/formula", ...modify, async (req, res) => {
  */
 router.post("/repair", ...modify, async (req, res) => {
   const body = req.body as {
+    currency?: unknown;
     from?: string;
     to?: string;
     sources?: unknown;
@@ -234,6 +235,14 @@ router.post("/repair", ...modify, async (req, res) => {
   };
   if (typeof body?.from !== "string" || typeof body?.to !== "string") {
     return res.status(400).json({ error: "Body must include from + to (ISO strings)" });
+  }
+
+  const currency = (typeof body.currency === "string" && body.currency.trim())
+    ? body.currency.trim().toUpperCase()
+    : "BTC";
+  const enabledCurrencies = await getEnabledCurrencies();
+  if (!enabledCurrencies.includes(currency)) {
+    return res.status(400).json({ error: `Unknown or disabled currency '${currency}'. Enabled: ${enabledCurrencies.join(", ")}` });
   }
   const from = new Date(body.from);
   const to   = new Date(body.to);
@@ -266,7 +275,7 @@ router.post("/repair", ...modify, async (req, res) => {
 
   if (dry) {
     try {
-      const preview = await previewRepair({ from, to, sources, formula, retryEmpty });
+      const preview = await previewRepair({ currency, from, to, sources, formula, retryEmpty });
       return res.json({ preview });
     } catch (err) {
       logError("[monitor] POST /repair?dry=true failed:", err);
@@ -279,7 +288,7 @@ router.post("/repair", ...modify, async (req, res) => {
     return res.status(409).json({ error: "a repair job is already in progress" });
   }
   try {
-    const { jobId } = startRepairJob({ from, to, sources, formula, retryEmpty });
+    const { jobId } = startRepairJob({ currency, from, to, sources, formula, retryEmpty });
     return res.json({ jobId });
   } catch (err) {
     logError("[monitor] POST /repair start failed:", err);
