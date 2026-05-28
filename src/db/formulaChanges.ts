@@ -9,6 +9,7 @@
  * See plan: candleserv-exchange-expansion §Phase 3.
  */
 import { query } from "./pool.js";
+import { recordAdminAction } from "./adminActions.js";
 import { candleEmitter } from "../lib/emitter.js";
 import { insertStreamEvent } from "./streamEvents.js";
 import { log, logWarn } from "../lib/log.js";
@@ -192,6 +193,16 @@ export async function insertFormulaChange(
   }
 
   log(`[formula] ${exchange} ${setOrUnset} by ${by}${reason ? ` (${reason})` : ""}`);
+
+  // Audit: every realized formula change is an admin action (operator edits and
+  // auto-suspend alike). Fire-and-forget — recordAdminAction never throws.
+  void recordAdminAction({
+    actor: by,
+    action: setOrUnset === "set" ? "formula.exclude" : "formula.include",
+    target: exchange,
+    detail: { reason: reason ?? null, statsAtExclusion: stats },
+  });
+
   return { inserted: true, row };
 }
 

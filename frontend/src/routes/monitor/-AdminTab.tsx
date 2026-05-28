@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   getApiKeys, createApiKey, revokeApiKey, toggleApiKey, repairApiKeyNonce,
   getConfig, saveConfig, getSourcesStatus,
-  getHealerStatus,
+  getHealerStatus, getAdminActions,
   type ApiKey,
 } from "@/lib/api";
 import RepairRangePanel from "./-RepairRangePanel";
@@ -254,15 +254,110 @@ function ConfigSection() {
   );
 }
 
+// ── audit log ────────────────────────────────────────────────────────────────
+
+function actionColor(action: string): string {
+  if (action.endsWith(".disable") || action.endsWith(".revoke") || action === "formula.exclude") return "text-yellow-400";
+  if (action.endsWith(".enable") || action === "formula.include" || action === "apikey.create") return "text-green-400";
+  if (action === "repair.start") return "text-red-400";
+  return "text-gray-300";
+}
+
+function AuditSection() {
+  // Pull the recent window once; filter client-side so the dropdown options
+  // stay stable regardless of the active filter.
+  const { data } = useQuery({
+    queryKey: ["admin-actions"],
+    queryFn: () => getAdminActions(200),
+    refetchInterval: 15_000,
+  });
+  const all = data?.actions ?? [];
+  const actionTypes = [...new Set(all.map((a) => a.action))].sort();
+  const [filter, setFilter] = useState("");
+  const rows = filter ? all.filter((a) => a.action === filter) : all;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-medium text-gray-300">Audit log</h2>
+        <select
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"
+        >
+          <option value="">all actions ({all.length})</option>
+          {actionTypes.map((a) => <option key={a} value={a}>{a}</option>)}
+        </select>
+      </div>
+      {rows.length ? (
+        <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
+          <table className="w-full text-xs">
+            <thead className="border-b border-gray-800">
+              <tr className="text-gray-500 text-left">
+                <th className="px-3 py-2 font-normal">Time</th>
+                <th className="px-3 py-2 font-normal">Actor</th>
+                <th className="px-3 py-2 font-normal">Action</th>
+                <th className="px-3 py-2 font-normal">Target</th>
+                <th className="px-3 py-2 font-normal">Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((a) => (
+                <tr key={a.id} className="border-b border-gray-800/50 align-top">
+                  <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">{new Date(a.createdAt).toLocaleString()}</td>
+                  <td className="px-3 py-1.5 text-gray-300 whitespace-nowrap">{a.actor}</td>
+                  <td className={`px-3 py-1.5 font-mono whitespace-nowrap ${actionColor(a.action)}`}>{a.action}</td>
+                  <td className="px-3 py-1.5 text-gray-400 font-mono whitespace-nowrap">{a.target ?? "—"}</td>
+                  <td className="px-3 py-1.5 text-gray-600 font-mono break-all">{a.detail ? JSON.stringify(a.detail) : ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="text-xs text-gray-600">No admin actions recorded yet.</p>
+      )}
+    </div>
+  );
+}
+
+// ── tab shell ────────────────────────────────────────────────────────────────
+
+const SUBTABS = ["API Keys", "Healer / Repair", "Config", "Audit"] as const;
+type SubTab = typeof SUBTABS[number];
+
 export default function AdminTab() {
   const { data: sources } = useQuery({ queryKey: ["sources", "status"], queryFn: getSourcesStatus });
   const sourceNames = Object.keys(sources?.sources ?? {});
+  const [sub, setSub] = useState<SubTab>("API Keys");
+
   return (
-    <div className="p-4 space-y-6 max-w-3xl">
-      <ApiKeysSection />
-      <HealerStatusCard />
-      <RepairRangePanel sourceNames={sourceNames} />
-      <ConfigSection />
+    <div className="p-4">
+      <div className="flex gap-1 border-b border-gray-800 mb-4">
+        {SUBTABS.map((t) => (
+          <button
+            key={t}
+            onClick={() => setSub(t)}
+            className={`px-3 py-2 text-xs border-b-2 transition-colors ${
+              sub === t ? "border-blue-500 text-white" : "border-transparent text-gray-500 hover:text-gray-300"
+            }`}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+
+      <div className="max-w-3xl">
+        {sub === "API Keys" && <ApiKeysSection />}
+        {sub === "Healer / Repair" && (
+          <div className="space-y-6">
+            <HealerStatusCard />
+            <RepairRangePanel sourceNames={sourceNames} />
+          </div>
+        )}
+        {sub === "Config" && <ConfigSection />}
+        {sub === "Audit"  && <AuditSection />}
+      </div>
     </div>
   );
 }

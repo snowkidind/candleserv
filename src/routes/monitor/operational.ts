@@ -5,6 +5,7 @@ import { getAllGaps, countPendingGaps } from "../../db/gaps.js";
 import { getStreamEvents } from "../../db/streamEvents.js";
 import { getAllSettings, getSetting, getSettingMeta, setSetting } from "../../db/appSettings.js";
 import { getPermissionsForUser } from "../../db/permissions.js";
+import { recordAdminAction, listAdminActions } from "../../db/adminActions.js";
 import { get24hSourceStats, getCandles, getCollectionLatencyStats, VALID_TFS } from "../../db/candles.js";
 import { runGapScan } from "../../lib/gapDetector.js";
 import {
@@ -37,6 +38,19 @@ import { logError } from "../../lib/log.js";
 const router = Router();
 const view   = [trackSession, authenticate, requirePerm("CAN_VIEW_CANDLESERV")];
 const modify = [trackSession, authenticate, requirePerm("CAN_MODIFY_CANDLESERV")];
+
+// Resolve the acting operator's identity for the audit log. One small lookup
+// per mutation (not a hot path); falls back to user:<id> / "unknown".
+async function actorOf(req: import("express").Request): Promise<string> {
+  const id = req.userId;
+  if (!id) return "unknown";
+  try {
+    const u = await findUserById(id);
+    return u?.email ?? `user:${id}`;
+  } catch {
+    return `user:${id}`;
+  }
+}
 
 /** GET /monitor/candles?tf=<tf>&endingAt=<iso>&limit=<n> — historical page for monitor chart */
 router.get("/candles", ...view, async (req, res) => {
@@ -289,6 +303,12 @@ router.post("/repair", ...modify, async (req, res) => {
   }
   try {
     const { jobId } = startRepairJob({ currency, from, to, sources, formula, retryEmpty });
+    void recordAdminAction({
+      actor: await actorOf(req),
+      action: "repair.start",
+      target: currency,
+      detail: { jobId, from: from.toISOString(), to: to.toISOString(), retryEmpty, formula: formula?.excludedSources },
+    });
     return res.json({ jobId });
   } catch (err) {
     logError("[monitor] POST /repair start failed:", err);
@@ -485,6 +505,13 @@ router.post("/config", ...modify, async (req, res) => {
   for (const [key, value] of Object.entries(body)) {
     await setSetting(key, String(value));
   }
+  // Audit the keys changed, not the values — some (redisUrl) can carry secrets.
+  void recordAdminAction({
+    actor: await actorOf(req),
+    action: "config.update",
+    target: null,
+    detail: { keys: Object.keys(body) },
+  });
   return res.json({ ok: true });
 });
 
@@ -499,12 +526,14 @@ router.post("/admin/keys", ...modify, async (req, res) => {
   const { label } = req.body as { label?: string };
   if (!label) return res.status(400).json({ error: "label required" });
   const { apiKey, secret } = await createApiKey(label);
+  void recordAdminAction({ actor: await actorOf(req), action: "apikey.create", target: label, detail: { apiKey } });
   return res.json({ apiKey, secret });
 });
 
 /** DELETE /monitor/admin/keys/:apiKey */
 router.delete("/admin/keys/:apiKey", ...modify, async (req, res) => {
   await revokeApiKey(req.params.apiKey);
+  void recordAdminAction({ actor: await actorOf(req), action: "apikey.revoke", target: req.params.apiKey });
   return res.json({ ok: true });
 });
 
@@ -513,6 +542,7 @@ router.patch("/admin/keys/:apiKey", ...modify, async (req, res) => {
   const { enabled } = req.body as { enabled?: boolean };
   if (enabled === undefined) return res.status(400).json({ error: "enabled required" });
   await setApiKeyEnabled(req.params.apiKey, enabled);
+  void recordAdminAction({ actor: await actorOf(req), action: enabled ? "apikey.enable" : "apikey.disable", target: req.params.apiKey });
   return res.json({ ok: true });
 });
 
@@ -533,7 +563,27 @@ router.post("/admin/keys/:apiKey/repair-nonce", ...modify, async (req, res) => {
  */
 router.post("/admin/keys/repair-nonces", ...modify, async (_req, res) => {
   const repaired = await findAndRepairBrokenNonces();
+  void recordAdminAction({ actor: await actorOf(_req), action: "apikey.repair-nonces", target: null, detail: { repaired: repaired.length } });
   return res.json({ ok: true, repaired });
+});
+
+/**
+ * GET /monitor/admin/actions — operator/system audit log (append-only history
+ * of admin mutations). Optional ?action= and ?actor= filters, ?limit= (max 1000).
+ */
+router.get("/admin/actions", ...view, async (req, res) => {
+  try {
+    const limit = req.query.limit ? Math.max(1, parseInt(req.query.limit as string, 10) || 200) : 200;
+    const action = typeof req.query.action === "string" ? req.query.action : undefined;
+    const actor  = typeof req.query.actor === "string" ? req.query.actor : undefined;
+    const actions = await listAdminActions({ limit, action, actor });
+    return res.json({
+      actions: actions.map((a) => ({ ...a, createdAt: a.createdAt.toISOString() })),
+    });
+  } catch (err) {
+    logError("[monitor] GET /admin/actions failed:", err);
+    return res.status(500).json({ error: String(err) });
+  }
 });
 
 // ── Feeds / currency control plane (multi-currency Phase 9.3) ──────────────────
@@ -619,6 +669,13 @@ router.put("/currencies/:code", ...modify, async (req, res) => {
       }
     }
 
+    void recordAdminAction({
+      actor: await actorOf(req),
+      action: "currency.update",
+      target: code,
+      detail: { ...body, ...(backfill ? { backfill } : {}) },
+    });
+
     const updated = await getCurrency(code);
     return res.json({ ok: true, currency: serializeCurrency(updated), ...(backfill ? { backfill } : {}) });
   } catch (err) {
@@ -638,6 +695,12 @@ router.put("/currencies/:code/feeds", ...modify, async (req, res) => {
     const existing = await getCurrency(code);
     if (!existing) return res.status(404).json({ error: `Unknown currency '${code}'` });
     await setFeedEnabled(code, body.source, body.enabled);
+    void recordAdminAction({
+      actor: await actorOf(req),
+      action: body.enabled ? "feed.enable" : "feed.disable",
+      target: `${code}/${body.source}`,
+      detail: { currency: code, source: body.source, enabled: body.enabled },
+    });
     return res.json({ ok: true, feeds: await getFeedMap(code) });
   } catch (err) {
     logError(`[monitor] PUT /currencies/${code}/feeds failed:`, err);
@@ -675,6 +738,12 @@ router.post("/currencies/:code/probe", ...modify, async (req, res) => {
         }
       }),
     );
+    void recordAdminAction({
+      actor: await actorOf(req),
+      action: "currency.probe",
+      target: code,
+      detail: { available: results.filter((r) => r.available).map((r) => r.source) },
+    });
     return res.json({ ok: true, code, probedAt: probeTs.toISOString(), results });
   } catch (err) {
     logError(`[monitor] POST /currencies/${code}/probe failed:`, err);

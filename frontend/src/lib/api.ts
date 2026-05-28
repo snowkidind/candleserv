@@ -267,6 +267,20 @@ export const resumeSource = (source: string) =>
 // Session keepalive
 export const ping = () => req<{ ok: boolean }>("/monitor/ping");
 
+// Admin audit log — append-only history of operator/system mutations.
+export interface AdminActionRow {
+  id: number;
+  actor: string;
+  action: string;
+  target: string | null;
+  detail: Record<string, unknown> | null;
+  createdAt: string;
+}
+export const getAdminActions = (limit = 200, action?: string) =>
+  req<{ actions: AdminActionRow[] }>(
+    `/monitor/admin/actions?limit=${limit}${action ? `&action=${encodeURIComponent(action)}` : ""}`,
+  );
+
 // Current user — permission map + demo flag, for tab gating (B5).
 export interface Me {
   perms: Record<string, boolean>;

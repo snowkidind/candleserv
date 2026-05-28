@@ -221,6 +221,21 @@ CREATE TABLE IF NOT EXISTS formula_changes (
 );
 CREATE INDEX IF NOT EXISTS formula_changes_exchange_ts ON formula_changes ("exchange", "createdAt" DESC);
 
+-- General operator/system audit log. Unlike formula_changes (which is the live
+-- source of truth for the global formula), this is purely append-only history:
+-- every admin mutation (feed toggle, currency enable, formula change, repair,
+-- config edit, API key lifecycle) writes a row here for the operator audit view.
+CREATE TABLE IF NOT EXISTS admin_actions (
+  "id"        serial       PRIMARY KEY,
+  "actor"     varchar      NOT NULL,   -- user email / "manual:<email>" / "auto-suspend"
+  "action"    varchar      NOT NULL,   -- e.g. 'feed.disable', 'currency.update', 'formula.exclude'
+  "target"    varchar,                 -- e.g. 'TON/bitfinex', 'ETH', 'binance'
+  "detail"    jsonb,                   -- arbitrary context for the action
+  "createdAt" timestamptz  NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS admin_actions_ts ON admin_actions ("createdAt" DESC);
+CREATE INDEX IF NOT EXISTS admin_actions_action_ts ON admin_actions ("action", "createdAt" DESC);
+
 CREATE TABLE IF NOT EXISTS service_events (
   "id"              serial       PRIMARY KEY,
   "type"            varchar      NOT NULL,
