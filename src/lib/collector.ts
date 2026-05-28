@@ -202,7 +202,16 @@ export async function collect(minuteTs: Date): Promise<boolean> {
 
     // Per-venue health for this minute: a venue is "error" if any fetch it was
     // issued (peg or any currency's candle) failed, "on" otherwise.
-    const venueError = new Map<string, string>();
+    // Per-venue failure descriptors for this minute, each tagged with the
+    // (currency, symbol) — or "peg" — that failed, so a recorded fetch:<venue>
+    // error says *what* was queried (e.g. "TON (TONUSDT): No candle returned")
+    // instead of a context-free "No candle returned".
+    const venueErrors = new Map<string, string[]>();
+    const pushVenueError = (source: string, msg: string) => {
+      const list = venueErrors.get(source) ?? [];
+      list.push(msg);
+      venueErrors.set(source, list);
+    };
     const venueTouched = new Set<string>();
 
     // ── Peg wave: one fetch per peg-capable venue, shared across currencies. ──
@@ -218,7 +227,7 @@ export async function collect(minuteTs: Date): Promise<boolean> {
       if (r.status === "fulfilled" && r.value != null) {
         pegMap.set(s, { rate: r.value, pegSourcePair: ADAPTER_BY_NAME[s].normalize.pegSourcePair! });
       } else if (r.status === "rejected") {
-        venueError.set(s, String(r.reason));
+        pushVenueError(s, `peg ${ADAPTER_BY_NAME[s].normalize.pegSourcePair ?? ""}: ${String(r.reason)}`);
       }
     }
 
@@ -245,7 +254,7 @@ export async function collect(minuteTs: Date): Promise<boolean> {
         fetchedSources.add(k.source);
       } else {
         arr.push({ source: k.source, candle: null, error: String(r.reason) });
-        if (!venueError.has(k.source)) venueError.set(k.source, String(r.reason));
+        pushVenueError(k.source, `${k.currency} (${k.symbol}): ${String(r.reason)}`);
       }
     }
 
@@ -257,12 +266,12 @@ export async function collect(minuteTs: Date): Promise<boolean> {
 
     // ── Per-venue operational state (venue-global). ──
     for (const source of venueTouched) {
-      const err = venueError.get(source);
-      if (err) {
+      const errs = venueErrors.get(source);
+      if (errs && errs.length) {
         recordFailure(source);
         await checkAutoSuspend(source);
         recordLiveFetchState(source, "error");
-        await recordError("collector", `fetch:${source}`, err);
+        await recordError("collector", `fetch:${source}`, errs.join("; "));
       } else {
         lastFetchAt[source] = new Date();
         recordLiveFetchState(source, "on");

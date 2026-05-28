@@ -126,7 +126,7 @@ export async function healRange(currency: string, from: Date, to: Date, overwrit
           if (!prev || tileStart < prev) outOfHistoryEarliest[name] = tileStart;
           continue;
         }
-        logError(`[healer] healRange: ${name} tile failed`, res.reason);
+        logError(`[healer] healRange: ${currency}/${name} tile failed`, res.reason);
         continue;
       }
       for (const { timestamp, candle } of res.value) {
@@ -141,7 +141,7 @@ export async function healRange(currency: string, from: Date, to: Date, overwrit
 
   // One tidy summary line per source for venues that ran out of history.
   for (const [source, earliest] of Object.entries(outOfHistoryEarliest)) {
-    log(`[healer] healRange: ${source} has no data before ${earliest.toISOString().slice(0, 16)} (skipped)`);
+    log(`[healer] healRange: ${currency}/${source} has no data before ${earliest.toISOString().slice(0, 16)} (skipped)`);
   }
 
   // overwrite=true path: re-heal low confidence + manual gap heal. Uses
