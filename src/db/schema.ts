@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { query } from "./pool.js";
 import { log } from "../lib/log.js";
+import { SYMBOL_MAP } from "../adapters/symbolMap.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
@@ -11,6 +12,7 @@ const FUNC_SQL_PATH = path.resolve(__dirname, "..", "..", "schema", "func.sql");
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS candles_1m (
+  "currency"             varchar      NOT NULL DEFAULT 'BTC',
   "timestamp"            timestamptz  NOT NULL,
   "open"                 numeric      NOT NULL,
   "high"                 numeric      NOT NULL,
@@ -24,11 +26,18 @@ CREATE TABLE IF NOT EXISTS candles_1m (
   "confidence"           numeric      NOT NULL DEFAULT 0,
   "createdAt"            timestamptz  NOT NULL DEFAULT NOW(),
   "updatedAt"            timestamptz  NOT NULL DEFAULT NOW(),
-  PRIMARY KEY ("timestamp")
+  PRIMARY KEY ("currency", "timestamp")
 );
-CREATE INDEX IF NOT EXISTS candles_1m_timestamp_desc ON candles_1m ("timestamp" DESC);
+-- Idempotent migration for pre-multi-currency installs (Phase 12). On a fresh
+-- DB the CREATE above already has the column + composite PK; on the existing
+-- 7.42M-row BTC table this ALTER adds the column, and the PK rebuild
+-- timestamp → (currency, timestamp) is a separate heavy Phase-12 step.
+ALTER TABLE candles_1m ADD COLUMN IF NOT EXISTS "currency" varchar NOT NULL DEFAULT 'BTC';
+DROP INDEX IF EXISTS candles_1m_timestamp_desc;
+CREATE INDEX IF NOT EXISTS candles_1m_curr_ts_desc ON candles_1m ("currency", "timestamp" DESC);
 
 CREATE TABLE IF NOT EXISTS candles_1m_sources (
+  "currency"       varchar      NOT NULL DEFAULT 'BTC',
   "timestamp"      timestamptz  NOT NULL,
   "source"         varchar      NOT NULL,
   "open"           numeric      NOT NULL,
@@ -41,20 +50,29 @@ CREATE TABLE IF NOT EXISTS candles_1m_sources (
   "usedInFormula"  boolean,
   "createdAt"      timestamptz  NOT NULL DEFAULT NOW(),
   "updatedAt"      timestamptz  NOT NULL DEFAULT NOW(),
-  PRIMARY KEY ("timestamp", "source")
+  PRIMARY KEY ("currency", "timestamp", "source")
 );
-CREATE INDEX IF NOT EXISTS candles_1m_sources_ts_desc ON candles_1m_sources ("timestamp" DESC);
+DROP INDEX IF EXISTS candles_1m_sources_ts_desc;
+CREATE INDEX IF NOT EXISTS candles_1m_sources_curr_ts_desc ON candles_1m_sources ("currency", "timestamp" DESC);
 
 -- Idempotent migration for installs that pre-date the usedInFormula/createdAt/updatedAt columns.
 ALTER TABLE candles_1m_sources ADD COLUMN IF NOT EXISTS "usedInFormula" boolean;
 ALTER TABLE candles_1m_sources ADD COLUMN IF NOT EXISTS "createdAt"     timestamptz NOT NULL DEFAULT NOW();
 ALTER TABLE candles_1m_sources ADD COLUMN IF NOT EXISTS "updatedAt"     timestamptz NOT NULL DEFAULT NOW();
+-- Multi-currency Phase 1 (Phase 12 migration). PK rebuild → (currency, timestamp, source) is a separate heavy step.
+ALTER TABLE candles_1m_sources ADD COLUMN IF NOT EXISTS "currency"      varchar NOT NULL DEFAULT 'BTC';
 
--- Per-venue local USDT/USD rate paired with each USDT BTC candle. See plan:
--- candleserv-stablecoin-aware-index §Phase 1. The FK enforces the bundle
--- invariant: a stable rate row cannot exist without its corresponding BTC
--- candle row for the same (minute, venue). ON DELETE CASCADE handles symmetric
--- cleanup (BTC row pruned → stable row goes with it).
+-- Per-venue local USDT/USD rate paired with each candle. The peg is per-venue
+-- and asset-independent, so this table stays currency-agnostic: one rate row per
+-- (minute, venue) is shared across every currency fetched from that venue
+-- (multi-currency D-STABLE-FK).
+--
+-- The former FK to candles_1m_sources ("timestamp","source") is DROPPED: once
+-- that table's PK gains "currency", ("timestamp","source") is no longer a unique
+-- target, so Postgres cannot keep the FK. The soft invariant — a stable-rate row
+-- implies SOME candle row existed for that (minute, venue) — is now preserved by
+-- collector ordering, not by the FK. The ON DELETE CASCADE it provided is
+-- replaced by an explicit stable-rates prune (Phase 10.6).
 CREATE TABLE IF NOT EXISTS stable_rates_1m_sources (
   "timestamp"      timestamptz  NOT NULL,
   "source"         varchar      NOT NULL,
@@ -64,11 +82,11 @@ CREATE TABLE IF NOT EXISTS stable_rates_1m_sources (
   "rejectedReason" varchar,
   "createdAt"      timestamptz  NOT NULL DEFAULT NOW(),
   "updatedAt"      timestamptz  NOT NULL DEFAULT NOW(),
-  PRIMARY KEY ("timestamp", "source"),
-  FOREIGN KEY ("timestamp", "source")
-    REFERENCES candles_1m_sources ("timestamp", "source")
-    ON DELETE CASCADE
+  PRIMARY KEY ("timestamp", "source")
 );
+-- Idempotent migration: drop the old FK on pre-multi-currency installs (default
+-- constraint name). Phase 12 handles any non-default name explicitly.
+ALTER TABLE stable_rates_1m_sources DROP CONSTRAINT IF EXISTS stable_rates_1m_sources_timestamp_source_fkey;
 CREATE INDEX IF NOT EXISTS stable_rates_1m_sources_ts_desc
   ON stable_rates_1m_sources ("timestamp" DESC);
 
@@ -131,17 +149,52 @@ CREATE TABLE IF NOT EXISTS api_keys (
 
 CREATE TABLE IF NOT EXISTS gaps (
   "id"               serial       PRIMARY KEY,
-  "timestamp"        timestamptz  NOT NULL UNIQUE,
+  "currency"         varchar      NOT NULL DEFAULT 'BTC',
+  "timestamp"        timestamptz  NOT NULL,
   "durationMinutes"  smallint     NOT NULL DEFAULT 1,
   "state"            varchar      NOT NULL DEFAULT 'detected',
   "sourcesAvailable" integer      NOT NULL DEFAULT 0,
   "alertSent"        boolean      NOT NULL DEFAULT false,
   "detectedAt"       timestamptz  NOT NULL DEFAULT NOW(),
   "healedAt"         timestamptz,
-  "updatedAt"        timestamptz  NOT NULL DEFAULT NOW()
+  "updatedAt"        timestamptz  NOT NULL DEFAULT NOW(),
+  UNIQUE ("currency", "timestamp")
 );
-CREATE INDEX IF NOT EXISTS gaps_state_ts ON gaps ("state", "timestamp" DESC);
-CREATE INDEX IF NOT EXISTS gaps_ts ON gaps ("timestamp" DESC);
+-- Idempotent migration (Phase 12): add currency. The old single-column unique on
+-- "timestamp" (gaps_timestamp_key) is superseded by the composite unique above;
+-- Phase 12 drops the old constraint by name.
+ALTER TABLE gaps ADD COLUMN IF NOT EXISTS "currency" varchar NOT NULL DEFAULT 'BTC';
+DROP INDEX IF EXISTS gaps_state_ts;
+DROP INDEX IF EXISTS gaps_ts;
+CREATE INDEX IF NOT EXISTS gaps_curr_state_ts ON gaps ("currency", "state", "timestamp" DESC);
+CREATE INDEX IF NOT EXISTS gaps_curr_ts ON gaps ("currency", "timestamp" DESC);
+
+-- Currency control plane (multi-currency Phase 1). "currencies" = one row per
+-- supported asset (chain on/off + per-token premium toggle + temporal floor).
+CREATE TABLE IF NOT EXISTS currencies (
+  "code"           varchar      PRIMARY KEY,             -- 'BTC','ETH','TON','TRX','SOL','BNB'
+  "displayName"    varchar      NOT NULL,
+  "enabled"        boolean      NOT NULL DEFAULT false,  -- chain on/off (Feeds tab)
+  "premiumEnabled" boolean      NOT NULL DEFAULT true,   -- D2 per-token premium-offset toggle
+  "minSources"     smallint,                             -- nullable → fall back to app_settings.minSources
+  "inceptionTs"    timestamptz,                          -- B3 temporal floor; NULL → consumers COALESCE to now-90d, never epoch
+  "createdAt"      timestamptz  NOT NULL DEFAULT NOW(),
+  "updatedAt"      timestamptz  NOT NULL DEFAULT NOW()
+);
+
+-- "currency_sources" = the Feeds-tab per-token formula + venue symbol map.
+-- Effective live fetch set = rows where (available AND enabled), minus venues in
+-- the global formula_changes.excludedSources kill switch.
+CREATE TABLE IF NOT EXISTS currency_sources (
+  "currency"  varchar      NOT NULL REFERENCES currencies("code") ON DELETE CASCADE,
+  "source"    varchar      NOT NULL,                 -- adapter name (registry.ts SOURCE_NAMES)
+  "symbol"    varchar      NOT NULL,                 -- venue symbol, e.g. 'ETHUSDT','XBTUSD'
+  "available" boolean      NOT NULL DEFAULT false,   -- probed: does this venue list this pair (host-dependent)
+  "enabled"   boolean      NOT NULL DEFAULT false,   -- operator: sync this (currency, source)
+  "createdAt" timestamptz  NOT NULL DEFAULT NOW(),
+  "updatedAt" timestamptz  NOT NULL DEFAULT NOW(),
+  PRIMARY KEY ("currency", "source")
+);
 
 CREATE TABLE IF NOT EXISTS stream_events (
   "id"        serial       PRIMARY KEY,
@@ -187,6 +240,20 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   redisUrl: "",
 };
 
+// Multi-currency Phase 1.9 seed. BTC is the working baseline (enabled, its feeds
+// enabled); majors are seeded disabled until an operator turns them on from the
+// Feeds tab. currency_sources.available stays false everywhere until the Phase-2
+// per-host availability probe runs. inceptionTs left NULL (consumers COALESCE to
+// now-90d); the real candleserv migration seeds BTC inceptionTs = 2012-04-18.
+const CURRENCY_META: Record<string, { displayName: string }> = {
+  BTC: { displayName: "Bitcoin" },
+  ETH: { displayName: "Ethereum" },
+  SOL: { displayName: "Solana" },
+  TRX: { displayName: "TRON" },
+  TON: { displayName: "Toncoin" },
+  BNB: { displayName: "BNB" },
+};
+
 export async function createSchema(): Promise<void> {
   log("[schema] creating tables...");
   await query(DDL);
@@ -218,4 +285,29 @@ export async function seedSettings(): Promise<void> {
     );
   }
   log("[schema] app_settings seeded");
+  await seedCurrencies();
+}
+
+export async function seedCurrencies(): Promise<void> {
+  for (const [code, sources] of Object.entries(SYMBOL_MAP)) {
+    const meta = CURRENCY_META[code];
+    if (!meta) continue;
+    const enabled = code === "BTC"; // BTC is the working baseline; majors off until probed/enabled
+    await query(
+      `INSERT INTO currencies ("code", "displayName", "enabled", "premiumEnabled")
+       VALUES ($1, $2, $3, true)
+       ON CONFLICT ("code") DO NOTHING`,
+      [code, meta.displayName, enabled]
+    );
+
+    for (const [source, symbol] of Object.entries(sources)) {
+      await query(
+        `INSERT INTO currency_sources ("currency", "source", "symbol", "available", "enabled")
+         VALUES ($1, $2, $3, false, $4)
+         ON CONFLICT ("currency", "source") DO NOTHING`,
+        [code, source, symbol, enabled]
+      );
+    }
+  }
+  log("[schema] currencies + currency_sources seeded");
 }
