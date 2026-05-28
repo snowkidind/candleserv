@@ -6,6 +6,7 @@ import { getStreamEvents } from "../../db/streamEvents.js";
 import { getAllSettings, setSetting } from "../../db/appSettings.js";
 import { get24hSourceStats, getCandles, getCollectionLatencyStats, VALID_TFS } from "../../db/candles.js";
 import { runGapScan } from "../../lib/gapDetector.js";
+import { getEnabledCurrencies } from "../../db/currencies.js";
 import { getSourceStatus, resumeSource } from "../../lib/collector.js";
 import {
   applyFormulaDelta,
@@ -75,7 +76,11 @@ router.get("/gaps", ...view, async (_req, res) => {
 
 /** POST /monitor/heal — trigger a manual gap scan */
 router.post("/heal", ...modify, async (_req, res) => {
-  runGapScan(7).catch((err) => logError("[monitor] POST /heal runGapScan failed:", err));
+  void (async () => {
+    for (const currency of await getEnabledCurrencies()) {
+      await runGapScan(7, currency);
+    }
+  })().catch((err) => logError("[monitor] POST /heal runGapScan failed:", err));
   return res.json({ ok: true, message: "Heal scan started" });
 });
 

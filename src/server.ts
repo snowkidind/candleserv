@@ -5,6 +5,7 @@ dotenv.config();
 import { createApp } from "./app.js";
 import { startCollector } from "./lib/collector.js";
 import { runBackfill } from "./lib/healer.js";
+import { getEnabledCurrencies } from "./db/currencies.js";
 import { startGapDetector } from "./lib/gapDetector.js";
 import { pruneOldSessions } from "./db/sessions.js";
 import { pruneSourceCandles } from "./db/candles.js";
@@ -100,7 +101,14 @@ async function main(): Promise<void> {
     // Background backfill + gap detection: delayed 30s to avoid hammering exchanges
     // immediately after a power failure when all services restart simultaneously.
     setTimeout(() => {
-      runBackfill().catch((err) => logError("[server] backfill error:", err));
+      // Backfill each enabled currency. The global in-flight guard serializes
+      // them (one at a time → kinder to rate limits); each is gated by its own
+      // backfillComplete:<code> latch, so already-complete currencies no-op.
+      void (async () => {
+        for (const currency of await getEnabledCurrencies()) {
+          await runBackfill(currency);
+        }
+      })().catch((err) => logError("[server] backfill error:", err));
       startGapDetector().catch((err) => logError("[server] gap detector error:", err));
     }, 30_000);
 

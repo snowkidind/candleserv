@@ -139,7 +139,7 @@ async function main(): Promise<void> {
   console.log("\nregistering gap rows...");
   const gapIdsByMinute = new Map<number, number>();
   for (const ts of missing) {
-    const row = await upsertGap(ts);
+    const row = await upsertGap("BTC", ts);
     gapIdsByMinute.set(ts.getTime(), row.id);
     await setGapState(row.id, "healing");
   }
@@ -153,7 +153,7 @@ async function main(): Promise<void> {
       `\n[${i + 1}/${ranges.length}] healing ${r.from.toISOString()} → ${r.to.toISOString()} (${r.minutes.length}m)`
     );
 
-    const written = await healRange(r.from, r.to, true);
+    const written = await healRange("BTC", r.from, r.to, true);
 
     let healed = 0;
     let unresolvable = 0;
