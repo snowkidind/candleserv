@@ -6,7 +6,13 @@ import { getStreamEvents } from "../../db/streamEvents.js";
 import { getAllSettings, setSetting } from "../../db/appSettings.js";
 import { get24hSourceStats, getCandles, getCollectionLatencyStats, VALID_TFS } from "../../db/candles.js";
 import { runGapScan } from "../../lib/gapDetector.js";
-import { getEnabledCurrencies } from "../../db/currencies.js";
+import {
+  getEnabledCurrencies, listCurrencies, getCurrency,
+  setCurrencyEnabled, setPremiumEnabled, setMinSources, setInceptionTs,
+} from "../../db/currencies.js";
+import { getFeedMap, setFeedEnabled, setAvailability } from "../../db/currencyFeeds.js";
+import { onboardCurrency } from "../../lib/healer.js";
+import { ADAPTER_BY_NAME } from "../../adapters/registry.js";
 import { getSourceStatus, resumeSource } from "../../lib/collector.js";
 import {
   applyFormulaDelta,
@@ -504,6 +510,143 @@ router.post("/admin/keys/:apiKey/repair-nonce", ...modify, async (req, res) => {
 router.post("/admin/keys/repair-nonces", ...modify, async (_req, res) => {
   const repaired = await findAndRepairBrokenNonces();
   return res.json({ ok: true, repaired });
+});
+
+// ── Feeds / currency control plane (multi-currency Phase 9.3) ──────────────────
+
+function serializeCurrency(c: Awaited<ReturnType<typeof getCurrency>>) {
+  if (!c) return null;
+  return {
+    ...c,
+    inceptionTs: c.inceptionTs ? c.inceptionTs.toISOString() : null,
+    createdAt: c.createdAt.toISOString(),
+    updatedAt: c.updatedAt.toISOString(),
+  };
+}
+
+/** GET /monitor/currencies — list currencies + per-currency feed map. */
+router.get("/currencies", ...view, async (_req, res) => {
+  try {
+    const currencies = await listCurrencies();
+    const withFeeds = await Promise.all(
+      currencies.map(async (c) => ({
+        ...serializeCurrency(c)!,
+        feeds: await getFeedMap(c.code),
+      })),
+    );
+    return res.json({ currencies: withFeeds });
+  } catch (err) {
+    logError("[monitor] GET /currencies failed:", err);
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+/**
+ * PUT /monitor/currencies/:code — update enabled / premiumEnabled / minSources /
+ * inceptionTs. A false→true `enabled` transition onboards the currency (clears
+ * the per-currency latch + kicks runBackfill behind the global in-flight guard);
+ * the response reports whether that backfill `started` or was `deferred` so the
+ * UI can toast it without locking the toggle.
+ */
+router.put("/currencies/:code", ...modify, async (req, res) => {
+  const code = req.params.code.toUpperCase();
+  try {
+    const existing = await getCurrency(code);
+    if (!existing) return res.status(404).json({ error: `Unknown currency '${code}'` });
+
+    const body = req.body as {
+      enabled?: boolean; premiumEnabled?: boolean;
+      minSources?: number | null; inceptionTs?: string | null;
+    };
+
+    if (typeof body.premiumEnabled === "boolean") await setPremiumEnabled(code, body.premiumEnabled);
+
+    if (body.minSources !== undefined) {
+      if (body.minSources !== null && (!Number.isInteger(body.minSources) || body.minSources < 1)) {
+        return res.status(400).json({ error: "minSources must be a positive integer or null" });
+      }
+      await setMinSources(code, body.minSources);
+    }
+
+    if (body.inceptionTs !== undefined) {
+      if (body.inceptionTs === null) {
+        await setInceptionTs(code, null);
+      } else {
+        const d = new Date(body.inceptionTs);
+        if (isNaN(d.getTime())) return res.status(400).json({ error: "inceptionTs is not a valid timestamp" });
+        await setInceptionTs(code, d);
+      }
+    }
+
+    let backfill: "started" | "deferred" | undefined;
+    if (typeof body.enabled === "boolean") {
+      await setCurrencyEnabled(code, body.enabled);
+      if (body.enabled && !existing.enabled) {
+        backfill = await onboardCurrency(code);   // canonical onboarding kick (B1)
+      }
+    }
+
+    const updated = await getCurrency(code);
+    return res.json({ ok: true, currency: serializeCurrency(updated), ...(backfill ? { backfill } : {}) });
+  } catch (err) {
+    logError(`[monitor] PUT /currencies/${code} failed:`, err);
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+/** PUT /monitor/currencies/:code/feeds — toggle one (currency, source) feed. */
+router.put("/currencies/:code/feeds", ...modify, async (req, res) => {
+  const code = req.params.code.toUpperCase();
+  const body = req.body as { source?: string; enabled?: boolean };
+  if (!body.source || typeof body.enabled !== "boolean") {
+    return res.status(400).json({ error: "body must be { source: string, enabled: boolean }" });
+  }
+  try {
+    const existing = await getCurrency(code);
+    if (!existing) return res.status(404).json({ error: `Unknown currency '${code}'` });
+    await setFeedEnabled(code, body.source, body.enabled);
+    return res.json({ ok: true, feeds: await getFeedMap(code) });
+  } catch (err) {
+    logError(`[monitor] PUT /currencies/${code}/feeds failed:`, err);
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+/**
+ * POST /monitor/currencies/:code/probe — re-probe per-source availability for one
+ * currency: fetch one recently-closed minute from each mapped venue and set
+ * currency_sources.available accordingly. Availability is host-dependent
+ * (D-OKX: okx is geo-blocked from some hosts), so it reflects reality for the
+ * host this runs on. The deep inception fetchRange walk-back is the separate
+ * Phase 2.4 probe and is intentionally not run here.
+ */
+router.post("/currencies/:code/probe", ...modify, async (req, res) => {
+  const code = req.params.code.toUpperCase();
+  try {
+    const existing = await getCurrency(code);
+    if (!existing) return res.status(404).json({ error: `Unknown currency '${code}'` });
+
+    const probeTs = new Date(Math.floor(Date.now() / 60000) * 60000 - 3 * 60000);
+    const feeds = await getFeedMap(code);
+    const results = await Promise.all(
+      Object.entries(feeds).map(async ([source, f]) => {
+        const adapter = ADAPTER_BY_NAME[source];
+        if (!adapter) return { source, available: false, error: "no adapter" };
+        try {
+          await adapter.fetchOne(f.symbol, probeTs);
+          await setAvailability(code, source, true);
+          return { source, available: true };
+        } catch (err) {
+          await setAvailability(code, source, false);
+          return { source, available: false, error: String(err) };
+        }
+      }),
+    );
+    return res.json({ ok: true, code, probedAt: probeTs.toISOString(), results });
+  } catch (err) {
+    logError(`[monitor] POST /currencies/${code}/probe failed:`, err);
+    return res.status(500).json({ error: String(err) });
+  }
 });
 
 export default router;
