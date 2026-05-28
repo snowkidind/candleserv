@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   getCurrencies, updateCurrency, setCurrencyFeed, probeCurrency, getHealerStatus,
 } from "@/lib/api";
@@ -13,6 +13,9 @@ export default function FeedsTab() {
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [backfilling, setBackfilling] = useState<Set<string>>(new Set());
+  // Signature of the active-backfill set; when it changes (a backfill starts or
+  // finishes) we re-pull currencies so the latch value + updatedAt stay fresh.
+  const prevBfSig = useRef("");
 
   async function reload() {
     const r = await getCurrencies();
@@ -37,6 +40,13 @@ export default function FeedsTab() {
           }
         }
         setBackfilling(s);
+        // On any start/finish transition, refresh currencies so the latch flips
+        // (and its updatedAt) show up without a manual action.
+        const sig = [...s].sort().join(",");
+        if (sig !== prevBfSig.current) {
+          prevBfSig.current = sig;
+          reload().catch(() => {});
+        }
       } catch { /* transient */ }
     }
     tick();
@@ -173,6 +183,23 @@ export default function FeedsTab() {
             {cur.inceptionTs
               ? new Date(cur.inceptionTs).toISOString().slice(0, 10)
               : "not probed (gap/backfill floor = now − 90d)"}
+          </div>
+
+          {/* Backfill sync status — derived from the live healer activity +
+              the per-currency backfillComplete:<code> latch. */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+            <span className="text-gray-400">Sync:</span>
+            <span className={
+              backfilling.has(cur.code) ? "text-amber-300"
+              : cur.backfill.complete ? "text-green-400"
+              : "text-gray-400"
+            }>
+              {backfilling.has(cur.code) ? "backfilling…" : cur.backfill.complete ? "synced" : "pending"}
+            </span>
+            <span className="text-gray-600 font-mono">backfillComplete:{cur.code} = {String(cur.backfill.complete)}</span>
+            {cur.backfill.updatedAt && (
+              <span className="text-gray-600">· last updated {new Date(cur.backfill.updatedAt).toLocaleString()}</span>
+            )}
           </div>
 
           <div>

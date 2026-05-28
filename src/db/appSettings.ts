@@ -21,6 +21,20 @@ export async function getSetting(key: string): Promise<string | null> {
   }
 }
 
+// Cache-free read of a setting's value + last-updated time. Used where the UI
+// needs freshness + the updatedAt timestamp (e.g. the per-currency backfill
+// latch on the Feeds tab); the 1h getSetting cache would mask a recent flip.
+export async function getSettingMeta(key: string): Promise<{ value: string; updatedAt: Date } | null> {
+  try {
+    const res = await query(`SELECT value, "updatedAt" FROM app_settings WHERE key = $1`, [key]);
+    if (!res.rows.length) return null;
+    return { value: res.rows[0].value as string, updatedAt: res.rows[0].updatedAt as Date };
+  } catch (err) {
+    logError("[appSettings] getSettingMeta failed:", err);
+    return null;
+  }
+}
+
 export async function getSettingInt(key: string, fallback: number): Promise<number> {
   const val = await getSetting(key);
   if (val === null) return fallback;

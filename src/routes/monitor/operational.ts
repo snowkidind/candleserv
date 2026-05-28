@@ -3,7 +3,7 @@ import { trackSession, authenticate, requirePerm } from "../../middleware/sessio
 import { query } from "../../db/pool.js";
 import { getAllGaps, countPendingGaps } from "../../db/gaps.js";
 import { getStreamEvents } from "../../db/streamEvents.js";
-import { getAllSettings, getSetting, setSetting } from "../../db/appSettings.js";
+import { getAllSettings, getSetting, getSettingMeta, setSetting } from "../../db/appSettings.js";
 import { getPermissionsForUser } from "../../db/permissions.js";
 import { get24hSourceStats, getCandles, getCollectionLatencyStats, VALID_TFS } from "../../db/candles.js";
 import { runGapScan } from "../../lib/gapDetector.js";
@@ -544,10 +544,19 @@ router.get("/currencies", ...view, async (_req, res) => {
   try {
     const currencies = await listCurrencies();
     const withFeeds = await Promise.all(
-      currencies.map(async (c) => ({
-        ...serializeCurrency(c)!,
-        feeds: await getFeedMap(c.code),
-      })),
+      currencies.map(async (c) => {
+        // Per-currency backfill latch (app_settings backfillComplete:<code>) +
+        // when it last flipped. null key (never onboarded) reads as not-complete.
+        const latch = await getSettingMeta(`backfillComplete:${c.code}`);
+        return {
+          ...serializeCurrency(c)!,
+          feeds: await getFeedMap(c.code),
+          backfill: {
+            complete: latch?.value === "true",
+            updatedAt: latch?.updatedAt ? latch.updatedAt.toISOString() : null,
+          },
+        };
+      }),
     );
     return res.json({ currencies: withFeeds });
   } catch (err) {

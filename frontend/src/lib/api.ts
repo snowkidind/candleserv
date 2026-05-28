@@ -288,6 +288,8 @@ export interface CurrencyInfo {
   createdAt: string;
   updatedAt: string;
   feeds: Record<string, CurrencyFeed>;
+  // Per-currency backfill latch (app_settings backfillComplete:<code>).
+  backfill: { complete: boolean; updatedAt: string | null };
 }
 export const getCurrencies = () =>
   req<{ currencies: CurrencyInfo[] }>("/monitor/currencies");
