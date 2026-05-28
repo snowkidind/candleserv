@@ -261,9 +261,13 @@ export interface RepairPreview {
 export async function previewRepair(req: StartRepairJobRequest): Promise<RepairPreview> {
   const { from, to, sources, formula, retryEmpty } = req;
 
+  // Repair is BTC-only until currency-awareness lands, so every count here is
+  // pinned to currency='BTC' — otherwise the preview is inflated by the other
+  // currencies' rows and the ensure/recompose phases (which only touch BTC)
+  // wouldn't match the numbers shown.
   // 1. How many candles_1m rows live in the window?
   const compRes = await query(
-    `SELECT COUNT(*) AS n FROM candles_1m WHERE timestamp >= $1 AND timestamp < $2`,
+    `SELECT COUNT(*) AS n FROM candles_1m WHERE currency = 'BTC' AND timestamp >= $1 AND timestamp < $2`,
     [from, to],
   );
   const compositeRowsInWindow = Number(compRes.rows[0]?.n ?? 0);
@@ -286,7 +290,8 @@ export async function previewRepair(req: StartRepairJobRequest): Promise<RepairP
 
   const sentinelsRes = await query(
     `SELECT COUNT(*) AS n FROM candles_1m_sources
-      WHERE timestamp >= $1 AND timestamp < $2
+      WHERE "currency" = 'BTC'
+        AND timestamp >= $1 AND timestamp < $2
         AND "rejectedReason" = 'no_data'`,
     [from, to],
   );
@@ -300,7 +305,8 @@ export async function previewRepair(req: StartRepairJobRequest): Promise<RepairP
     : ``;
   const perSourceRes = await query(
     `SELECT source, COUNT(*) AS n FROM candles_1m_sources
-      WHERE timestamp >= $1 AND timestamp < $2 ${existingClause}
+      WHERE "currency" = 'BTC'
+        AND timestamp >= $1 AND timestamp < $2 ${existingClause}
       GROUP BY source`,
     [from, to],
   );

@@ -90,7 +90,8 @@ export async function ensureSourceCoverage(
   if (opts?.retryEmpty) {
     const del = await query(
       `DELETE FROM candles_1m_sources
-        WHERE "timestamp" >= $1 AND "timestamp" < $2
+        WHERE "currency" = 'BTC'
+          AND "timestamp" >= $1 AND "timestamp" < $2
           AND "rejectedReason" = 'no_data'`,
       [from, to],
     );
