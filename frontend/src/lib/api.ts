@@ -357,6 +357,36 @@ export const probeCurrency = (code: string) =>
     { method: "POST" },
   );
 
+// Runtime / ops panel (authed twins of the localhost CLI /internal API).
+export interface RuntimeSnapshot {
+  uptimeSeconds: number;
+  demoMode: boolean;
+  memory: { rss: number; heapUsed: number; heapTotal: number; external: number };
+  demo: { tokenBudgetEntries: number; readRateLimitIps: number; pageRateLimitIps: number };
+  live: { sseClients: number; lastCloseEntries: number; backfillRunning: boolean };
+  sessions: { total: number; authenticated: number };
+  redis: { available: boolean };
+}
+export const getRuntime = () => req<RuntimeSnapshot>("/monitor/runtime");
+
+export interface ApiCountRow { currency: string; source: string; type: string; count: number }
+export interface ApiWindow {
+  total: number;
+  byCurrency: Record<string, number>;
+  byType: Record<string, number>;
+  rows: ApiCountRow[];
+}
+export interface ApiStats {
+  generatedAt: string;
+  windows: Record<"1h" | "4h" | "8h" | "24h", ApiWindow>;
+}
+export const getApiStats = () => req<ApiStats>("/monitor/api-stats");
+
+export const flushCache = () =>
+  req<{ ok: boolean; flushed: number; note?: string }>("/monitor/cache/flush", { method: "POST" });
+export const flushSessions = () =>
+  req<{ ok: boolean; removed: number }>("/monitor/sessions/flush", { method: "POST" });
+
 // Service events
 export interface ServiceEvent {
   id: number; type: string;

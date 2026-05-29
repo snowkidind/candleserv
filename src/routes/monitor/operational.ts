@@ -35,6 +35,9 @@ import {
 } from "../../lib/repairJobs.js";
 import { getHealerActivities } from "../../lib/healerStatus.js";
 import { isDemoMode, readCap } from "../../lib/demoMode.js";
+import { recordApiRequest, apiStatsSnapshot } from "../../lib/apiCounter.js";
+import { buildRuntimeSnapshot, flushCandleCache } from "../../lib/runtimeStats.js";
+import { deleteAllSessions } from "../../db/sessions.js";
 import { logError } from "../../lib/log.js";
 
 const router = Router();
@@ -478,6 +481,51 @@ router.get("/me", ...view, async (req, res) => {
   return res.json({ perms, isDemo: await isDemoMode() });
 });
 
+// ── Runtime / ops panel (authed twins of the localhost /internal API) ──────────
+
+/** GET /monitor/runtime — in-memory + process stats for the admin Runtime panel. */
+router.get("/runtime", ...view, async (_req, res) => {
+  try {
+    return res.json(await buildRuntimeSnapshot());
+  } catch (err) {
+    logError("[monitor] GET /runtime failed:", err);
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+/** GET /monitor/api-stats — rolling 1h/4h/8h/24h outgoing-request counters. */
+router.get("/api-stats", ...view, (_req, res) => {
+  return res.json(apiStatsSnapshot());
+});
+
+/** POST /monitor/cache/flush — drop the candle redis cache (candles:* keys). */
+router.post("/cache/flush", ...modify, async (req, res) => {
+  try {
+    const r = await flushCandleCache();
+    void recordAdminAction({ actor: await actorOf(req), action: "cache.flush", target: null, detail: r });
+    return res.json({ ok: true, ...r });
+  } catch (err) {
+    logError("[monitor] POST /cache/flush failed:", err);
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+/**
+ * POST /monitor/sessions/flush — delete ALL sessions. Logs out every browser
+ * INCLUDING the caller; the frontend confirms before calling.
+ */
+router.post("/sessions/flush", ...modify, async (req, res) => {
+  try {
+    const actor = await actorOf(req);
+    const removed = await deleteAllSessions();
+    void recordAdminAction({ actor, action: "sessions.flush", target: null, detail: { removed } });
+    return res.json({ ok: true, removed });
+  } catch (err) {
+    logError("[monitor] POST /sessions/flush failed:", err);
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
 /** GET /monitor/service-events */
 router.get("/service-events", ...view, async (_req, res) => {
   try {
@@ -750,6 +798,7 @@ router.post("/currencies/:code/probe", ...modify, async (req, res) => {
         const adapter = ADAPTER_BY_NAME[source];
         if (!adapter) return { source, available: false, error: "no adapter" };
         try {
+          recordApiRequest(code, source, "probe");
           await adapter.fetchOne(f.symbol, probeTs);
           await setAvailability(code, source, true);
           return { source, available: true };

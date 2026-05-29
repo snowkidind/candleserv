@@ -48,7 +48,7 @@ function makeIpLimiter(label: string) {
     }
   };
 
-  return function exceeded(ip: string, now: number, perMinute: number): boolean {
+  const exceeded = (ip: string, now: number, perMinute: number): boolean => {
     if (now - lastSweep >= WINDOW_MS) { lastSweep = now; prune(now); }
 
     const windowStart = now - WINDOW_MS;
@@ -73,10 +73,17 @@ function makeIpLimiter(label: string) {
     hits.set(ip, recent);
     return false;
   };
+
+  return { exceeded, size: () => hits.size };
 }
 
 const readLimiter = makeIpLimiter("read");
 const pageLimiter = makeIpLimiter("page");
+
+/** Tracked-IP counts for both limiter maps (ops visibility — see scripts/ctl.ts). */
+export function demoRateLimitStats(): { readIps: number; pageIps: number } {
+  return { readIps: readLimiter.size(), pageIps: pageLimiter.size() };
+}
 
 export async function demoRateLimit(
   req: Request,
@@ -90,7 +97,7 @@ export async function demoRateLimit(
   const perMinute = await getSettingInt("rateLimitPerMinute", 120);
   if (perMinute <= 0) return next();
 
-  if (readLimiter(req.ip ?? "unknown", Date.now(), perMinute)) {
+  if (readLimiter.exceeded(req.ip ?? "unknown", Date.now(), perMinute)) {
     res.setHeader("Retry-After", "60");
     return res.status(429).json({ error: "Rate limit exceeded — slow down" });
   }
@@ -105,7 +112,7 @@ export async function demoPageRateLimit(
   if (!(await isDemoMode())) return next();
   if (!(await getSettingBool("rateLimitEnabled", false))) return next();
 
-  if (pageLimiter(req.ip ?? "unknown", Date.now(), PAGE_MINT_PER_MINUTE)) {
+  if (pageLimiter.exceeded(req.ip ?? "unknown", Date.now(), PAGE_MINT_PER_MINUTE)) {
     res.setHeader("Retry-After", "60");
     return res.status(429).type("text/plain").send("Too many requests — slow down");
   }

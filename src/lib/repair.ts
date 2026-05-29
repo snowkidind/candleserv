@@ -14,6 +14,7 @@
  * clamps are the caller's responsibility (the REST handler enforces them).
  */
 import { ADAPTER_BY_NAME } from "../adapters/registry.js";
+import { recordApiRequest } from "./apiCounter.js";
 import { getActiveFeeds } from "../db/currencyFeeds.js";
 import { getCurrency } from "../db/currencies.js";
 import { isOutOfHistory } from "../adapters/errors.js";
@@ -122,7 +123,10 @@ export async function ensureSourceCoverage(
 
     // Fan out per-source fetchRange for this tile.
     const settled = await Promise.allSettled(
-      feeds.map((f) => ADAPTER_BY_NAME[f.source].fetchRange(f.symbol, tileEnd, limit)),
+      feeds.map((f) => {
+        recordApiRequest(currency, f.source, "repair");
+        return ADAPTER_BY_NAME[f.source].fetchRange(f.symbol, tileEnd, limit);
+      }),
     );
 
     // Per (minute, source), either insert fetched candle or sentinel.

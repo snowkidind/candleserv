@@ -10,6 +10,7 @@ import { startGapDetector } from "./lib/gapDetector.js";
 import { pruneOldSessions } from "./db/sessions.js";
 import { pruneSourceCandles } from "./db/candles.js";
 import { pruneOldStableRates } from "./db/stableRates.js";
+import { logApiSummary } from "./lib/apiCounter.js";
 import { initRedis } from "./lib/redis.js";
 import { createSchema } from "./db/schema.js";
 import { getSetting } from "./db/appSettings.js";
@@ -122,6 +123,7 @@ async function main(): Promise<void> {
         await pruneOldSessions();
         await pruneSourceCandles();
         await pruneOldStableRates();
+        logApiSummary(); // daily outgoing-request summary (rolling 24h)
         log("[server] daily maintenance complete");
       } catch (err) {
         logError("[server] maintenance error:", err);

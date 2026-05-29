@@ -1,4 +1,5 @@
 import { ADAPTER_BY_NAME } from "../adapters/registry.js";
+import { recordApiRequest } from "./apiCounter.js";
 import { getActiveFeeds } from "../db/currencyFeeds.js";
 import { getInceptionTs } from "../db/currencies.js";
 import { applyGuards, buildComposite } from "./composite.js";
@@ -132,7 +133,10 @@ export async function healRange(currency: string, from: Date, to: Date, overwrit
     const limit       = Math.round((tileEnd.getTime() - tileStartMs) / 60000);
 
     const settled = await Promise.allSettled(
-      feeds.map((f) => ADAPTER_BY_NAME[f.source].fetchRange(f.symbol, tileEnd, limit)),
+      feeds.map((f) => {
+        recordApiRequest(currency, f.source, "backfill");
+        return ADAPTER_BY_NAME[f.source].fetchRange(f.symbol, tileEnd, limit);
+      }),
     );
 
     for (let i = 0; i < feeds.length; i++) {
@@ -203,7 +207,7 @@ export async function healRange(currency: string, from: Date, to: Date, overwrit
       // Initial backfill — never clobber live data. Compute composite from
       // freshly-fetched guarded set; only insert if no row exists.
       try {
-        const composite = await buildComposite(guarded, baseline, minuteTs);
+        const composite = await buildComposite(guarded, baseline, minuteTs, undefined, true, currency);
         await insertCandleIfMissing({ currency, timestamp: minuteTs, ...composite });
         written.add(tsMs);
       } catch {
@@ -226,11 +230,12 @@ async function fetchAllSources(currency: string, minuteTs: Date): Promise<Source
   const excluded = new Set(getCurrentFormula().excludedSources);
   const feeds = (await getActiveFeeds(currency)).filter((f) => !excluded.has(f.source));
   return Promise.all(
-    feeds.map((f) =>
-      ADAPTER_BY_NAME[f.source].fetchOne(f.symbol, minuteTs)
+    feeds.map((f) => {
+      recordApiRequest(currency, f.source, "heal1m");
+      return ADAPTER_BY_NAME[f.source].fetchOne(f.symbol, minuteTs)
         .then((candle) => ({ source: f.source, candle } as SourceResult))
-        .catch((err) => ({ source: f.source, candle: null, error: String(err) } as SourceResult)),
-    ),
+        .catch((err) => ({ source: f.source, candle: null, error: String(err) } as SourceResult));
+    }),
   );
 }
 

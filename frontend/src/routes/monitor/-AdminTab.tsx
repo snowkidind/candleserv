@@ -4,6 +4,7 @@ import {
   getApiKeys, createApiKey, revokeApiKey, toggleApiKey, repairApiKeyNonce,
   getConfig, saveConfig, getSourcesStatus,
   getHealerStatus, getAdminActions, getRateLimits,
+  getRuntime, getApiStats, flushCache, flushSessions,
   type ApiKey,
 } from "@/lib/api";
 import RepairRangePanel from "./-RepairRangePanel";
@@ -420,9 +421,141 @@ function AuditSection() {
   );
 }
 
+// ── runtime / ops ────────────────────────────────────────────────────────────
+
+const API_WINDOWS = ["1h", "4h", "8h", "24h"] as const;
+
+function mb(bytes: number): string { return `${(bytes / 1048576).toFixed(1)}MB`; }
+
+function uptime(s: number): string {
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  return [d && `${d}d`, h && `${h}h`, `${m}m`].filter(Boolean).join(" ");
+}
+
+function Stat({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded px-3 py-2">
+      <div className="text-xs text-gray-500">{label}</div>
+      <div className="text-sm text-gray-200 font-mono">{value}</div>
+    </div>
+  );
+}
+
+function RuntimeSection() {
+  const qc = useQueryClient();
+  const { data: rt } = useQuery({ queryKey: ["runtime"], queryFn: getRuntime, refetchInterval: 10_000 });
+  const { data: api } = useQuery({ queryKey: ["api-stats"], queryFn: getApiStats, refetchInterval: 10_000 });
+  const [win, setWin] = useState<(typeof API_WINDOWS)[number]>("24h");
+  const [confirmSessions, setConfirmSessions] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  const cacheFlush = useMutation({
+    mutationFn: flushCache,
+    onSuccess: (r) => { setNote(`Cache flushed: ${r.flushed} key(s)${r.note ? ` (${r.note})` : ""}`); qc.invalidateQueries({ queryKey: ["runtime"] }); },
+    onError: (e) => setNote(`Cache flush failed: ${String(e)}`),
+  });
+  const sessionFlush = useMutation({
+    mutationFn: flushSessions,
+    onSuccess: (r) => { setNote(`Flushed ${r.removed} session(s) — you'll be logged out shortly.`); setConfirmSessions(false); },
+    onError: (e) => { setNote(`Session flush failed: ${String(e)}`); setConfirmSessions(false); },
+  });
+
+  const w = api?.windows[win];
+  const chips = (m: Record<string, number> | undefined) =>
+    Object.entries(m ?? {}).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join("  ") || "—";
+
+  return (
+    <div className="space-y-5">
+      {/* runtime stats */}
+      <div>
+        <h2 className="text-sm font-medium text-gray-300 mb-2">Runtime</h2>
+        {rt ? (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <Stat label="uptime" value={uptime(rt.uptimeSeconds)} />
+            <Stat label="demo mode" value={String(rt.demoMode)} />
+            <Stat label="heap used / total" value={`${mb(rt.memory.heapUsed)} / ${mb(rt.memory.heapTotal)}`} />
+            <Stat label="rss" value={mb(rt.memory.rss)} />
+            <Stat label="demo tokens" value={rt.demo.tokenBudgetEntries} />
+            <Stat label="rate-limit IPs (read/page)" value={`${rt.demo.readRateLimitIps} / ${rt.demo.pageRateLimitIps}`} />
+            <Stat label="SSE clients" value={rt.live.sseClients} />
+            <Stat label="lastClose map" value={rt.live.lastCloseEntries} />
+            <Stat label="backfilling" value={String(rt.live.backfillRunning)} />
+            <Stat label="sessions (authed)" value={`${rt.sessions.total} (${rt.sessions.authenticated})`} />
+            <Stat label="redis" value={rt.redis.available ? "connected" : "unavailable"} />
+          </div>
+        ) : <p className="text-xs text-gray-600">Loading…</p>}
+      </div>
+
+      {/* actions */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <button
+          onClick={() => cacheFlush.mutate()}
+          disabled={cacheFlush.isPending}
+          className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white rounded"
+        >Flush candle cache</button>
+
+        {!confirmSessions ? (
+          <button
+            onClick={() => { setConfirmSessions(true); setNote(null); }}
+            className="px-3 py-1.5 text-sm bg-red-900/60 hover:bg-red-900 text-red-200 border border-red-800 rounded"
+          >Flush all sessions…</button>
+        ) : (
+          <span className="flex items-center gap-2 text-xs text-red-300">
+            Logs out everyone (including you).
+            <button onClick={() => sessionFlush.mutate()} disabled={sessionFlush.isPending}
+              className="px-2 py-1 bg-red-700 hover:bg-red-600 text-white rounded">Confirm</button>
+            <button onClick={() => setConfirmSessions(false)} className="px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded">Cancel</button>
+          </span>
+        )}
+        {note && <span className="text-xs text-gray-400">{note}</span>}
+      </div>
+
+      {/* outgoing API counters */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-sm font-medium text-gray-300">Outgoing exchange requests</h2>
+          <div className="flex gap-1">
+            {API_WINDOWS.map((k) => (
+              <button key={k} onClick={() => setWin(k)}
+                className={`px-2 py-0.5 text-xs rounded ${win === k ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400 hover:text-gray-200"}`}>{k}</button>
+            ))}
+          </div>
+        </div>
+        {w ? (
+          <>
+            <div className="text-xs text-gray-500 mb-2">
+              <div>total <span className="text-gray-300 font-mono">{w.total}</span></div>
+              <div>by currency: <span className="text-gray-400 font-mono">{chips(w.byCurrency)}</span></div>
+              <div>by type: <span className="text-gray-400 font-mono">{chips(w.byType)}</span></div>
+            </div>
+            <div className="bg-gray-900 border border-gray-800 rounded max-h-72 overflow-auto">
+              <table className="w-full text-xs font-mono">
+                <thead className="text-gray-500 text-left sticky top-0 bg-gray-900">
+                  <tr><th className="px-3 py-1.5 font-normal text-right">count</th><th className="px-3 py-1.5 font-normal">currency</th><th className="px-3 py-1.5 font-normal">source</th><th className="px-3 py-1.5 font-normal">type</th></tr>
+                </thead>
+                <tbody>
+                  {w.rows.map((r, i) => (
+                    <tr key={i} className="border-b border-gray-800/50">
+                      <td className="px-3 py-1 text-right text-gray-200">{r.count}</td>
+                      <td className="px-3 py-1 text-gray-300">{r.currency}</td>
+                      <td className="px-3 py-1 text-gray-400">{r.source}</td>
+                      <td className="px-3 py-1 text-gray-500">{r.type}</td>
+                    </tr>
+                  ))}
+                  {!w.rows.length && <tr><td colSpan={4} className="px-3 py-2 text-gray-600">no requests in window</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : <p className="text-xs text-gray-600">Loading…</p>}
+      </div>
+    </div>
+  );
+}
+
 // ── tab shell ────────────────────────────────────────────────────────────────
 
-const SUBTABS = ["API Keys", "Healer / Repair", "Config", "Audit"] as const;
+const SUBTABS = ["API Keys", "Healer / Repair", "Config", "Runtime", "Audit"] as const;
 type SubTab = typeof SUBTABS[number];
 
 export default function AdminTab() {
@@ -460,6 +593,7 @@ export default function AdminTab() {
             <RateLimitsSection />
           </div>
         )}
+        {sub === "Runtime" && <RuntimeSection />}
         {sub === "Audit"  && <AuditSection />}
       </div>
     </div>

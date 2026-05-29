@@ -170,6 +170,11 @@ export function chargeDemoToken(token: string): { ok: boolean; count: number; ca
   return { ok: rec.count <= DEMO_TOKEN_BUDGET, count: rec.count };
 }
 
+/** Current count of tracked page tokens (for ops visibility — see scripts/ctl.ts). */
+export function tokenBudgetMapSize(): number {
+  return tokenHits.size;
+}
+
 /** Pull the page token from the X-Demo-Token header or ?demoToken= (SSE can't set headers). */
 export function demoTokenFromReq(req: Request): string | undefined {
   const header = req.headers["x-demo-token"];

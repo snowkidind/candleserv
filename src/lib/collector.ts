@@ -10,6 +10,7 @@ import { candleEmitter } from "./emitter.js";
 import { rowToJson } from "../db/candles.js";
 import { insertStreamEvent } from "../db/streamEvents.js";
 import { getSettingInt, setSetting } from "../db/appSettings.js";
+import { recordApiRequest, PEG_CURRENCY } from "./apiCounter.js";
 import {
   getCurrentFormula,
   getExchangeState,
@@ -60,6 +61,11 @@ const lastFetchAt: Record<string, Date | null> = {};
 // distinguishes "never checked" from "checked, no prior data" (null), so cold
 // start hits the DB at most once per (currency, source).
 const lastClose = new Map<string, number | null>();
+
+/** Number of (currency|source) carry-close entries held in memory (ops visibility). */
+export function lastCloseMapSize(): number {
+  return lastClose.size;
+}
 
 async function checkAutoSuspend(source: string): Promise<void> {
   const threshold = await getSettingInt("sourceAutoSuspendThreshold", 10);
@@ -248,7 +254,10 @@ export async function collect(minuteTs: Date): Promise<boolean> {
     // ── Peg wave: one fetch per peg-capable venue, shared across currencies. ──
     const pegSources = [...pegVenues];
     const pegSettled = await Promise.allSettled(
-      pegSources.map((s) => ADAPTER_BY_NAME[s].normalize.pegFetcher!(minuteTs)),
+      pegSources.map((s) => {
+        recordApiRequest(PEG_CURRENCY, s, "peg");
+        return ADAPTER_BY_NAME[s].normalize.pegFetcher!(minuteTs);
+      }),
     );
     const pegMap = new Map<string, { rate: number; pegSourcePair: string }>();
     for (let i = 0; i < pegSources.length; i++) {
@@ -285,11 +294,14 @@ export async function collect(minuteTs: Date): Promise<boolean> {
       if (!keys.length) return false;
 
       const candleSettled = await Promise.allSettled(
-        keys.map((k) => withDeadline(
-          ADAPTER_BY_NAME[k.source].fetchOne(k.symbol, minuteTs),
-          phaseDeadline,
-          `${k.currency} (${k.symbol}) via ${k.source}`,
-        )),
+        keys.map((k) => {
+          recordApiRequest(k.currency, k.source, "live");
+          return withDeadline(
+            ADAPTER_BY_NAME[k.source].fetchOne(k.symbol, minuteTs),
+            phaseDeadline,
+            `${k.currency} (${k.symbol}) via ${k.source}`,
+          );
+        }),
       );
       const resultsByCurrency = new Map<string, SourceResult[]>();
       const phaseFetched = new Set<string>(); // venues that returned a candle this phase

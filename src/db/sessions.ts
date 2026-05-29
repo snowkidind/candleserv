@@ -65,3 +65,19 @@ export async function pruneOldSessions(): Promise<void> {
       ("userId" IS NOT NULL AND "lastSeen" < NOW() - INTERVAL '7 days')
   `);
 }
+
+/** Count rows in sessions (total + how many are authenticated). For ops visibility. */
+export async function countSessions(): Promise<{ total: number; authenticated: number }> {
+  const res = await query(
+    `SELECT COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE "userId" IS NOT NULL)::int AS authenticated
+     FROM sessions`,
+  );
+  return { total: res.rows[0].total, authenticated: res.rows[0].authenticated };
+}
+
+/** Delete ALL sessions — forces every browser to re-login. Returns rows removed. */
+export async function deleteAllSessions(): Promise<number> {
+  const res = await query(`DELETE FROM sessions`);
+  return res.rowCount ?? 0;
+}

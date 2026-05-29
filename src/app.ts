@@ -13,6 +13,7 @@ import monitorAuthRouter from "./routes/monitor/auth.js";
 import monitorErrorsRouter from "./routes/monitor/errors.js";
 import monitorOperationalRouter from "./routes/monitor/operational.js";
 import monitorStreamRouter from "./routes/monitor/stream.js";
+import internalRouter from "./routes/internal.js";
 import { repairLock } from "./middleware/repairLock.js";
 import { demoGate } from "./middleware/demoGate.js";
 import { demoRateLimit, demoPageRateLimit } from "./middleware/demoRateLimit.js";
@@ -90,6 +91,10 @@ export async function createApp(): Promise<express.Application> {
   // API consumer routes — API key auth
   app.use("/v1", v1CandlesRouter);
 
+  // Operator routes — localhost-only (scripts/ctl.ts). No demo/session gating;
+  // the router enforces a direct loopback connection itself.
+  app.use("/internal", internalRouter);
+
   // Monitor routes — session cookie auth
   app.use("/monitor", monitorAuthRouter);
   app.use("/monitor", monitorErrorsRouter);
@@ -101,7 +106,7 @@ export async function createApp(): Promise<express.Application> {
   // injected as window.__DEMO__ (Phase 10.3); assets still come from static.
   const frontendDist = path.join(__dirname, "..", "frontend", "dist");
   const indexHtmlPath = path.join(frontendDist, "index.html");
-  const spaFallback = /^(?!\/v1|\/monitor|\/health|\/setup).*/;
+  const spaFallback = /^(?!\/v1|\/monitor|\/health|\/setup|\/internal).*/;
 
   if (demo) {
     // Rate-limit only the token-minting HTML serves (not static assets, which a
@@ -117,21 +122,21 @@ export async function createApp(): Promise<express.Application> {
   return app;
 }
 
-// Cache the raw index.html once — it's immutable per build; only the token varies.
-let rawIndexHtml: string | null = null;
-
 function serveDemoIndex(indexHtmlPath: string) {
   return (_req: express.Request, res: express.Response): void => {
     try {
-      if (rawIndexHtml === null) rawIndexHtml = fs.readFileSync(indexHtmlPath, "utf8");
+      // Read fresh each serve (tiny file) — NOT cached, so a frontend rebuild
+      // doesn't leave us injecting into a stale index.html that points at
+      // deleted asset hashes. Only the token varies per serve anyway.
+      const raw = fs.readFileSync(indexHtmlPath, "utf8");
       const payload = JSON.stringify({ isDemo: true, token: mintDemoToken() });
       // Classic inline script → runs before the deferred module bundle, so
       // window.__DEMO__ is set before React boots. Injected at <head> open.
       const inject = `<head>\n    <script>window.__DEMO__=${payload};</script>`;
-      if (!rawIndexHtml.includes("<head>")) {
+      if (!raw.includes("<head>")) {
         throw new Error("index.html missing <head> — cannot inject demo token");
       }
-      const html = rawIndexHtml.replace("<head>", inject);
+      const html = raw.replace("<head>", inject);
       res.type("html").send(html);
     } catch (err) {
       logError("[app] serveDemoIndex failed:", err);
