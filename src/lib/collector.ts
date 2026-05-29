@@ -21,7 +21,30 @@ import { withTransaction } from "../db/pool.js";
 import { log, logError, logWarn } from "./log.js";
 import type { SourceResult } from "../types/index.js";
 
-const DEADLINE_MS = 15000; // 15 seconds from :00 to write
+// Per-phase resolve budget. BTC gets its own 15s; alts get a SEPARATE, FRESH 15s
+// that starts only once BTC is complete (Required) — alts never inherit BTC's
+// leftover time. Enforced as a hard per-fetch bound (withDeadline), not a
+// post-hoc tripwire, so a phase can't run past its window. BTC(≤15s)+alts(≤15s)
+// still finishes well inside the minute, and the collectionRunning guard backstops.
+const DEADLINE_MS = 15000;
+
+/**
+ * Bound a fetch to a phase deadline (absolute ms). Resolves/rejects with the
+ * underlying result if it settles in time; otherwise rejects with a deadline
+ * error at `deadlineTs` (treated downstream as a fetch failure → strike). The
+ * underlying request keeps its own AbortController timeout; we just stop waiting.
+ */
+function withDeadline<T>(p: Promise<T>, deadlineTs: number, label: string): Promise<T> {
+  const ms = deadlineTs - Date.now();
+  if (ms <= 0) return Promise.reject(new Error(`phase deadline exceeded before fetch: ${label}`));
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`phase deadline (${DEADLINE_MS}ms) exceeded: ${label}`)), ms);
+    p.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
 
 // Overlap guard
 let collectionRunning = false;
@@ -184,8 +207,6 @@ export async function collect(minuteTs: Date): Promise<boolean> {
   }
   collectionRunning = true;
 
-  const deadline = Date.now() + DEADLINE_MS;
-
   try {
     const currencies = await getEnabledCurrencies();
     if (!currencies.length) {
@@ -241,63 +262,181 @@ export async function collect(minuteTs: Date): Promise<boolean> {
       }
     }
 
-    // ── Candle wave: every (currency, venue) pair in parallel. ──
-    const keys: { currency: string; source: string; symbol: string }[] = [];
-    for (const currency of currencies) {
-      for (const f of activeByCurrency.get(currency)!) {
-        keys.push({ currency, source: f.source, symbol: f.symbol });
-      }
-    }
-    const candleSettled = await Promise.allSettled(
-      keys.map((k) => ADAPTER_BY_NAME[k.source].fetchOne(k.symbol, minuteTs)),
-    );
-    const resultsByCurrency = new Map<string, SourceResult[]>();
-    const fetchedSources = new Set<string>();
-    for (let i = 0; i < keys.length; i++) {
-      const k = keys[i];
-      venueTouched.add(k.source);
-      const r = candleSettled[i];
-      let arr = resultsByCurrency.get(k.currency);
-      if (!arr) { arr = []; resultsByCurrency.set(k.currency, arr); }
-      const lcKey = `${k.currency}|${k.source}`;
-      if (r.status === "fulfilled") {
-        arr.push({ source: k.source, candle: r.value });
-        fetchedSources.add(k.source);
-        lastClose.set(lcKey, r.value.close);   // D-FLATFILL: seed/refresh carry value
-      } else if (isEmptyCandle(r.reason) && metaByCurrency.get(k.currency)?.flatFillEmpty) {
-        // D-FLATFILL: no trades this minute on a flat-fill (thin) token → carry
-        // the previous close (vol 0), no strike. Seed lastClose from the DB once
-        // on cold start. A flat-fill is outlier-guard-eligible downstream.
-        if (!lastClose.has(lcKey)) {
-          lastClose.set(lcKey, await getLastSourceClose(k.currency, k.source));
+    // BTC is first-class (Required): with stables (peg) already fetched above,
+    // fetch + compose BTC BEFORE any alt enters the per-venue rate gate or
+    // consumes the deadline window, so BTC never queues behind an alt on a shared
+    // venue (e.g. kraken's 1.1s gate). Alts proceed only once BTC's row is written.
+    const btcPhase = currencies.filter((c) => c === "BTC");
+    const altPhase = currencies.filter((c) => c !== "BTC");
+    const fetchedSources = new Set<string>(); // union across phases, for venue health
+
+    // Process one set of currencies under its OWN deadline: candle wave (bounded
+    // per-fetch by phaseDeadline) → stable-rate rows (must precede compose) →
+    // per-currency guard/write/compose/emit. Mutates the shared venue accumulators
+    // (venueTouched, venueErrors, fetchedSources). Returns true if any currency in
+    // the set composed a candle.
+    const runPhase = async (phaseCurrencies: string[], phaseDeadline: number): Promise<boolean> => {
+      const keys: { currency: string; source: string; symbol: string }[] = [];
+      for (const currency of phaseCurrencies) {
+        for (const f of activeByCurrency.get(currency)!) {
+          keys.push({ currency, source: f.source, symbol: f.symbol });
         }
-        const prev = lastClose.get(lcKey);
-        if (prev != null) {
-          arr.push({ source: k.source, candle: { open: prev, high: prev, low: prev, close: prev, volume: 0 } });
+      }
+      if (!keys.length) return false;
+
+      const candleSettled = await Promise.allSettled(
+        keys.map((k) => withDeadline(
+          ADAPTER_BY_NAME[k.source].fetchOne(k.symbol, minuteTs),
+          phaseDeadline,
+          `${k.currency} (${k.symbol}) via ${k.source}`,
+        )),
+      );
+      const resultsByCurrency = new Map<string, SourceResult[]>();
+      const phaseFetched = new Set<string>(); // venues that returned a candle this phase
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i];
+        venueTouched.add(k.source);
+        const r = candleSettled[i];
+        let arr = resultsByCurrency.get(k.currency);
+        if (!arr) { arr = []; resultsByCurrency.set(k.currency, arr); }
+        const lcKey = `${k.currency}|${k.source}`;
+        if (r.status === "fulfilled") {
+          arr.push({ source: k.source, candle: r.value });
+          fetchedSources.add(k.source);
+          phaseFetched.add(k.source);
+          lastClose.set(lcKey, r.value.close);   // D-FLATFILL: seed/refresh carry value
+        } else if (isEmptyCandle(r.reason) && metaByCurrency.get(k.currency)?.flatFillEmpty) {
+          // D-FLATFILL: no trades this minute on a flat-fill (thin) token → carry
+          // the previous close (vol 0), no strike. Seed lastClose from the DB once
+          // on cold start. A flat-fill is outlier-guard-eligible downstream.
+          if (!lastClose.has(lcKey)) {
+            lastClose.set(lcKey, await getLastSourceClose(k.currency, k.source));
+          }
+          const prev = lastClose.get(lcKey);
+          if (prev != null) {
+            arr.push({ source: k.source, candle: { open: prev, high: prev, low: prev, close: prev, volume: 0 } });
+          } else {
+            // No prior close (brand-new listing) — omit this venue, still no strike.
+            arr.push({ source: k.source, candle: null, error: "no_data" });
+          }
         } else {
-          // No prior close (brand-new listing) — omit this venue, still no strike.
-          arr.push({ source: k.source, candle: null, error: "no_data" });
+          // Real failure (HTTP/timeout/malformed), OR empty on a strict currency
+          // (BTC + liquid: an empty minute means a glitch, not a no-trade) → strike.
+          arr.push({ source: k.source, candle: null, error: String(r.reason) });
+          pushVenueError(k.source, `${k.currency} (${k.symbol}): ${String(r.reason)}`);
         }
-      } else {
-        // Real failure (HTTP/timeout/malformed), OR empty on a strict currency
-        // (BTC + liquid: an empty minute means a glitch, not a no-trade) → strike.
-        arr.push({ source: k.source, candle: null, error: String(r.reason) });
-        pushVenueError(k.source, `${k.currency} (${k.symbol}): ${String(r.reason)}`);
       }
-    }
 
-    if (Date.now() > deadline) {
-      logError(`[collector] deadline exceeded fetching ${minuteTs.toISOString()}`);
-      await recordError("collector", "deadline", `Deadline exceeded fetching ${minuteTs.toISOString()}`);
-      return false;
-    }
+      // Stable rates for venues that returned a candle this phase. Currency-agnostic
+      // and idempotent (ON CONFLICT). Written BEFORE compose: composeMinute's LEFT
+      // JOIN reads these rows from the DB to peg-adjust, so they must be committed
+      // first or the composite would miss the peg.
+      await withTransaction(async (client) => {
+        for (const [source, peg] of pegMap) {
+          if (!phaseFetched.has(source)) continue;
+          await client.query(
+            `INSERT INTO stable_rates_1m_sources
+               ("timestamp","source","rate","pegSourcePair")
+             VALUES ($1,$2,$3,$4)
+             ON CONFLICT ("timestamp","source") DO UPDATE SET
+               rate = EXCLUDED.rate,
+               "pegSourcePair" = EXCLUDED."pegSourcePair",
+               "updatedAt" = NOW()`,
+            [minuteTs, source, peg.rate, peg.pegSourcePair],
+          );
+        }
+      });
 
-    // ── Per-venue operational state. Auto-suspend fires only when a venue is
+      // ── Per-currency: guard → write archive rows → compose → emit. ──
+      let anyComposed = false;
+      for (const currency of phaseCurrencies) {
+        const results = resultsByCurrency.get(currency);
+        if (!results || !results.length) continue;
+
+        const meta         = metaByCurrency.get(currency);
+        const minSources   = meta?.minSources ?? await getSettingInt("minSources", 3);
+        const baseline     = await getSourceCountBaseline(currency);
+        const sigma        = await getRecentCloseStddev(currency);
+        const volumeLeader = await getTrailingVolumeLeader(currency, 10);
+        const guarded      = applyGuards(results, minSources, sigma);
+
+        // Write each fetched source's archive row. usedInFormula left NULL —
+        // composeMinute sets it via its bulk UPDATE. Inline the insert (do NOT
+        // call upsertSourceCandle — it acquires its own pool connection and would
+        // break atomicity). Rate rows already written above (shared).
+        await withTransaction(async (client) => {
+          for (const g of guarded) {
+            if (!g.candle) continue;
+            await client.query(
+              `INSERT INTO candles_1m_sources
+                 ("currency","timestamp","source","open","high","low","close","volume","rejected","rejectedReason","usedInFormula")
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+               ON CONFLICT ("currency","timestamp","source") DO UPDATE SET
+                 open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, close = EXCLUDED.close,
+                 volume = EXCLUDED.volume, rejected = EXCLUDED.rejected, "rejectedReason" = EXCLUDED."rejectedReason",
+                 "usedInFormula" = EXCLUDED."usedInFormula",
+                 "updatedAt" = NOW()`,
+              [currency, minuteTs, g.source, g.candle.open, g.candle.high, g.candle.low, g.candle.close, g.candle.volume,
+               g.rejected, g.rejectedReason ?? null, null],
+            );
+          }
+        });
+
+        // composeMinute reads back the archive, applies the live formula, writes
+        // candles_1m + bulk-UPDATEs usedInFormula — all in one transaction. The
+        // invariant (usedInFormula IS NULL ⟺ no candles_1m row) holds at commit.
+        const result = await composeMinute(
+          currency,
+          minuteTs,
+          getCurrentFormula(),
+          { baseline, minSources, volumeLeader: volumeLeader ?? undefined, premiumEnabled: meta?.premiumEnabled ?? true },
+        );
+
+        if (!result.composed) {
+          logError(`[collector] composeMinute skipped ${currency} ${minuteTs.toISOString()} — only ${result.contributing} sources after formula+guards (need ${minSources})`);
+          continue;
+        }
+
+        const composite = result.composite!;
+        const json = rowToJson({
+          timestamp: minuteTs,
+          open: composite.open,
+          high: composite.high,
+          low: composite.low,
+          close: composite.close,
+          volume: composite.volume,
+          volumeNormalized: composite.volumeNormalized,
+          sourceCount: composite.sourceCount,
+          sourceCountBaseline: composite.sourceCountBaseline,
+          sources: composite.sources,
+          confidence: composite.confidence,
+        });
+
+        candleEmitter.emit("candle", { ...json, currency });
+        log(`[collector] wrote candle ${currency} ${minuteTs.toISOString()} sources=${composite.sourceCount} confidence=${composite.confidence.toFixed(2)}`);
+        anyComposed = true;
+      }
+      return anyComposed;
+    };
+
+    // BTC first, with its OWN 15s window — it never queues behind an alt.
+    const btcComposed = await runPhase(btcPhase, Date.now() + DEADLINE_MS);
+
+    // Alts get a SEPARATE, FRESH 15s window that starts now that BTC is complete —
+    // they never inherit BTC's leftover time (Required). Anything an alt can't
+    // resolve inside its own window is dropped this minute and healed later by the
+    // gap detector.
+    const altComposed = await runPhase(altPhase, Date.now() + DEADLINE_MS);
+
+    // ── Per-venue operational state, computed ONCE from the union of both phases
+    // (so a venue is never double-struck). Auto-suspend fires only when a venue is
     // WHOLLY unreachable this minute — no candle from ANY currency and no peg —
-    // i.e. the venue is actually down. A venue that returned at least one
-    // response is demonstrably up, so per-pair errors (a thin or delisted
-    // altcoin pair) are surfaced but must NOT suspend it for BTC and every other
-    // currency. (Thin no-trade minutes don't even reach here — D-FLATFILL.) ──
+    // i.e. the venue is actually down. A venue that returned at least one response
+    // is demonstrably up, so per-pair errors (a thin or delisted altcoin pair) are
+    // surfaced but must NOT suspend it for BTC and every other currency. (Thin
+    // no-trade minutes don't even reach here — D-FLATFILL.) Auto-suspend deferring
+    // by one minute vs. pre-split is immaterial: a venue that failed contributed no
+    // candle to this minute's compose regardless of formula state. ──
     for (const source of venueTouched) {
       const errs = venueErrors.get(source);
       const reachable = fetchedSources.has(source) || pegMap.has(source);
@@ -318,97 +457,7 @@ export async function collect(minuteTs: Date): Promise<boolean> {
       }
     }
 
-    // ── Stable rates: one row per venue this minute, shared across currencies.
-    // Written for every peg venue that returned at least one candle (mirrors
-    // the legacy "rate row accompanies a fetched candle" semantics). The table
-    // is currency-agnostic; compose's LEFT JOIN picks it up for every currency.
-    await withTransaction(async (client) => {
-      for (const [source, peg] of pegMap) {
-        if (!fetchedSources.has(source)) continue;
-        await client.query(
-          `INSERT INTO stable_rates_1m_sources
-             ("timestamp","source","rate","pegSourcePair")
-           VALUES ($1,$2,$3,$4)
-           ON CONFLICT ("timestamp","source") DO UPDATE SET
-             rate = EXCLUDED.rate,
-             "pegSourcePair" = EXCLUDED."pegSourcePair",
-             "updatedAt" = NOW()`,
-          [minuteTs, source, peg.rate, peg.pegSourcePair],
-        );
-      }
-    });
-
-    // ── Per-currency: guard → write archive rows → compose → emit. ──
-    let anyComposed = false;
-    for (const currency of currencies) {
-      const results = resultsByCurrency.get(currency);
-      if (!results || !results.length) continue;
-
-      const meta         = metaByCurrency.get(currency);
-      const minSources   = meta?.minSources ?? await getSettingInt("minSources", 3);
-      const baseline     = await getSourceCountBaseline(currency);
-      const sigma        = await getRecentCloseStddev(currency);
-      const volumeLeader = await getTrailingVolumeLeader(currency, 10);
-      const guarded      = applyGuards(results, minSources, sigma);
-
-      // Write each fetched source's archive row. usedInFormula left NULL —
-      // composeMinute sets it via its bulk UPDATE. Inline the insert (do NOT
-      // call upsertSourceCandle — it acquires its own pool connection and would
-      // break atomicity). Rate rows already written above (shared).
-      await withTransaction(async (client) => {
-        for (const g of guarded) {
-          if (!g.candle) continue;
-          await client.query(
-            `INSERT INTO candles_1m_sources
-               ("currency","timestamp","source","open","high","low","close","volume","rejected","rejectedReason","usedInFormula")
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-             ON CONFLICT ("currency","timestamp","source") DO UPDATE SET
-               open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, close = EXCLUDED.close,
-               volume = EXCLUDED.volume, rejected = EXCLUDED.rejected, "rejectedReason" = EXCLUDED."rejectedReason",
-               "usedInFormula" = EXCLUDED."usedInFormula",
-               "updatedAt" = NOW()`,
-            [currency, minuteTs, g.source, g.candle.open, g.candle.high, g.candle.low, g.candle.close, g.candle.volume,
-             g.rejected, g.rejectedReason ?? null, null],
-          );
-        }
-      });
-
-      // composeMinute reads back the archive, applies the live formula, writes
-      // candles_1m + bulk-UPDATEs usedInFormula — all in one transaction. The
-      // invariant (usedInFormula IS NULL ⟺ no candles_1m row) holds at commit.
-      const result = await composeMinute(
-        currency,
-        minuteTs,
-        getCurrentFormula(),
-        { baseline, minSources, volumeLeader: volumeLeader ?? undefined, premiumEnabled: meta?.premiumEnabled ?? true },
-      );
-
-      if (!result.composed) {
-        logError(`[collector] composeMinute skipped ${currency} ${minuteTs.toISOString()} — only ${result.contributing} sources after formula+guards (need ${minSources})`);
-        continue;
-      }
-
-      const composite = result.composite!;
-      const json = rowToJson({
-        timestamp: minuteTs,
-        open: composite.open,
-        high: composite.high,
-        low: composite.low,
-        close: composite.close,
-        volume: composite.volume,
-        volumeNormalized: composite.volumeNormalized,
-        sourceCount: composite.sourceCount,
-        sourceCountBaseline: composite.sourceCountBaseline,
-        sources: composite.sources,
-        confidence: composite.confidence,
-      });
-
-      candleEmitter.emit("candle", { ...json, currency });
-      log(`[collector] wrote candle ${currency} ${minuteTs.toISOString()} sources=${composite.sourceCount} confidence=${composite.confidence.toFixed(2)}`);
-      anyComposed = true;
-    }
-
-    return anyComposed;
+    return btcComposed || altComposed;
   } catch (err) {
     logError("[collector] collect failed:", err);
     await recordError("collector", "collect", String(err));

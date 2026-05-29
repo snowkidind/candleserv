@@ -31,8 +31,13 @@ export async function listCurrencies(): Promise<CurrencyRow[]> {
   return res.rows.map(rowToCurrency);
 }
 
+// BTC is first-class (Required): it sorts ahead of every other code so the
+// serialized backfill, gap scans, heal loops, and the live collector all process
+// BTC before any alt. The rest stay alphabetical for stable ordering.
 export async function getEnabledCurrencies(): Promise<string[]> {
-  const res = await query(`SELECT "code" FROM currencies WHERE enabled = true ORDER BY "code" ASC`);
+  const res = await query(
+    `SELECT "code" FROM currencies WHERE enabled = true ORDER BY ("code" = 'BTC') DESC, "code" ASC`,
+  );
   return res.rows.map((r: { code: string }) => r.code);
 }
 
