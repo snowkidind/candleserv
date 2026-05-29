@@ -79,6 +79,24 @@ function groupIntoRanges(timestamps: Date[]): { from: Date; to: Date }[] {
  */
 export async function healRange(currency: string, from: Date, to: Date, overwrite: boolean): Promise<Set<number>> {
   const written      = new Set<number>();
+
+  // No-future guard (candlestick time): never request minutes that haven't
+  // closed. Clamp the exclusive upper bound to the start of the current minute,
+  // so the range covers at most the latest CLOSED minute; the live collector and
+  // gap detector own anything newer. Without this, backfilling the current day
+  // tiles a dayEnd of next-midnight into the future and venues reject it
+  // (coinbase/gate HTTP 400 "invalid time range").
+  const latestClosedExclusive = Math.floor(Date.now() / 60000) * 60000;
+  if (to.getTime() > latestClosedExclusive) {
+    const clamped = new Date(latestClosedExclusive);
+    log(`[healer] healRange: clamping ${currency} end ${to.toISOString()} → ${clamped.toISOString()} (no future requests)`);
+    to = clamped;
+  }
+  if (to.getTime() <= from.getTime()) {
+    log(`[healer] healRange: ${currency} window empty after no-future clamp — nothing to heal`);
+    return written;
+  }
+
   const baseline     = await getSourceCountBaseline(currency);
   const sigma        = await getRecentCloseStddev(currency);
   const volumeLeader = await getTrailingVolumeLeader(currency, 10);
