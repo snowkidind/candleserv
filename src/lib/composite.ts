@@ -122,6 +122,7 @@ export async function buildComposite(
   candleTs?: Date,
   pegRates?: Map<string, number>,
   premiumEnabled: boolean = true,
+  currency?: string,   // for log attribution only — which asset this composite is for
 ): Promise<CompositeResult> {
   const accepted = guarded.filter((g) => !g.rejected && g.candle);
 
@@ -164,7 +165,18 @@ export async function buildComposite(
     high  = median(pegged.map((p) => p.candle.high));
     low   = median(pegged.map((p) => p.candle.low));
     if (premiumEnabled && candleTs) {
-      logWarn(`[composite] N=${pegged.length} < ${MIN_FOR_OFFSET_CORRECTION} at ${candleTs.toISOString()}; skipping premium-offset correction`);
+      // Name the asset + which venues dropped (and why), so the line is
+      // self-diagnosing — N is the accepted count; `failed` is everything the
+      // guards rejected (fetch_failed = missing/no-candle, outlier, etc.).
+      const acceptedNames = pegged.map((p) => p.source).join(",");
+      const failed = guarded
+        .filter((g) => g.rejected)
+        .map((g) => `${g.source}:${g.rejectedReason ?? "rejected"}`)
+        .join(",");
+      logWarn(
+        `[composite] ${currency ?? "?"} N=${pegged.length} < ${MIN_FOR_OFFSET_CORRECTION} at ${candleTs.toISOString()}; ` +
+        `accepted=[${acceptedNames}] failed=[${failed || "none"}]; skipping premium-offset correction`,
+      );
     }
   } else {
     // Step 2: per-field leave-one-out consensus + CORRECTION_FACTOR pull.

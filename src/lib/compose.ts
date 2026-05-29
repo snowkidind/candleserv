@@ -163,7 +163,7 @@ export async function composeMinute(
   // Success path — buildComposite produces the OHLCV + bitmask.
   let composite;
   try {
-    composite = await buildComposite(guarded, opts.baseline, minuteTs, pegRates, opts.premiumEnabled);
+    composite = await buildComposite(guarded, opts.baseline, minuteTs, pegRates, opts.premiumEnabled, currency);
   } catch (err) {
     // Shouldn't happen given the accepted.length >= minSources check above,
     // but if buildComposite throws (e.g., all-rejected race) fall back to skip.

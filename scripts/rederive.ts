@@ -69,7 +69,7 @@ async function rederiveCurrency(currency: string): Promise<{ done: number; error
     try {
       // No peg rates here — this recompose is raw-quote (mirrors the original
       // script). premiumEnabled honors the per-currency D2 toggle.
-      const composite = await buildComposite(guarded, SOURCE_COUNT_BASELINE, ts, undefined, premiumEnabled);
+      const composite = await buildComposite(guarded, SOURCE_COUNT_BASELINE, ts, undefined, premiumEnabled, currency);
       await upsertCandle({
         currency,
         timestamp:           ts,
