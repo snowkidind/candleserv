@@ -20,6 +20,9 @@ export function applyTheme(t: Theme): void {
 export function setTheme(t: Theme): void {
   localStorage.setItem(KEY, t);
   applyTheme(t);
+  // Let canvas-based views (the chart) re-theme themselves — they can't rely on
+  // the CSS invert and must reconfigure their own palette.
+  window.dispatchEvent(new Event("themechange"));
 }
 
 /** Apply the stored theme before first paint (called from main.tsx). */

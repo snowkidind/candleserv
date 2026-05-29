@@ -31,11 +31,15 @@ const TOKEN_TTL_MS = 6 * 60 * 60 * 1000; // 6h
  * Errors and operational/admin reads are deliberately NOT here — they'd leak
  * internal state.
  */
+// candleserv's frontend is a feed-integrity OBSERVER — gaps, errors, and source
+// health are the product's point, not internal secrets to hide. So the public
+// demo read set includes the data-quality surfaces, not just price.
 const DEMO_READ_PATHS = new Set<string>([
   "/monitor/candles",
   "/monitor/candles/latest",
   "/monitor/candles/stream",
   "/monitor/gaps",
+  "/monitor/errors",
   "/monitor/currencies",
 ]);
 

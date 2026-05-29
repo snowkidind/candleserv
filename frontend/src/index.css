@@ -18,3 +18,10 @@ html.light canvas,
 html.light svg {
   filter: invert(1) hue-rotate(180deg);
 }
+/* Native checkboxes/radios have no theme styling, so the page invert flips their
+ * white box to black — counter-invert so they render as normal light controls.
+ * (Styled inputs with their own bg-* classes invert correctly with the page.) */
+html.light input[type="checkbox"],
+html.light input[type="radio"] {
+  filter: invert(1) hue-rotate(180deg);
+}

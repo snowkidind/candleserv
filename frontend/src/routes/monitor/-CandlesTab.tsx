@@ -3,7 +3,24 @@ import { createChart, IChartApi, ISeriesApi, CandlestickData, HistogramData, Whi
 import type { Candle } from "@/lib/api";
 import { getCandlesBefore, getGaps, getErrors, getCurrencies } from "@/lib/api";
 import { useCandleStream } from "@/lib/CandleStreamContext";
-import { isDemo } from "@/lib/demo";
+import { getTheme, type Theme } from "@/lib/theme";
+
+// The chart is a <canvas> counter-inverted out of the global light-mode CSS
+// invert, so it must carry its own palette rather than ride the page filter.
+const CHART_THEME: Record<Theme, { background: string; text: string; grid: string; border: string }> = {
+  dark:  { background: "#030712", text: "#9ca3af", grid: "#111827", border: "#1f2937" },
+  light: { background: "#ffffff", text: "#374151", grid: "#e5e7eb", border: "#d1d5db" },
+};
+
+function applyChartTheme(chart: IChartApi, t: Theme): void {
+  const c = CHART_THEME[t];
+  chart.applyOptions({
+    layout: { background: { color: c.background }, textColor: c.text },
+    grid: { vertLines: { color: c.grid }, horzLines: { color: c.grid } },
+    timeScale: { borderColor: c.border },
+    rightPriceScale: { borderColor: c.border },
+  });
+}
 
 const TFS = ["1m","5m","10m","15m","1h","2h","4h","6h","12h","1d","3d","7d","30d"];
 const HISTORY_FETCH_LIMIT = 500;
@@ -157,13 +174,14 @@ export default function CandlesTab() {
   useEffect(() => {
     if (!chartRef.current) return;
     const el = chartRef.current;
+    const pal = CHART_THEME[getTheme()];
     const instance = createChart(el, {
       autoSize: true,
-      layout: { background: { color: "#030712" }, textColor: "#9ca3af" },
-      grid: { vertLines: { color: "#111827" }, horzLines: { color: "#111827" } },
+      layout: { background: { color: pal.background }, textColor: pal.text },
+      grid: { vertLines: { color: pal.grid }, horzLines: { color: pal.grid } },
       crosshair: { mode: 0 },
-      timeScale: { borderColor: "#1f2937", timeVisible: true, secondsVisible: false },
-      rightPriceScale: { borderColor: "#1f2937" },
+      timeScale: { borderColor: pal.border, timeVisible: true, secondsVisible: false },
+      rightPriceScale: { borderColor: pal.border },
     });
     chart.current  = instance;
     series.current = instance.addCandlestickSeries({
@@ -263,10 +281,10 @@ export default function CandlesTab() {
         updateErrorMarkers();
         updateMaOverlays();
 
-        if (result.candles.length < HISTORY_FETCH_LIMIT) {
-          noMoreHistory.current = true;
-          setAtHistoryStart(true);
-        }
+        // End-of-history is detected by an EMPTY page (above), not "fewer than
+        // requested" — the demo read cap (200) clamps every response below
+        // HISTORY_FETCH_LIMIT, which would otherwise false-trigger end-of-history
+        // after one page. Pages just keep advancing (oldest-1) until one is empty.
       } catch (err) {
         console.error("[CandlesTab] history fetch error:", err);
       } finally {
@@ -344,6 +362,14 @@ export default function CandlesTab() {
     smaFastSeries.current?.setData([]);
   }, [tf, currency]);
 
+  // Re-theme the chart on the global light/dark toggle (canvas is counter-inverted
+  // out of the CSS invert, so it sets its own palette).
+  useEffect(() => {
+    const onThemeChange = () => { if (chart.current) applyChartTheme(chart.current, getTheme()); };
+    window.addEventListener("themechange", onThemeChange);
+    return () => window.removeEventListener("themechange", onThemeChange);
+  }, []);
+
   // ── Fetch gap ranges and service errors on TF change ────────────────────────
   useEffect(() => {
     gapRanges.current = [];
@@ -358,23 +384,21 @@ export default function CandlesTab() {
       gapSeries.current?.setData(sortedGapHistogram());
     }).catch(err => console.error("[CandlesTab] getGaps error:", err));
 
-    // Service-error overlay is internal operational data — not part of the demo
-    // public read set, so skip it in demo (the endpoint would 403 anyway).
-    if (!isDemo()) {
-      getErrors(60 * 24 * 30).then(result => {
-        const step = TF_SECONDS[tfRef.current];
-        const bars = new Map<number, string[]>();
-        for (const err of result.errors) {
-          const tSec = Math.floor(new Date(err.createdAt).getTime() / 1000);
-          const barT = Math.floor(tSec / step) * step;
-          const msgs = bars.get(barT) ?? [];
-          msgs.push(err.message);
-          bars.set(barT, msgs);
-        }
-        errorBars.current = bars;
-        updateErrorMarkers();
-      }).catch(err => console.error("[CandlesTab] getErrors error:", err));
-    }
+    // Feed errors are part of the observability the product exists to show —
+    // rendered in demo too (the endpoint is in the demo read set).
+    getErrors(60 * 24 * 30).then(result => {
+      const step = TF_SECONDS[tfRef.current];
+      const bars = new Map<number, string[]>();
+      for (const err of result.errors) {
+        const tSec = Math.floor(new Date(err.createdAt).getTime() / 1000);
+        const barT = Math.floor(tSec / step) * step;
+        const msgs = bars.get(barT) ?? [];
+        msgs.push(err.message);
+        bars.set(barT, msgs);
+      }
+      errorBars.current = bars;
+      updateErrorMarkers();
+    }).catch(err => console.error("[CandlesTab] getErrors error:", err));
   }, [tf, currency]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Merge SSE snapshot from context into the chart candle map ───────────────
@@ -428,15 +452,20 @@ export default function CandlesTab() {
     const keys = [...allCandles.current.keys()];
     const minT = Math.min(...keys);
     const maxT = Math.max(...keys);
-    const result: number[] = [];
+    // Set + sort: gap ranges can overlap or arrive out of time order, which would
+    // otherwise emit duplicate / non-ascending times. lightweight-charts requires
+    // strictly-ascending unique times in setData — a violation corrupts the
+    // histogram's internal index and throws ensureNotNull ("Value is null") on
+    // crosshair render. Dedupe + sort here so every consumer gets clean data.
+    const result = new Set<number>();
     for (const { startSec, endSec } of gapRanges.current) {
       const alignedStart = Math.floor(startSec / step) * step;
       const alignedEnd   = Math.ceil(endSec / step) * step;
       for (let t = alignedStart; t < alignedEnd; t += step) {
-        if (t >= minT && t <= maxT && !allCandles.current.has(t)) result.push(t);
+        if (t >= minT && t <= maxT && !allCandles.current.has(t)) result.add(t);
       }
     }
-    return result;
+    return [...result].sort((a, b) => a - b);
   }
 
   function sortedCandlesWithGaps(): (CandlestickData | WhitespaceData)[] {
