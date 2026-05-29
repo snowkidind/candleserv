@@ -239,6 +239,32 @@ function ConfigSection() {
             <p className="text-xs text-gray-600 mt-1">{hint}</p>
           </div>
         ))}
+
+        {/* Public demo rate limit (Phase 10.1). Only active when IS_DEMO. */}
+        <div className="pt-2 border-t border-gray-800 space-y-2">
+          <h3 className="text-xs font-medium text-gray-400">Public demo</h3>
+          <label className="flex items-center gap-2 text-xs text-gray-400">
+            <input
+              type="checkbox"
+              checked={(draft.rateLimitEnabled ?? settings.rateLimitEnabled) === "true"}
+              onChange={e => setDraft(d => ({ ...d, rateLimitEnabled: e.target.checked ? "true" : "false" }))}
+            />
+            Rate-limit demo reads
+          </label>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Requests per minute (per IP)</label>
+            <input
+              type="number"
+              value={draft.rateLimitPerMinute ?? settings.rateLimitPerMinute ?? ""}
+              onChange={e => setDraft(d => ({ ...d, rateLimitPerMinute: e.target.value }))}
+              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 outline-none focus:border-blue-500"
+            />
+            <p className="text-xs text-gray-600 mt-1">
+              Only active when IS_DEMO. Sliding 60s window per client IP over the public read paths.
+            </p>
+          </div>
+        </div>
+
         <div className="flex items-center gap-3 pt-1">
           <button
             onClick={() => save.mutate()}

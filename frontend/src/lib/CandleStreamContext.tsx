@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { Candle } from "@/lib/api";
+import { isDemo, demoToken } from "@/lib/demo";
 
 interface CandleStreamCtx {
   snapshot: Candle[];         // latest N-candle snapshot from SSE
@@ -57,7 +58,9 @@ export function CandleStreamProvider({ children }: { children: React.ReactNode }
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
 
     const myGen = ++genRef.current;
-    const es = new EventSource(`/monitor/candles/stream?currency=${currencyRef.current}&tf=${currentTf}&n=200`);
+    // EventSource can't set headers, so the demo page token rides as a query param.
+    const demoQ = isDemo() && demoToken() ? `&demoToken=${encodeURIComponent(demoToken()!)}` : "";
+    const es = new EventSource(`/monitor/candles/stream?currency=${currencyRef.current}&tf=${currentTf}&n=200${demoQ}`);
     esRef.current = es;
 
     es.addEventListener("candles", (e) => {

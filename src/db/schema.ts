@@ -254,6 +254,13 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   alertWebhookUrl: "",
   sourceAutoSuspendThreshold: "10",
   redisUrl: "",
+  // Public demo mode (Phase 10). IS_DEMO can also be forced via the env var of
+  // the same name (env wins — see lib/demoMode.ts). When demo: api-key auth off,
+  // monitor reads require a same-origin signed page token, limit/n clamped to
+  // 200, optional IP rate-limit, ≤180d retention, Candles-only UI.
+  IS_DEMO: "false",
+  rateLimitEnabled: "false",
+  rateLimitPerMinute: "120",
 };
 
 // Multi-currency Phase 1.9 seed. BTC is the working baseline (enabled, its feeds

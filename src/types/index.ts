@@ -98,6 +98,9 @@ declare global {
       apiKey?: string;
       isAuthenticated?: boolean;
       perms?: Record<string, boolean>;
+      // Set by demoGate when a public demo read passed the token+origin check.
+      // sessionAuth.authenticate honors it as view-only access (no session).
+      demoRead?: boolean;
     }
   }
 }

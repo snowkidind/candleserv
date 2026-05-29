@@ -1,13 +1,25 @@
+import { isDemo, demoToken } from "./demo";
+
 const BASE = "";
 
 async function req<T>(path: string, opts?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(opts?.headers as Record<string, string> | undefined),
+  };
+  // Demo reads carry the server-injected signed page token (Phase 10).
+  if (isDemo()) {
+    const t = demoToken();
+    if (t) headers["X-Demo-Token"] = t;
+  }
   const res = await fetch(BASE + path, {
     credentials: "include",
-    headers: { "Content-Type": "application/json" },
     ...opts,
+    headers,
   });
   if (res.status === 401 && !path.includes("/login")) {
-    window.location.href = "/login";
+    // No login page in demo — don't bounce to /login, just surface the error.
+    if (!isDemo()) window.location.href = "/login";
     throw new Error("Unauthorized");
   }
   if (!res.ok) {

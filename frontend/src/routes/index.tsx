@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { CandleStreamProvider, useCandleStream } from "@/lib/CandleStreamContext";
 import { getMe } from "@/lib/api";
+import { isDemo } from "@/lib/demo";
 import CandlesTab from "@/routes/monitor/-CandlesTab";
 import ConnectionsTab from "@/routes/monitor/-ConnectionsTab";
 import FeedsTab from "@/routes/monitor/-FeedsTab";
@@ -37,7 +38,10 @@ function MonitorContent() {
   const dotTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Resolve which tabs to show from the permission map (B5). Demo → Candles only.
+  // In demo there's no session, so /monitor/me would 401 — read the injected
+  // flag instead and skip the call.
   useEffect(() => {
+    if (isDemo()) { setTabs(["Candles"]); return; }
     getMe()
       .then(me => {
         if (me.isDemo) { setTabs(["Candles"]); return; }

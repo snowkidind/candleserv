@@ -3,6 +3,7 @@ import { createChart, IChartApi, ISeriesApi, CandlestickData, HistogramData, Whi
 import type { Candle } from "@/lib/api";
 import { getCandlesBefore, getGaps, getErrors, getCurrencies } from "@/lib/api";
 import { useCandleStream } from "@/lib/CandleStreamContext";
+import { isDemo } from "@/lib/demo";
 
 const TFS = ["1m","5m","10m","15m","1h","2h","4h","6h","12h","1d","3d","7d","30d"];
 const HISTORY_FETCH_LIMIT = 500;
@@ -357,19 +358,23 @@ export default function CandlesTab() {
       gapSeries.current?.setData(sortedGapHistogram());
     }).catch(err => console.error("[CandlesTab] getGaps error:", err));
 
-    getErrors(60 * 24 * 30).then(result => {
-      const step = TF_SECONDS[tfRef.current];
-      const bars = new Map<number, string[]>();
-      for (const err of result.errors) {
-        const tSec = Math.floor(new Date(err.createdAt).getTime() / 1000);
-        const barT = Math.floor(tSec / step) * step;
-        const msgs = bars.get(barT) ?? [];
-        msgs.push(err.message);
-        bars.set(barT, msgs);
-      }
-      errorBars.current = bars;
-      updateErrorMarkers();
-    }).catch(err => console.error("[CandlesTab] getErrors error:", err));
+    // Service-error overlay is internal operational data — not part of the demo
+    // public read set, so skip it in demo (the endpoint would 403 anyway).
+    if (!isDemo()) {
+      getErrors(60 * 24 * 30).then(result => {
+        const step = TF_SECONDS[tfRef.current];
+        const bars = new Map<number, string[]>();
+        for (const err of result.errors) {
+          const tSec = Math.floor(new Date(err.createdAt).getTime() / 1000);
+          const barT = Math.floor(tSec / step) * step;
+          const msgs = bars.get(barT) ?? [];
+          msgs.push(err.message);
+          bars.set(barT, msgs);
+        }
+        errorBars.current = bars;
+        updateErrorMarkers();
+      }).catch(err => console.error("[CandlesTab] getErrors error:", err));
+    }
   }, [tf, currency]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Merge SSE snapshot from context into the chart candle map ───────────────

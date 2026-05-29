@@ -339,7 +339,7 @@ GET /v1/candles/subscriptions
 
 ```
 DATABASE_URL=postgres://user:pass@host:port/dbname   # written by setup wizard
-SESSION_SECRET=<64-char random hex>                   # auto-generated at setup
+DEMO_TOKEN_SECRET=<64-char random hex>                # auto-generated at setup; signs the demo page token (unused unless IS_DEMO)
 SETUP_COMPLETE=true                                   # gates the setup wizard
 PORT=3007                                             # set before first start if needed
 READONLY_MODE=true                                    # for read-only instances (see below)
@@ -500,7 +500,7 @@ Create a `.env` in the candleserv root on the dev/secondary machine:
 
 ```
 DATABASE_URL=postgres://candleserv_ro:<password>@<production-host>:5432/candleserv
-SESSION_SECRET=<64-char random hex unique to this instance>
+DEMO_TOKEN_SECRET=<64-char random hex unique to this instance>
 SETUP_COMPLETE=true
 READONLY_MODE=true
 PORT=3007
@@ -508,7 +508,7 @@ PORT=3007
 
 `SETUP_COMPLETE=true` skips the setup wizard — the production database is already initialised.
 
-Generate a unique `SESSION_SECRET`:
+Generate a unique `DEMO_TOKEN_SECRET`:
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
@@ -549,6 +549,6 @@ On startup the log will confirm:
 
 ### Notes
 
-- Multiple read-only instances can run simultaneously — each has its own session cookie and `SESSION_SECRET`.
+- Multiple read-only instances can run simultaneously — each issues its own session cookies (random, DB-backed — there is no shared cookie-signing secret).
 - Sessions created by read-only instances are stored in the shared `sessions` table and pruned by the production instance's daily maintenance job. This is harmless.
 - The read-only instance never writes candle data, gap records, stream events, or app settings — enforcement is at both the PostgreSQL role level and the application middleware level.

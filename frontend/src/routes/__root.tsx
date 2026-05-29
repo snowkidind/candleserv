@@ -2,20 +2,23 @@ import { createRootRoute, Outlet, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getHealth, logout, ping } from "@/lib/api";
+import { isDemo } from "@/lib/demo";
 
 export const Route = createRootRoute({ component: RootLayout });
 
 function RootLayout() {
   const navigate = useNavigate();
+  const demo = isDemo();
 
-  // Keep session alive — ping every 4 minutes.
+  // Keep session alive — ping every 4 minutes. Skipped in demo (no session).
   // If the session has been lost, the 401 handler in api.ts redirects to /login.
   useEffect(() => {
+    if (demo) return;
     const interval = setInterval(() => {
       ping().catch(() => {});
     }, 4 * 60 * 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [demo]);
 
   const { data: health } = useQuery({
     queryKey: ["health"],
@@ -53,12 +56,16 @@ function RootLayout() {
             <span className="text-xs text-gray-500 ml-2">latest {latestTs}</span>
           )}
         </div>
-        <button
-          onClick={handleLogout}
-          className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
-        >
-          logout
-        </button>
+        {demo ? (
+          <span className="text-xs text-gray-600">demo</span>
+        ) : (
+          <button
+            onClick={handleLogout}
+            className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+          >
+            logout
+          </button>
+        )}
       </header>
       <main className="flex-1 overflow-hidden">
         <Outlet />

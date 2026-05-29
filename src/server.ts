@@ -60,7 +60,7 @@ async function detectAndRecordOutage(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const app = createApp();
+  const app = await createApp();
 
   app.listen(PORT, () => {
     log(`[candleserv] listening on port ${PORT}`);
@@ -112,10 +112,11 @@ async function main(): Promise<void> {
       startGapDetector().catch((err) => logError("[server] gap detector error:", err));
     }, 30_000);
 
-    // Daily maintenance: prune sessions + source candles + stable rates.
-    // ON DELETE CASCADE on stable_rates_1m_sources also fires from
-    // pruneSourceCandles; pruneOldStableRates is the symmetric direct path
-    // for safety.
+    // Daily maintenance: prune sessions + the 180d-old per-venue SOURCE archive +
+    // stable rates. Only the inputs to the composite are pruned — the composite
+    // candles_1m (the canonical price series) is kept indefinitely, in prod AND
+    // demo. The stable_rates FK/cascade was dropped (D-STABLE-FK), so
+    // pruneOldStableRates is now the ONLY thing removing stale rate rows.
     setInterval(async () => {
       try {
         await pruneOldSessions();

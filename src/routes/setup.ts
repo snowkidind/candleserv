@@ -47,13 +47,13 @@ router.post("/install", async (req, res) => {
   }
 
   try {
-    const sessionSecret = crypto.randomBytes(32).toString("hex");
+    const demoTokenSecret = crypto.randomBytes(32).toString("hex");
     const databaseUrl = `postgres://${dbUser}:${encodeURIComponent(dbPassword)}@${dbHost}:${dbPort || 5432}/${dbName}`;
 
     const envPath = path.join(process.cwd(), ".env");
     const envContent = [
       `DATABASE_URL=${databaseUrl}`,
-      `SESSION_SECRET=${sessionSecret}`,
+      `DEMO_TOKEN_SECRET=${demoTokenSecret}`,
       `SETUP_COMPLETE=true`,
     ].join("\n") + "\n";
 
@@ -61,7 +61,7 @@ router.post("/install", async (req, res) => {
 
     // Re-initialize pool with new URL
     process.env.DATABASE_URL = databaseUrl;
-    process.env.SESSION_SECRET = sessionSecret;
+    process.env.DEMO_TOKEN_SECRET = demoTokenSecret;
     process.env.SETUP_COMPLETE = "true";
 
     await createSchema();

@@ -3,6 +3,7 @@ import { trackSession, authenticate, requirePerm } from "../../middleware/sessio
 import { getCandles, VALID_TFS } from "../../db/candles.js";
 import { candleEmitter } from "../../lib/emitter.js";
 import { redisGet, redisSet } from "../../lib/redis.js";
+import { readCap } from "../../lib/demoMode.js";
 
 const router = Router();
 const guard = [trackSession, authenticate, requirePerm("CAN_VIEW_CANDLESERV")];
@@ -13,7 +14,7 @@ const guard = [trackSession, authenticate, requirePerm("CAN_VIEW_CANDLESERV")];
  */
 router.get("/candles/stream", ...guard, async (req, res) => {
   const tf = (req.query.tf as string) || "1m";
-  const n  = Math.min(parseInt(req.query.n as string, 10) || 200, 1000);
+  const n  = Math.min(parseInt(req.query.n as string, 10) || 200, await readCap(1000));
   const currency = (req.query.currency as string)?.toUpperCase() || "BTC";
   if (!VALID_TFS.includes(tf)) {
     return res.status(400).json({ error: "Invalid tf" });

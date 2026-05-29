@@ -34,6 +34,7 @@ import {
   isRepairInProgress, validateRepairWindow,
 } from "../../lib/repairJobs.js";
 import { getHealerActivities } from "../../lib/healerStatus.js";
+import { isDemoMode, readCap } from "../../lib/demoMode.js";
 import { logError } from "../../lib/log.js";
 
 const router = Router();
@@ -60,7 +61,7 @@ router.get("/candles", ...view, async (req, res) => {
   if (!endingAt) return res.status(400).json({ error: "endingAt required" });
   const end = new Date(endingAt);
   if (isNaN(end.getTime())) return res.status(400).json({ error: "Invalid endingAt" });
-  const count = Math.min(parseInt(limit, 10) || 500, 2000);
+  const count = Math.min(parseInt(limit, 10) || 500, await readCap(2000));
   const currency = (req.query.currency as string)?.toUpperCase() || "BTC";
   try {
     const candles = await getCandles({ currency, tf, endingAt: end, limit: count });
@@ -75,7 +76,7 @@ router.get("/candles", ...view, async (req, res) => {
 router.get("/candles/latest", ...view, async (req, res) => {
   const { tf, n } = req.query as Record<string, string>;
   if (!tf || !VALID_TFS.includes(tf)) return res.status(400).json({ error: "Invalid tf" });
-  const count = Math.min(parseInt(n, 10) || 1, 5000);
+  const count = Math.min(parseInt(n, 10) || 1, await readCap(5000));
   const currency = (req.query.currency as string)?.toUpperCase() || "BTC";
   try {
     const candles = await getCandles({ currency, tf, endingAt: new Date(), limit: count });
@@ -474,8 +475,7 @@ router.get("/me", ...view, async (req, res) => {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: "Not authenticated" });
   const perms = await getPermissionsForUser(userId);
-  const isDemo = (await getSetting("IS_DEMO")) === "true" || process.env.IS_DEMO === "true";
-  return res.json({ perms, isDemo });
+  return res.json({ perms, isDemo: await isDemoMode() });
 });
 
 /** GET /monitor/service-events */

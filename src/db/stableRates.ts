@@ -2,11 +2,15 @@
  * Per-venue local USDT/USD rate archive. See plan:
  * candleserv-stablecoin-aware-index §Phase 1.
  *
- * Rows here are FK-bound to candles_1m_sources(timestamp, source). The
- * collector writes both halves of every venue bundle in a single transaction
- * via withTransaction — the SQL below is the canonical shape, but the live
- * write path inlines it inside the transaction (see collector.ts) so it
- * shares a connection with the BTC insert.
+ * This table is currency-agnostic (peg is per-venue, asset-independent). The FK
+ * to candles_1m_sources(timestamp, source) was dropped under multi-currency
+ * D-STABLE-FK — once that PK gained "currency", (timestamp, source) was no
+ * longer a unique target. The soft invariant (a rate row implies ≥1 currency
+ * was fetched from that venue that minute) is held by collector ordering, not a
+ * constraint. The collector writes both halves of every venue bundle in a
+ * single transaction via withTransaction — the SQL below is the canonical
+ * shape, but the live write path inlines it inside the transaction (see
+ * collector.ts) so it shares a connection with the candle insert.
  */
 import type { PoolClient, QueryResult } from "pg";
 import { query } from "./pool.js";
@@ -70,9 +74,10 @@ export async function getStableRatesAt(ts: Date): Promise<Map<string, number>> {
 
 /**
  * Drop rows older than 180 days. Matches pruneSourceCandles retention.
- * ON DELETE CASCADE on candles_1m_sources also fires this implicitly when
- * the BTC archive prunes — this call is the symmetric direct path, harmless
- * to run because the cascade would already have removed the orphans.
+ * This is now the SOLE prune path: the FK to candles_1m_sources (and its
+ * ON DELETE CASCADE) was dropped under multi-currency D-STABLE-FK, so nothing
+ * removes stale rate rows implicitly anymore — this must run in the daily
+ * maintenance loop or rates accumulate unbounded.
  */
 export async function pruneOldStableRates(): Promise<void> {
   await query(

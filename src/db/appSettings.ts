@@ -42,6 +42,12 @@ export async function getSettingInt(key: string, fallback: number): Promise<numb
   return isNaN(n) ? fallback : n;
 }
 
+export async function getSettingBool(key: string, fallback: boolean): Promise<boolean> {
+  const val = await getSetting(key);
+  if (val === null) return fallback;
+  return val === "true";
+}
+
 export async function setSetting(key: string, value: string): Promise<void> {
   await query(
     `INSERT INTO app_settings (key, value, "updatedAt") VALUES ($1, $2, NOW())
