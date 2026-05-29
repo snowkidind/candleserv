@@ -9,6 +9,7 @@ import {
 } from "@/lib/api";
 import RepairRangePanel from "./-RepairRangePanel";
 import { isDemo } from "@/lib/demo";
+import { useCanModify } from "@/lib/access";
 
 // ── healer activity card ─────────────────────────────────────────────────────
 
@@ -203,6 +204,7 @@ function ApiKeysSection() {
 
 function ConfigSection() {
   const qc = useQueryClient();
+  const ro = !useCanModify();
   const { data } = useQuery({ queryKey: ["config"], queryFn: getConfig });
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState(false);
@@ -236,7 +238,8 @@ function ConfigSection() {
             <input
               value={draft[key] ?? settings[key] ?? ""}
               onChange={e => setDraft(d => ({ ...d, [key]: e.target.value }))}
-              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 outline-none focus:border-blue-500"
+              disabled={ro}
+              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 outline-none focus:border-blue-500 disabled:opacity-60"
             />
             <p className="text-xs text-gray-600 mt-1">{hint}</p>
           </div>
@@ -250,6 +253,7 @@ function ConfigSection() {
               type="checkbox"
               checked={(draft.rateLimitEnabled ?? settings.rateLimitEnabled) === "true"}
               onChange={e => setDraft(d => ({ ...d, rateLimitEnabled: e.target.checked ? "true" : "false" }))}
+              disabled={ro}
             />
             Rate-limit demo reads
           </label>
@@ -259,7 +263,8 @@ function ConfigSection() {
               type="number"
               value={draft.rateLimitPerMinute ?? settings.rateLimitPerMinute ?? ""}
               onChange={e => setDraft(d => ({ ...d, rateLimitPerMinute: e.target.value }))}
-              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 outline-none focus:border-blue-500"
+              disabled={ro}
+              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 outline-none focus:border-blue-500 disabled:opacity-60"
             />
             <p className="text-xs text-gray-600 mt-1">
               Only active when IS_DEMO. Sliding 60s window per client IP over the public read paths.
@@ -270,7 +275,7 @@ function ConfigSection() {
         <div className="flex items-center gap-3 pt-1">
           <button
             onClick={() => save.mutate()}
-            disabled={!Object.keys(draft).length || save.isPending}
+            disabled={ro || !Object.keys(draft).length || save.isPending}
             className="px-4 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded transition-colors"
           >
             Save
@@ -286,6 +291,7 @@ function ConfigSection() {
 
 function RateLimitsSection() {
   const qc = useQueryClient();
+  const ro = !useCanModify();
   const { data } = useQuery({ queryKey: ["rate-limits"], queryFn: getRateLimits });
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState(false);
@@ -332,8 +338,9 @@ function RateLimitsSection() {
                     min={0}
                     defaultValue={r.overrideMs ?? ""}
                     placeholder={String(r.defaultMs)}
+                    disabled={ro}
                     onChange={(e) => setDraft((d) => ({ ...d, [r.source]: e.target.value }))}
-                    className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-200 w-24"
+                    className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-200 w-24 disabled:opacity-60"
                   />
                 </td>
               </tr>
@@ -344,7 +351,7 @@ function RateLimitsSection() {
       <div className="flex items-center gap-3">
         <button
           onClick={() => save.mutate()}
-          disabled={!Object.keys(draft).length || save.isPending}
+          disabled={ro || !Object.keys(draft).length || save.isPending}
           className="px-4 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded transition-colors"
         >
           Save
@@ -473,7 +480,11 @@ function RuntimeSection() {
   });
 
   const w = api?.windows[win];
+  // Demo (public) hides visitor/operational counts behind blank placeholders;
+  // an authed view-only user may read them (GET /runtime is view-gated).
   const ro = isDemo();
+  // Flush actions are modify-gated — shown only to a viewer who may mutate.
+  const canModify = useCanModify();
   const chips = (m: Record<string, number> | undefined) =>
     Object.entries(m ?? {}).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join("  ") || "—";
 
@@ -501,8 +512,8 @@ function RuntimeSection() {
         ) : <p className="text-xs text-gray-600">Loading…</p>}
       </div>
 
-      {/* actions — mutations, hidden in read-only demo */}
-      {!isDemo() && (
+      {/* actions — mutations, shown only with modify access */}
+      {canModify && (
       <div className="flex items-center gap-3 flex-wrap">
         <button
           onClick={() => cacheFlush.mutate()}
@@ -575,13 +586,18 @@ function RuntimeSection() {
 const SUBTABS = ["API Keys", "Healer / Repair", "Config", "Runtime", "Audit"] as const;
 type SubTab = typeof SUBTABS[number];
 
-// Read-only demo placeholder for panels whose reads are denied (secrets) or whose
-// only content is mutation controls.
+// Placeholder for panels the current viewer can't read. Two reasons, two
+// messages: the public demo denies secrets outright; an authed view-only user is
+// simply missing modify access (the backend read itself is modify-gated, e.g.
+// API keys). `isDemo()` distinguishes the two.
 function LockedCard({ title }: { title: string }) {
+  const msg = isDemo()
+    ? "Not available in the public demo"
+    : "Requires modify access";
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-lg p-6">
       <h2 className="text-sm font-medium text-gray-300 mb-1">{title}</h2>
-      <p className="text-xs text-gray-600">🔒 Not available in the public demo</p>
+      <p className="text-xs text-gray-600">🔒 {msg}</p>
     </div>
   );
 }
@@ -590,7 +606,16 @@ export default function AdminTab() {
   const { data: sources } = useQuery({ queryKey: ["sources", "status"], queryFn: getSourcesStatus });
   const sourceNames = Object.keys(sources?.sources ?? {});
   const [sub, setSub] = useState<SubTab>("API Keys");
-  const ro = isDemo();
+  const canModify = useCanModify();
+  const demo = isDemo();
+
+  // Two independent gates, matching the backend route guards:
+  //  • noModify — API keys + repair are modify-gated *reads/actions*; locked for
+  //    any viewer without CAN_MODIFY (demo AND authed view-only).
+  //  • demo — config + audit are view-gated (an authed view-only user CAN read
+  //    them) but secret-bearing, so the public demo denies them. View-only sees
+  //    them read-only; mutation controls inside gate on canModify themselves.
+  const noModify = !canModify;
 
   return (
     <div className="p-4">
@@ -609,23 +634,21 @@ export default function AdminTab() {
       </div>
 
       <div className="max-w-3xl">
-        {/* In demo: secret reads (keys/config/audit) are locked; Healer status +
-            Runtime stats show read-only (mutation controls hidden); Repair locked. */}
-        {sub === "API Keys" && (ro ? <LockedCard title="API Keys" /> : <ApiKeysSection />)}
+        {sub === "API Keys" && (noModify ? <LockedCard title="API Keys" /> : <ApiKeysSection />)}
         {sub === "Healer / Repair" && (
           <div className="space-y-6">
             <HealerStatusCard />
-            {ro ? <LockedCard title="Repair Range" /> : <RepairRangePanel sourceNames={sourceNames} />}
+            {noModify ? <LockedCard title="Repair Range" /> : <RepairRangePanel sourceNames={sourceNames} />}
           </div>
         )}
-        {sub === "Config" && (ro ? <LockedCard title="Configuration" /> : (
+        {sub === "Config" && (demo ? <LockedCard title="Configuration" /> : (
           <div className="space-y-8">
             <ConfigSection />
             <RateLimitsSection />
           </div>
         ))}
         {sub === "Runtime" && <RuntimeSection />}
-        {sub === "Audit"  && (ro ? <LockedCard title="Audit Log" /> : <AuditSection />)}
+        {sub === "Audit"  && (demo ? <LockedCard title="Audit Log" /> : <AuditSection />)}
       </div>
     </div>
   );

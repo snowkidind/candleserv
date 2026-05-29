@@ -4,6 +4,7 @@ import {
   getAdminActions,
 } from "@/lib/api";
 import type { CurrencyInfo, AdminActionRow } from "@/lib/api";
+import { useCanModify } from "@/lib/access";
 
 // Stable venue order for the feed table.
 const SOURCES = ["binance", "bybit", "kraken", "coinbase", "bitfinex", "okx", "gate", "bitget"];
@@ -19,6 +20,9 @@ function ago(iso: string): string {
 }
 
 export default function FeedsTab() {
+  // All feed mutations are PUT /currencies/* (requirePerm CAN_MODIFY) — disable
+  // every control without that perm; the status table stays fully readable.
+  const ro = !useCanModify();
   const [currencies, setCurrencies] = useState<CurrencyInfo[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -138,6 +142,12 @@ export default function FeedsTab() {
         <div className="mb-3 px-3 py-2 rounded bg-gray-800 border border-gray-700 text-gray-200 text-xs">{toast}</div>
       )}
 
+      {ro && (
+        <div className="mb-3 px-3 py-2 rounded bg-gray-900 border border-gray-800 text-gray-500 text-xs">
+          🔒 Read-only — feed configuration requires modify access.
+        </div>
+      )}
+
       {/* Per-currency tab group */}
       <div className="flex gap-1 border-b border-gray-800 mb-4">
         {currencies.map(c => (
@@ -170,7 +180,7 @@ export default function FeedsTab() {
             <input
               type="checkbox"
               checked={cur.enabled}
-              disabled={busy || cur.code === "BTC"}
+              disabled={ro || busy || cur.code === "BTC"}
               onChange={e => toggleEnabled(cur.code, e.target.checked)}
             />
             <span className="text-gray-200">Chain enabled</span>
@@ -182,7 +192,7 @@ export default function FeedsTab() {
               <input
                 type="checkbox"
                 checked={cur.premiumEnabled}
-                disabled={busy}
+                disabled={ro || busy}
                 onChange={e => togglePremium(cur.code, e.target.checked)}
               />
               <span className="text-gray-200">Premium-offset correction</span>
@@ -199,7 +209,7 @@ export default function FeedsTab() {
               min={1}
               defaultValue={cur.minSources ?? ""}
               placeholder="(global default)"
-              disabled={busy}
+              disabled={ro || busy}
               key={`${cur.code}:${cur.minSources}`}
               onBlur={e => changeMinSources(cur.code, e.target.value)}
               className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-gray-200 w-36 text-xs"
@@ -235,7 +245,7 @@ export default function FeedsTab() {
               <h3 className="text-gray-300">Exchange feeds</h3>
               <button
                 onClick={() => probe(cur.code)}
-                disabled={busy}
+                disabled={ro || busy}
                 className="px-2 py-1 text-xs rounded bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 disabled:opacity-50"
               >
                 Re-probe availability
@@ -268,7 +278,7 @@ export default function FeedsTab() {
                         <input
                           type="checkbox"
                           checked={f.enabled}
-                          disabled={busy || !f.available}
+                          disabled={ro || busy || !f.available}
                           onChange={e => toggleFeed(cur.code, src, e.target.checked)}
                         />
                       </td>

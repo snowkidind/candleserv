@@ -1,8 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { CandleStreamProvider, useCandleStream } from "@/lib/CandleStreamContext";
-import { getMe } from "@/lib/api";
-import { isDemo } from "@/lib/demo";
+import { AccessProvider } from "@/lib/access";
 import CandlesTab from "@/routes/monitor/-CandlesTab";
 import ConnectionsTab from "@/routes/monitor/-ConnectionsTab";
 import FeedsTab from "@/routes/monitor/-FeedsTab";
@@ -12,47 +11,31 @@ import AdminTab from "@/routes/monitor/-AdminTab";
 
 export const Route = createFileRoute("/")({ component: MonitorPage });
 
+// The full tab group always renders for everyone (demo, view-only, and modify
+// users alike). Visibility is NOT the access boundary — each tab shows its data
+// read-only and gates its mutation controls on `useCanModify()` (lib/access),
+// which mirrors the backend's requirePerm guards. Reads denied to a given viewer
+// (e.g. API keys, or secrets in demo) fall back to a locked placeholder in-tab.
 const ALL_TABS = ["Candles", "Connections", "Feeds", "Errors", "Events", "Admin"] as const;
 type Tab = typeof ALL_TABS[number];
 
-// Tabs that mutate state are gated on CAN_MODIFY_CANDLESERV (finding B5),
-// consistent with the requirePerm guards on their backing routes.
-const MODIFY_TABS = new Set<Tab>(["Connections", "Feeds", "Admin"]);
-// View-only fallback set (also used if /monitor/me errors).
-const VIEW_TABS = ALL_TABS.filter(t => !MODIFY_TABS.has(t));
-
 function MonitorPage() {
   return (
-    <CandleStreamProvider>
-      <MonitorContent />
-    </CandleStreamProvider>
+    <AccessProvider>
+      <CandleStreamProvider>
+        <MonitorContent />
+      </CandleStreamProvider>
+    </AccessProvider>
   );
 }
 
 function MonitorContent() {
   const [tab, setTab] = useState<Tab>("Candles");
-  const [tabs, setTabs] = useState<Tab[]>([...VIEW_TABS]);
+  const tabs = ALL_TABS;
   const { newCandleTick } = useCandleStream();
   const [hasNewCandle, setHasNewCandle] = useState(false);
   const prevTick = useRef(newCandleTick);
   const dotTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Resolve which tabs to show from the permission map (B5). Demo → Candles only.
-  // In demo there's no session, so /monitor/me would 401 — read the injected
-  // flag instead and skip the call.
-  useEffect(() => {
-    // Demo is a public feed-observer: show the read-only observability tabs,
-    // hide the mutation surfaces (Feeds, Admin). Connections hides its own
-    // mutation controls in demo (see -ConnectionsTab).
-    if (isDemo()) { setTabs(["Candles", "Connections", "Errors", "Events", "Admin"]); return; }
-    getMe()
-      .then(me => {
-        if (me.isDemo) { setTabs(["Candles"]); return; }
-        const canModify = !!me.perms.CAN_MODIFY_CANDLESERV;
-        setTabs(canModify ? [...ALL_TABS] : [...VIEW_TABS]);
-      })
-      .catch(() => setTabs([...VIEW_TABS]));
-  }, []);
 
   useEffect(() => {
     if (newCandleTick === prevTick.current) return;

@@ -35,6 +35,7 @@ import {
 } from "../../lib/repairJobs.js";
 import { getHealerActivities } from "../../lib/healerStatus.js";
 import { isDemoMode, readCap } from "../../lib/demoMode.js";
+import { redisGet, redisSet, boundaryTtl } from "../../lib/redis.js";
 import { recordApiRequest, apiStatsSnapshot } from "../../lib/apiCounter.js";
 import { buildRuntimeSnapshot, flushCandleCache } from "../../lib/runtimeStats.js";
 import { deleteAllSessions } from "../../db/sessions.js";
@@ -67,8 +68,19 @@ router.get("/candles", ...view, async (req, res) => {
   const count = Math.min(parseInt(limit, 10) || 500, await readCap(2000));
   const currency = (req.query.currency as string)?.toUpperCase() || "BTC";
   try {
+    // Public demo serves these reads (it 403s /v1, where the cache normally
+    // lives), so cache them here to absorb public load — reusing the /v1
+    // candles:* key scheme + boundaryTtl, so the existing flush covers both.
+    // Authed admins skip the cache and always read fresh from the DB.
+    const cacheKey = `candles:${currency}:${tf}:${end.getTime()}:${count}`;
+    if (req.demoRead) {
+      const cached = await redisGet(cacheKey);
+      if (cached) return res.json(JSON.parse(cached));
+    }
     const candles = await getCandles({ currency, tf, endingAt: end, limit: count });
-    return res.json({ candles });
+    const payload = { candles };
+    if (req.demoRead) await redisSet(cacheKey, JSON.stringify(payload), boundaryTtl(tf, end));
+    return res.json(payload);
   } catch (err) {
     logError("[monitor] GET /candles failed:", err);
     return res.status(500).json({ error: String(err) });
@@ -82,8 +94,17 @@ router.get("/candles/latest", ...view, async (req, res) => {
   const count = Math.min(parseInt(n, 10) || 1, await readCap(5000));
   const currency = (req.query.currency as string)?.toUpperCase() || "BTC";
   try {
+    // Demo-only cache (see GET /candles above): absorbs public load on the
+    // latest-candle poll. Authed admins read fresh.
+    const cacheKey = `candles:latest:${currency}:${tf}:${count}`;
+    if (req.demoRead) {
+      const cached = await redisGet(cacheKey);
+      if (cached) return res.json(JSON.parse(cached));
+    }
     const candles = await getCandles({ currency, tf, endingAt: new Date(), limit: count });
-    return res.json({ candles });
+    const payload = { candles };
+    if (req.demoRead) await redisSet(cacheKey, JSON.stringify(payload), boundaryTtl(tf));
+    return res.json(payload);
   } catch (err) {
     logError("[monitor] GET /candles/latest failed:", err);
     return res.status(500).json({ error: String(err) });

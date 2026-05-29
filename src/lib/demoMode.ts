@@ -26,15 +26,18 @@ export const DEMO_READ_CAP = 200;
 const TOKEN_TTL_MS = 6 * 60 * 60 * 1000; // 6h
 
 /**
- * The exact set of paths the public may read in demo. Everything else under
- * /monitor stays session-only (login is hidden → unreachable); /v1 is 403'd.
- * Errors and operational/admin reads are deliberately NOT here — they'd leak
- * internal state.
+ * Demo is a full READ-ONLY mirror of the admin view: every GET under /monitor is
+ * public-readable EXCEPT these secret-bearing reads, which stay denied (greying a
+ * control doesn't help if the secret is on screen). All mutations (non-GET) and
+ * all /v1 are denied wholesale in demoGate.
+ *
+ * ⚠ POLARITY: this is a DENY-list, so /monitor GETs are PUBLIC BY DEFAULT in
+ * demo. Any NEW GET route added under /monitor is exposed to the public the
+ * moment it ships. If a new route returns anything secret/sensitive (credentials,
+ * PII, operator identity, internal addresses), you MUST add its path here — or
+ * redact at the handler gated on `req.demoRead`. Default-open is intentional
+ * (feed-health IS the product) but it puts the burden on the route author.
  */
-// Demo is a full READ-ONLY mirror of the admin view: every /monitor GET is
-// public-readable EXCEPT these secret-bearing reads, which stay denied (greying a
-// control doesn't help if the secret is on screen). All mutations (non-GET) are
-// denied wholesale in demoGate.
 const DEMO_READ_DENY = new Set<string>([
   "/monitor/config",         // redisUrl + any secret-flagged settings
   "/monitor/admin/keys",     // API key material

@@ -6,7 +6,7 @@ import {
   type SourceStatus,
 } from "@/lib/api";
 import { useCandleStream } from "@/lib/CandleStreamContext";
-import { isDemo } from "@/lib/demo";
+import { useCanModify } from "@/lib/access";
 import SourceHistoryModal from "./-SourceHistoryModal";
 
 // Local-storage key for dismissing auto-suspend banners on a per-(source, ts) basis
@@ -380,6 +380,8 @@ function SourceCard({
 // ── ConnectionsTab ───────────────────────────────────────────────────────────
 
 export default function ConnectionsTab() {
+  const canModify = useCanModify();
+  const readOnly = !canModify;
   const [healing, setHealing] = useState(false);
   const [historySource, setHistorySource] = useState<string | null>(null);
   // External-prefill nonce lets the editor re-react to the same source being clicked twice.
@@ -436,18 +438,18 @@ export default function ConnectionsTab() {
 
   return (
     <div className="p-4 space-y-4">
-      {/* Auto-suspend banner — read-only in demo (re-include CTA hidden). */}
+      {/* Auto-suspend banner — read-only without modify perm (re-include CTA hidden). */}
       {sources?.sources && (
         <AutoSuspendBanner
           sources={sources.sources}
           onPrefillReinclude={(source) => setPrefill({ source, nonce: Date.now() })}
-          readOnly={isDemo()}
+          readOnly={readOnly}
         />
       )}
 
-      {/* Live formula editor — venue kill-switch. Read-only in demo: the source
-          included/excluded status stays visible, the toggles + save are inert. */}
-      <LiveFormulaEditor sourceNames={sourceNames} externalPrefill={prefill} readOnly={isDemo()} />
+      {/* Live formula editor — venue kill-switch. Read-only without modify perm:
+          the source included/excluded status stays visible, toggles + save inert. */}
+      <LiveFormulaEditor sourceNames={sourceNames} externalPrefill={prefill} readOnly={readOnly} />
 
       {/* Stats row */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -484,7 +486,7 @@ export default function ConnectionsTab() {
         </span>
         <button
           onClick={heal}
-          disabled={healing || isDemo()}
+          disabled={healing || readOnly}
           className="px-4 py-2 text-sm bg-gray-800 hover:bg-gray-700 disabled:bg-gray-900 disabled:text-gray-600 text-gray-200 rounded-lg transition-colors"
         >
           {healing ? "Healing…" : "Run heal scan"}
