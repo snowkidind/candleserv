@@ -1,3 +1,20 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/*
+ * Light mode (lib/theme.ts). The app is hardcoded-dark Tailwind, so light mode
+ * inverts the whole page once on <html>, then counter-inverts media + the chart
+ * canvas so images and candle colors stay true-color. Cheap, no per-component
+ * retheme; the chart panel keeps its own dark background by design.
+ */
+html.light {
+  filter: invert(1) hue-rotate(180deg);
+  background: #ffffff;
+}
+html.light img,
+html.light video,
+html.light canvas,
+html.light svg {
+  filter: invert(1) hue-rotate(180deg);
+}

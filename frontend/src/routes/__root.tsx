@@ -1,14 +1,22 @@
 import { createRootRoute, Outlet, useNavigate } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getHealth, logout, ping } from "@/lib/api";
 import { isDemo } from "@/lib/demo";
+import { getTheme, setTheme, type Theme } from "@/lib/theme";
 
 export const Route = createRootRoute({ component: RootLayout });
 
 function RootLayout() {
   const navigate = useNavigate();
   const demo = isDemo();
+  const [theme, setThemeState] = useState<Theme>(getTheme);
+
+  const toggleTheme = () => {
+    const next: Theme = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    setThemeState(next);
+  };
 
   // Keep session alive — ping every 4 minutes. Skipped in demo (no session).
   // If the session has been lost, the 401 handler in api.ts redirects to /login.
@@ -56,16 +64,25 @@ function RootLayout() {
             <span className="text-xs text-gray-500 ml-2">latest {latestTs}</span>
           )}
         </div>
-        {demo ? (
-          <span className="text-xs text-gray-600">demo</span>
-        ) : (
+        <div className="flex items-center gap-3">
           <button
-            onClick={handleLogout}
+            onClick={toggleTheme}
+            title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
             className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
           >
-            logout
+            {theme === "dark" ? "☀ light" : "🌙 dark"}
           </button>
-        )}
+          {demo ? (
+            <span className="text-xs text-gray-600">demo</span>
+          ) : (
+            <button
+              onClick={handleLogout}
+              className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+            >
+              logout
+            </button>
+          )}
+        </div>
       </header>
       <main className="flex-1 overflow-hidden">
         <Outlet />
