@@ -1,28 +1,33 @@
 /**
- * Light/dark theme toggle, persisted in localStorage (per-browser, no backend).
- *
- * The UI is built entirely in hardcoded-dark Tailwind utility classes, so rather
- * than retheme every component we flip a single `light` class on <html> and let
- * CSS invert the page (see index.css). The chart canvas + media are counter-
- * inverted there so candle colors stay true.
+ * Theme selection, persisted in localStorage. Each theme is a real palette
+ * defined as CSS variables in index.css (the gray scale) — no color inversion.
+ * Applied via <html data-theme="…">. Built to scale past two themes: add a name
+ * to THEMES + a `[data-theme="name"]` block in index.css (+ optional chart palette).
  */
 const KEY = "candleserv:theme";
-export type Theme = "dark" | "light";
+
+export const THEMES = ["dark", "dim", "light"] as const;
+export type Theme = (typeof THEMES)[number];
 
 export function getTheme(): Theme {
-  return localStorage.getItem(KEY) === "light" ? "light" : "dark";
+  const t = localStorage.getItem(KEY);
+  return (THEMES as readonly string[]).includes(t ?? "") ? (t as Theme) : "dark";
 }
 
 export function applyTheme(t: Theme): void {
-  document.documentElement.classList.toggle("light", t === "light");
+  document.documentElement.dataset.theme = t;
 }
 
 export function setTheme(t: Theme): void {
   localStorage.setItem(KEY, t);
   applyTheme(t);
-  // Let canvas-based views (the chart) re-theme themselves — they can't rely on
-  // the CSS invert and must reconfigure their own palette.
+  // Canvas views (the chart) set their own palette and listen for this.
   window.dispatchEvent(new Event("themechange"));
+}
+
+/** Next theme in the cycle — drives the header toggle (works for N themes). */
+export function nextTheme(t: Theme): Theme {
+  return THEMES[(THEMES.indexOf(t) + 1) % THEMES.length];
 }
 
 /** Apply the stored theme before first paint (called from main.tsx). */

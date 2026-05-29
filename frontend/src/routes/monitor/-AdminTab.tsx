@@ -8,6 +8,7 @@ import {
   type ApiKey,
 } from "@/lib/api";
 import RepairRangePanel from "./-RepairRangePanel";
+import { isDemo } from "@/lib/demo";
 
 // ── healer activity card ─────────────────────────────────────────────────────
 
@@ -441,6 +442,17 @@ function Stat({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
+// Muted placeholder occupying a hidden stat's slot in demo — keeps the grid full
+// and alludes to more behind login, without revealing the metric.
+function BlankStat() {
+  return (
+    <div className="bg-gray-900/60 border border-gray-800/60 rounded px-3 py-2 opacity-70">
+      <div className="text-xs text-gray-600">login</div>
+      <div className="text-sm text-gray-700 font-mono">•••</div>
+    </div>
+  );
+}
+
 function RuntimeSection() {
   const qc = useQueryClient();
   const { data: rt } = useQuery({ queryKey: ["runtime"], queryFn: getRuntime, refetchInterval: 10_000 });
@@ -461,6 +473,7 @@ function RuntimeSection() {
   });
 
   const w = api?.windows[win];
+  const ro = isDemo();
   const chips = (m: Record<string, number> | undefined) =>
     Object.entries(m ?? {}).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join("  ") || "—";
 
@@ -475,23 +488,26 @@ function RuntimeSection() {
             <Stat label="demo mode" value={String(rt.demoMode)} />
             <Stat label="heap used / total" value={`${mb(rt.memory.heapUsed)} / ${mb(rt.memory.heapTotal)}`} />
             <Stat label="rss" value={mb(rt.memory.rss)} />
-            <Stat label="demo tokens" value={rt.demo.tokenBudgetEntries} />
-            <Stat label="rate-limit IPs (read/page)" value={`${rt.demo.readRateLimitIps} / ${rt.demo.pageRateLimitIps}`} />
+            {/* demo-token / rate-limit-IP / session counts are visitor/operational
+                info — replaced with blank placeholders in demo. */}
+            {ro ? <BlankStat /> : <Stat label="demo tokens" value={rt.demo.tokenBudgetEntries} />}
+            {ro ? <BlankStat /> : <Stat label="rate-limit IPs (read/page)" value={`${rt.demo.readRateLimitIps} / ${rt.demo.pageRateLimitIps}`} />}
             <Stat label="SSE clients" value={rt.live.sseClients} />
             <Stat label="lastClose map" value={rt.live.lastCloseEntries} />
             <Stat label="backfilling" value={String(rt.live.backfillRunning)} />
-            <Stat label="sessions (authed)" value={`${rt.sessions.total} (${rt.sessions.authenticated})`} />
+            {ro ? <BlankStat /> : <Stat label="sessions (authed)" value={`${rt.sessions.total} (${rt.sessions.authenticated})`} />}
             <Stat label="redis" value={rt.redis.available ? "connected" : "unavailable"} />
           </div>
         ) : <p className="text-xs text-gray-600">Loading…</p>}
       </div>
 
-      {/* actions */}
+      {/* actions — mutations, hidden in read-only demo */}
+      {!isDemo() && (
       <div className="flex items-center gap-3 flex-wrap">
         <button
           onClick={() => cacheFlush.mutate()}
           disabled={cacheFlush.isPending}
-          className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white rounded"
+          className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-gray-50 rounded"
         >Flush candle cache</button>
 
         {!confirmSessions ? (
@@ -509,6 +525,7 @@ function RuntimeSection() {
         )}
         {note && <span className="text-xs text-gray-400">{note}</span>}
       </div>
+      )}
 
       {/* outgoing API counters */}
       <div>
@@ -558,10 +575,22 @@ function RuntimeSection() {
 const SUBTABS = ["API Keys", "Healer / Repair", "Config", "Runtime", "Audit"] as const;
 type SubTab = typeof SUBTABS[number];
 
+// Read-only demo placeholder for panels whose reads are denied (secrets) or whose
+// only content is mutation controls.
+function LockedCard({ title }: { title: string }) {
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-lg p-6">
+      <h2 className="text-sm font-medium text-gray-300 mb-1">{title}</h2>
+      <p className="text-xs text-gray-600">🔒 Not available in the public demo</p>
+    </div>
+  );
+}
+
 export default function AdminTab() {
   const { data: sources } = useQuery({ queryKey: ["sources", "status"], queryFn: getSourcesStatus });
   const sourceNames = Object.keys(sources?.sources ?? {});
   const [sub, setSub] = useState<SubTab>("API Keys");
+  const ro = isDemo();
 
   return (
     <div className="p-4">
@@ -571,7 +600,7 @@ export default function AdminTab() {
             key={t}
             onClick={() => setSub(t)}
             className={`px-3 py-2 text-xs border-b-2 transition-colors ${
-              sub === t ? "border-blue-500 text-white" : "border-transparent text-gray-500 hover:text-gray-300"
+              sub === t ? "border-blue-500 text-gray-50" : "border-transparent text-gray-500 hover:text-gray-300"
             }`}
           >
             {t}
@@ -580,21 +609,23 @@ export default function AdminTab() {
       </div>
 
       <div className="max-w-3xl">
-        {sub === "API Keys" && <ApiKeysSection />}
+        {/* In demo: secret reads (keys/config/audit) are locked; Healer status +
+            Runtime stats show read-only (mutation controls hidden); Repair locked. */}
+        {sub === "API Keys" && (ro ? <LockedCard title="API Keys" /> : <ApiKeysSection />)}
         {sub === "Healer / Repair" && (
           <div className="space-y-6">
             <HealerStatusCard />
-            <RepairRangePanel sourceNames={sourceNames} />
+            {ro ? <LockedCard title="Repair Range" /> : <RepairRangePanel sourceNames={sourceNames} />}
           </div>
         )}
-        {sub === "Config" && (
+        {sub === "Config" && (ro ? <LockedCard title="Configuration" /> : (
           <div className="space-y-8">
             <ConfigSection />
             <RateLimitsSection />
           </div>
-        )}
+        ))}
         {sub === "Runtime" && <RuntimeSection />}
-        {sub === "Audit"  && <AuditSection />}
+        {sub === "Audit"  && (ro ? <LockedCard title="Audit Log" /> : <AuditSection />)}
       </div>
     </div>
   );

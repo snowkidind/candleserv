@@ -28,7 +28,7 @@ function LoginPage() {
   return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center">
       <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 w-80">
-        <h1 className="text-white font-semibold text-lg mb-1">Candleserv</h1>
+        <h1 className="text-gray-50 font-semibold text-lg mb-1">Candleserv</h1>
         <p className="text-gray-500 text-xs mb-6">Monitor login</p>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -37,7 +37,7 @@ function LoginPage() {
               type="email"
               value={email}
               onChange={e => setEmail(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-50 focus:outline-none focus:border-blue-500"
               required
               autoFocus
             />
@@ -48,7 +48,7 @@ function LoginPage() {
               type="password"
               value={password}
               onChange={e => setPassword(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-50 focus:outline-none focus:border-blue-500"
               required
             />
           </div>

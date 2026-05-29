@@ -41,7 +41,10 @@ function MonitorContent() {
   // In demo there's no session, so /monitor/me would 401 — read the injected
   // flag instead and skip the call.
   useEffect(() => {
-    if (isDemo()) { setTabs(["Candles"]); return; }
+    // Demo is a public feed-observer: show the read-only observability tabs,
+    // hide the mutation surfaces (Feeds, Admin). Connections hides its own
+    // mutation controls in demo (see -ConnectionsTab).
+    if (isDemo()) { setTabs(["Candles", "Connections", "Errors", "Events", "Admin"]); return; }
     getMe()
       .then(me => {
         if (me.isDemo) { setTabs(["Candles"]); return; }
@@ -75,7 +78,7 @@ function MonitorContent() {
             onClick={() => handleTabChange(t)}
             className={`relative px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
               tab === t
-                ? "border-blue-500 text-white"
+                ? "border-blue-500 text-gray-50"
                 : "border-transparent text-gray-500 hover:text-gray-300"
             }`}
           >

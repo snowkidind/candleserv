@@ -31,16 +31,14 @@ const TOKEN_TTL_MS = 6 * 60 * 60 * 1000; // 6h
  * Errors and operational/admin reads are deliberately NOT here — they'd leak
  * internal state.
  */
-// candleserv's frontend is a feed-integrity OBSERVER — gaps, errors, and source
-// health are the product's point, not internal secrets to hide. So the public
-// demo read set includes the data-quality surfaces, not just price.
-const DEMO_READ_PATHS = new Set<string>([
-  "/monitor/candles",
-  "/monitor/candles/latest",
-  "/monitor/candles/stream",
-  "/monitor/gaps",
-  "/monitor/errors",
-  "/monitor/currencies",
+// Demo is a full READ-ONLY mirror of the admin view: every /monitor GET is
+// public-readable EXCEPT these secret-bearing reads, which stay denied (greying a
+// control doesn't help if the secret is on screen). All mutations (non-GET) are
+// denied wholesale in demoGate.
+const DEMO_READ_DENY = new Set<string>([
+  "/monitor/config",         // redisUrl + any secret-flagged settings
+  "/monitor/admin/keys",     // API key material
+  "/monitor/admin/actions",  // audit log — operator emails + api-key IDs in target/detail
 ]);
 
 /**
@@ -60,8 +58,11 @@ export async function readCap(normalCap: number): Promise<number> {
 }
 
 /** True iff this is a GET request to one of the public demo read paths. */
+/** A demo-allowed read: any /monitor GET that isn't a secret-bearing path. */
 export function isDemoReadPath(req: Request): boolean {
-  return req.method === "GET" && DEMO_READ_PATHS.has(req.path);
+  return req.method === "GET"
+    && req.path.startsWith("/monitor/")
+    && !DEMO_READ_DENY.has(req.path);
 }
 
 function tokenSecret(): string {

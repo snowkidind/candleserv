@@ -6,7 +6,7 @@ import { getStreamEvents } from "../../db/streamEvents.js";
 import { getAllSettings, getSetting, getSettingMeta, setSetting } from "../../db/appSettings.js";
 import { getPermissionsForUser } from "../../db/permissions.js";
 import { recordAdminAction, listAdminActions } from "../../db/adminActions.js";
-import { get24hSourceStats, getCandles, getCollectionLatencyStats, VALID_TFS } from "../../db/candles.js";
+import { get24hSourceStats, getCandles, getCollectionLatencyStats, getSourceCandles, VALID_TFS } from "../../db/candles.js";
 import { runGapScan } from "../../lib/gapDetector.js";
 import {
   getEnabledCurrencies, listCurrencies, getCurrency,
@@ -138,10 +138,41 @@ router.get("/stats", ...view, async (_req, res) => {
 });
 
 /** GET /monitor/sources/status */
-router.get("/sources/status", ...view, async (_req, res) => {
+router.get("/sources/status", ...view, async (req, res) => {
   const status = getSourceStatus();
+  if (req.demoRead) {
+    for (const s of Object.values(status)) s.excludedBy = redactActor(s.excludedBy);
+  }
   return res.json({ sources: status });
 });
+
+/**
+ * GET /monitor/sources/candles?currency=&days=7 — per-source 1m OHLCV (+peg) for
+ * the Candles-tab source hover popup. Loaded once per session (never auto-refreshed),
+ * so it's exempt from the demo read cap; the window is hard-capped at 7 days.
+ */
+router.get("/sources/candles", ...view, async (req, res) => {
+  const currency = (req.query.currency as string)?.toUpperCase() || "BTC";
+  const days = Math.min(Math.max(parseInt(req.query.days as string, 10) || 7, 1), 7);
+  const to = new Date();
+  const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);
+  try {
+    const rows = await getSourceCandles(currency, from, to);
+    return res.json({ rows });
+  } catch (err) {
+    logError("[monitor] GET /sources/candles failed:", err);
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// Strip operator identity (emails) from demo-served reads — the public demo must
+// never surface WHO did what. Preserves any non-email prefix label (e.g. "manual:").
+function redactActor(s: string | null | undefined): string | null {
+  if (!s) return s ?? null;
+  if (!s.includes("@")) return s;
+  const colon = s.indexOf(":");
+  return colon >= 0 ? `${s.slice(0, colon)}:operator` : "operator";
+}
 
 function lastChangePayload() {
   const last = getLastChange();
@@ -156,10 +187,12 @@ function lastChangePayload() {
 }
 
 /** GET /monitor/formula — current excludedSources + lastChange metadata */
-router.get("/formula", ...view, (_req, res) => {
+router.get("/formula", ...view, (req, res) => {
+  const lastChange = lastChangePayload();
+  if (lastChange && req.demoRead) lastChange.by = redactActor(lastChange.by) ?? lastChange.by;
   return res.json({
     excludedSources: getCurrentFormula().excludedSources,
-    lastChange: lastChangePayload(),
+    lastChange,
   });
 });
 

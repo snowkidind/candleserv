@@ -356,6 +356,39 @@ export async function pruneSourceCandles(): Promise<void> {
   );
 }
 
+// Per-source 1m OHLCV over a window, with each venue's peg rate joined in (null
+// for USD-native venues). Feeds the Candles-tab source-info hover popup, which is
+// 1m-only and loaded once per session. Compact field names to keep the (large,
+// load-once) payload small. `peg` is currency-agnostic (D-STABLE-FK).
+export interface SourceCandleRow {
+  t: number;          // unix seconds (bar open)
+  source: string;
+  o: number; h: number; l: number; c: number; v: number;
+  rejected: boolean;
+  peg: number | null; // USDT→USD rate for peg venues; null for USD-native
+}
+
+export async function getSourceCandles(currency: string, from: Date, to: Date): Promise<SourceCandleRow[]> {
+  const res = await query(
+    `SELECT EXTRACT(EPOCH FROM s."timestamp")::bigint AS t, s.source,
+            s.open AS o, s.high AS h, s.low AS l, s.close AS c, s.volume AS v, s.rejected,
+            r.rate AS peg
+     FROM candles_1m_sources s
+     LEFT JOIN stable_rates_1m_sources r
+       ON r."timestamp" = s."timestamp" AND r.source = s.source
+     WHERE s."currency" = $1 AND s."timestamp" >= $2 AND s."timestamp" < $3
+     ORDER BY s."timestamp" ASC, s.source ASC`,
+    [currency, from, to],
+  );
+  return res.rows.map((row: Record<string, unknown>) => ({
+    t: Number(row.t),
+    source: row.source as string,
+    o: Number(row.o), h: Number(row.h), l: Number(row.l), c: Number(row.c), v: Number(row.v),
+    rejected: row.rejected as boolean,
+    peg: row.peg == null ? null : Number(row.peg),
+  }));
+}
+
 /**
  * Returns the source with the highest total volume across the last N accepted
  * 1m source-candle rows. Used by the collector to select the dominant H/L source.

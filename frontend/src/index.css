@@ -3,25 +3,57 @@
 @tailwind utilities;
 
 /*
- * Light mode (lib/theme.ts). The app is hardcoded-dark Tailwind, so light mode
- * inverts the whole page once on <html>, then counter-inverts media + the chart
- * canvas so images and candle colors stay true-color. Cheap, no per-component
- * retheme; the chart panel keeps its own dark background by design.
+ * Theme tokens. The gray scale (tailwind.config.js) reads these CSS variables,
+ * so the whole UI re-themes by setting <html data-theme="…"> (lib/theme.ts).
+ * Each theme is a real, defined gray ramp — NO color inversion. To add a theme:
+ *   1. add a `[data-theme="name"] { --gray-*: … }` block below,
+ *   2. add the name to THEMES in lib/theme.ts,
+ *   3. (optional) add a chart palette entry in -CandlesTab CHART_THEME.
+ * Variables are space-separated RGB triplets so Tailwind's `/<alpha>` works.
  */
-html.light {
-  filter: invert(1) hue-rotate(180deg);
-  background: #ffffff;
+
+/* dark (default) — the original ramp */
+:root,
+[data-theme="dark"] {
+  --gray-50:  249 250 251;
+  --gray-100: 243 244 246;
+  --gray-200: 229 231 235;
+  --gray-300: 209 213 219;
+  --gray-400: 156 163 175;
+  --gray-500: 107 114 128;
+  --gray-600: 75 85 99;
+  --gray-700: 55 65 81;
+  --gray-800: 31 41 55;
+  --gray-900: 17 24 39;
+  --gray-950: 3 7 18;
 }
-html.light img,
-html.light video,
-html.light canvas,
-html.light svg {
-  filter: invert(1) hue-rotate(180deg);
+
+/* dim — a softer dark (GitHub-dim style): muted surfaces, not near-black, easier on the eyes */
+[data-theme="dim"] {
+  --gray-50:  230 237 243;
+  --gray-100: 205 217 229;
+  --gray-200: 198 205 213;
+  --gray-300: 173 186 199;
+  --gray-400: 144 157 171;
+  --gray-500: 118 131 144;
+  --gray-600: 84 93 104;
+  --gray-700: 68 76 86;
+  --gray-800: 55 62 71;
+  --gray-900: 45 51 59;
+  --gray-950: 34 39 46;
 }
-/* Native checkboxes/radios have no theme styling, so the page invert flips their
- * white box to black — counter-invert so they render as normal light controls.
- * (Styled inputs with their own bg-* classes invert correctly with the page.) */
-html.light input[type="checkbox"],
-html.light input[type="radio"] {
-  filter: invert(1) hue-rotate(180deg);
+
+/* light — a real reversed ramp (bg-gray-950 reads light, text-gray-100 reads dark) */
+[data-theme="light"] {
+  --gray-50:  17 24 39;
+  --gray-100: 31 41 55;
+  --gray-200: 55 65 81;
+  --gray-300: 75 85 99;
+  --gray-400: 107 114 128;
+  --gray-500: 107 114 128;
+  --gray-600: 156 163 175;
+  --gray-700: 209 213 219;
+  --gray-800: 226 232 240;
+  --gray-900: 241 245 249;
+  --gray-950: 248 250 252;
 }

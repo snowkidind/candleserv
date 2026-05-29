@@ -145,7 +145,7 @@ export default function FeedsTab() {
             key={c.code}
             onClick={() => setSelected(c.code)}
             className={`px-3 py-2 text-xs border-b-2 transition-colors ${
-              selected === c.code ? "border-blue-500 text-white" : "border-transparent text-gray-500 hover:text-gray-300"
+              selected === c.code ? "border-blue-500 text-gray-50" : "border-transparent text-gray-500 hover:text-gray-300"
             }`}
           >
             {c.code}
@@ -158,7 +158,7 @@ export default function FeedsTab() {
       {cur && (
         <div className="space-y-5 max-w-3xl">
           <div className="flex items-center gap-3">
-            <h2 className="text-lg text-white font-medium">
+            <h2 className="text-lg text-gray-50 font-medium">
               {cur.displayName} <span className="text-gray-500 text-sm">({cur.code})</span>
             </h2>
             {backfilling.has(cur.code) && (

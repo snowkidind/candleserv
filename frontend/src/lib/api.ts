@@ -223,6 +223,18 @@ export interface Gap {
   detectedAt: string; healedAt: string | null;
 }
 export const getGaps = () => req<{ gaps: Gap[] }>("/monitor/gaps");
+
+// Per-source 1m OHLCV (+ peg rate) for the Candles-tab source hover popup.
+// Loaded once per session (latest N days, default 7); never auto-refreshed.
+export interface SourceCandleRow {
+  t: number;          // unix seconds
+  source: string;
+  o: number; h: number; l: number; c: number; v: number;
+  rejected: boolean;
+  peg: number | null; // USDT→USD rate for peg venues; null for USD-native
+}
+export const getSourceCandles = (currency = "BTC", days = 7) =>
+  req<{ rows: SourceCandleRow[] }>(`/monitor/sources/candles?currency=${currency}&days=${days}`);
 export const triggerHeal = () =>
   req("/monitor/heal", { method: "POST" });
 

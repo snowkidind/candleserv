@@ -1,14 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import { createChart, IChartApi, ISeriesApi, CandlestickData, HistogramData, WhitespaceData, LineData, Time, LogicalRange, MouseEventParams } from "lightweight-charts";
 import type { Candle } from "@/lib/api";
-import { getCandlesBefore, getGaps, getErrors, getCurrencies } from "@/lib/api";
+import { getCandlesBefore, getGaps, getErrors, getCurrencies, getSourceCandles, type SourceCandleRow } from "@/lib/api";
 import { useCandleStream } from "@/lib/CandleStreamContext";
+
+// Short venue labels for the per-source hover popup (BN=binance, BFX=bitfinex …).
+const SOURCE_ABBR: Record<string, string> = {
+  binance: "BN", bybit: "BY", kraken: "KR", coinbase: "CB",
+  bitfinex: "BFX", okx: "OKX", gate: "GT", bitget: "BG",
+};
+const srcAbbr = (s: string) => SOURCE_ABBR[s] ?? s.slice(0, 3).toUpperCase();
+const fmtPrice = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 import { getTheme, type Theme } from "@/lib/theme";
 
 // The chart is a <canvas> counter-inverted out of the global light-mode CSS
 // invert, so it must carry its own palette rather than ride the page filter.
 const CHART_THEME: Record<Theme, { background: string; text: string; grid: string; border: string }> = {
   dark:  { background: "#030712", text: "#9ca3af", grid: "#111827", border: "#1f2937" },
+  dim:   { background: "#22272e", text: "#768390", grid: "#2d333b", border: "#444c56" },
   light: { background: "#ffffff", text: "#374151", grid: "#e5e7eb", border: "#d1d5db" },
 };
 
@@ -142,6 +151,16 @@ export default function CandlesTab() {
   function setMa(partial: Partial<MaSettings>) {
     setMaState(prev => { const u = { ...prev, ...partial }; saveMaSettings(u); return u; });
   }
+
+  // Per-source hover popup (1m only). Toggled by the bottom-row checkbox; the
+  // 7-day per-source dataset is fetched once per currency and cached (no refresh).
+  const [showSources, setShowSourcesState] = useState<boolean>(() => localStorage.getItem("candleserv:showSources") !== "0");
+  function setShowSources(v: boolean) { localStorage.setItem("candleserv:showSources", v ? "1" : "0"); setShowSourcesState(v); }
+  const [sourceTip, setSourceTip] = useState<{ x: number; y: number; rows: SourceCandleRow[]; composite: number | null } | null>(null);
+  const sourceData     = useRef<Map<number, SourceCandleRow[]>>(new Map()); // sec → rows
+  const sourceDataCcy  = useRef<string>("");                                 // currency the cache holds
+  const showSourcesRef = useRef(showSources);
+  useEffect(() => { showSourcesRef.current = showSources; }, [showSources]);
 
   // All loaded candles, keyed by Unix-seconds timestamp to deduplicate across
   // SSE updates and historical fetches
@@ -300,6 +319,7 @@ export default function CandlesTab() {
       if (!params.point || !params.time) {
         setOhlcLabel(null);
         setErrorTooltip(null);
+        setSourceTip(null);
         return;
       }
       const sec = params.time as number;
@@ -310,16 +330,30 @@ export default function CandlesTab() {
       if (d) setOhlcLabel({ o: d.open, h: d.high, l: d.low, c: d.close, v: v?.value ?? 0 });
       else setOhlcLabel(null);
 
-      // Error tooltip — 1m only, marked bars only.
+      // Error + per-source popups are 1m-only.
       if (tfRef.current !== "1m") {
         setErrorTooltip(null);
+        setSourceTip(null);
         return;
       }
+
+      // Error tooltip — marked bars only, and only when the cursor is in the
+      // bottom band (the volume pane, where the error squares are drawn). Keeps
+      // the error messages out of the candlestick area.
+      const chartH = chartRef.current?.clientHeight ?? 1;
+      const inErrorZone = params.point.y / chartH >= 0.75;
       const msgs = errorBars.current.get(sec);
-      if (msgs && msgs.length > 0) {
-        setErrorTooltip({ x: params.point.x, y: params.point.y, messages: msgs });
+      setErrorTooltip(inErrorZone && msgs && msgs.length > 0
+        ? { x: params.point.x, y: params.point.y, messages: msgs } : null);
+
+      // Per-source popup — only when enabled + the cache holds this currency.
+      if (showSourcesRef.current && sourceDataCcy.current === currencyRef.current) {
+        const rows = sourceData.current.get(sec);
+        setSourceTip(rows && rows.length
+          ? { x: params.point.x, y: params.point.y, rows, composite: allCloses.current.get(sec) ?? null }
+          : null);
       } else {
-        setErrorTooltip(null);
+        setSourceTip(null);
       }
     };
     instance.subscribeCrosshairMove(handleCrosshairMove);
@@ -369,6 +403,25 @@ export default function CandlesTab() {
     window.addEventListener("themechange", onThemeChange);
     return () => window.removeEventListener("themechange", onThemeChange);
   }, []);
+
+  // Lazy-load the 7-day per-source dataset once per currency when the popup is on
+  // (never auto-refreshes — hard reload to update). Grouped by minute for O(1) hover.
+  useEffect(() => {
+    if (!showSources) return;
+    if (sourceDataCcy.current === currency && sourceData.current.size) return;
+    let alive = true;
+    getSourceCandles(currency, 7).then(({ rows }) => {
+      if (!alive) return;
+      const m = new Map<number, SourceCandleRow[]>();
+      for (const r of rows) {
+        const arr = m.get(r.t);
+        if (arr) arr.push(r); else m.set(r.t, [r]);
+      }
+      sourceData.current = m;
+      sourceDataCcy.current = currency;
+    }).catch(err => console.error("[CandlesTab] getSourceCandles error:", err));
+    return () => { alive = false; };
+  }, [showSources, currency]);
 
   // ── Fetch gap ranges and service errors on TF change ────────────────────────
   useEffect(() => {
@@ -586,7 +639,7 @@ export default function CandlesTab() {
         <div className="flex items-center gap-4 ml-auto text-xs">
           {latest && (
             <>
-              <span className="text-white font-mono">${latest.close.toLocaleString()}</span>
+              <span className="text-gray-50 font-mono">${latest.close.toLocaleString()}</span>
               <span className="text-gray-500">{latest.sourceCount}/{latest.sourceCountBaseline} sources</span>
               <span className={confColor}>conf {(latest.confidence * 100).toFixed(0)}%</span>
             </>
@@ -632,6 +685,54 @@ export default function CandlesTab() {
             ))}
           </div>
         )}
+        {sourceTip && (() => {
+          const chartW = chartRef.current?.clientWidth ?? 800;
+          const onRight = sourceTip.x > chartW / 2;
+          const style = onRight
+            ? { right: chartW - sourceTip.x + 14, top: sourceTip.y + 14 }
+            : { left: sourceTip.x + 14, top: sourceTip.y + 14 };
+          const comp = sourceTip.composite;
+          // Dominant source = highest-volume accepted venue this minute → row tint.
+          const nonRej = sourceTip.rows.filter(r => !r.rejected);
+          const dominant = nonRej.length ? nonRej.reduce((a, b) => (b.v > a.v ? b : a)).source : null;
+          const num = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+          return (
+            <div
+              className="absolute z-20 pointer-events-none bg-gray-900/95 border border-gray-700 rounded px-1.5 py-1 text-[11px] font-mono shadow-lg"
+              style={style}
+            >
+              <table className="border-collapse tabular-nums whitespace-nowrap">
+                <tbody>
+                  {sourceTip.rows.map(r => {
+                    // pm: premium in dollars vs composite close. peg: the tether
+                    // price itself (USD per USDT, e.g. $0.9989) — how traders read it.
+                    const extra = r.peg != null
+                      ? <span className="text-sky-400">{`peg: $${r.peg.toFixed(4)}`}</span>
+                      : comp != null
+                        ? (() => {
+                            const d = r.c - comp;
+                            return <span className={d >= 0 ? "text-green-400" : "text-red-400"}>{`pm: ${d >= 0 ? "+" : "-"}$${fmtPrice(Math.abs(d))}`}</span>;
+                          })()
+                        : null;
+                    const rowCls = `${r.rejected ? "opacity-40 line-through" : ""} ${r.source === dominant ? "bg-amber-500/25" : ""}`;
+                    const cell = "px-1.5 py-px text-gray-500 text-right";
+                    return (
+                      <tr key={r.source} className={rowCls}>
+                        <td className="px-1.5 py-px text-amber-400 text-left">{srcAbbr(r.source)}</td>
+                        <td className={cell}>o:<span className="text-gray-300">{fmtPrice(r.o)}</span></td>
+                        <td className={cell}>h:<span className="text-gray-300">{fmtPrice(r.h)}</span></td>
+                        <td className={cell}>l:<span className="text-gray-300">{fmtPrice(r.l)}</span></td>
+                        <td className={cell}>c:<span className="text-gray-300">{fmtPrice(r.c)}</span></td>
+                        <td className={cell}>v:<span className="text-gray-300">{num(r.v)}</span></td>
+                        <td className="px-1.5 py-px text-right">{extra}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          );
+        })()}
         {showGoLive && (
           <button
             onClick={() => {
@@ -654,7 +755,7 @@ export default function CandlesTab() {
                   onClick={() => setAspectRatio(aspectRatio === value ? null : value)}
                   className={`px-1.5 py-0.5 text-xs rounded transition-colors ${
                     aspectRatio === value
-                      ? "bg-gray-600 text-white"
+                      ? "bg-gray-600 text-gray-50"
                       : "text-gray-700 hover:text-gray-400"
                   }`}
                 >
@@ -664,6 +765,10 @@ export default function CandlesTab() {
             })}
           </div>
           <div className="flex items-center gap-3 ml-auto text-xs">
+            <label className="flex items-center gap-1 cursor-pointer" style={{ color: showSources ? "#fbbf24" : "#4b5563" }} title="Show per-source OHLC on hover (1m only)">
+              <input type="checkbox" checked={showSources} onChange={e => setShowSources(e.target.checked)} />
+              Sources
+            </label>
             <label className="flex items-center gap-1 cursor-pointer" style={{ color: ma.showEma ? "#2dd4bf" : "#4b5563" }}>
               <input type="checkbox" checked={ma.showEma} onChange={e => setMa({ showEma: e.target.checked })} />
               EMA

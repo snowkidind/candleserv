@@ -6,6 +6,7 @@ import {
   type SourceStatus,
 } from "@/lib/api";
 import { useCandleStream } from "@/lib/CandleStreamContext";
+import { isDemo } from "@/lib/demo";
 import SourceHistoryModal from "./-SourceHistoryModal";
 
 // Local-storage key for dismissing auto-suspend banners on a per-(source, ts) basis
@@ -37,9 +38,11 @@ function timeAgo(iso: string | null): string {
 function AutoSuspendBanner({
   sources,
   onPrefillReinclude,
+  readOnly = false,
 }: {
   sources: Record<string, SourceStatus>;
   onPrefillReinclude: (source: string) => void;
+  readOnly?: boolean;
 }) {
   // Find sources that were auto-suspended within the last 24h and are still excluded.
   // Plus filter out dismissed ones (keyed by source + excludedAt timestamp).
@@ -71,12 +74,14 @@ function AutoSuspendBanner({
             </div>
           </div>
           <div className="flex gap-2">
-            <button
-              onClick={() => onPrefillReinclude(source)}
-              className="px-3 py-1.5 text-xs bg-yellow-700 hover:bg-yellow-600 text-yellow-100 rounded transition-colors"
-            >
-              Re-include {source}
-            </button>
+            {!readOnly && (
+              <button
+                onClick={() => onPrefillReinclude(source)}
+                className="px-3 py-1.5 text-xs bg-yellow-700 hover:bg-yellow-600 text-yellow-100 rounded transition-colors"
+              >
+                Re-include {source}
+              </button>
+            )}
             <button
               onClick={() => {
                 localStorage.setItem(`${DISMISS_KEY_PREFIX}${source}:${s.excludedAt}`, "1");
@@ -159,13 +164,17 @@ function FormulaDiffModal({
 function LiveFormulaEditor({
   sourceNames,
   externalPrefill,
+  readOnly = false,
 }: {
   sourceNames: string[];
   externalPrefill: { source: string; nonce: number } | null;
+  readOnly?: boolean;
 }) {
   const qc = useQueryClient();
   const { data: live } = useQuery({ queryKey: ["formula"], queryFn: getFormula });
-  const { data: config } = useQuery({ queryKey: ["config"], queryFn: getConfig });
+  // config carries secrets (redisUrl) and is denied in demo — skip it when
+  // read-only; minSources falls back to the server default (3) below.
+  const { data: config } = useQuery({ queryKey: ["config"], queryFn: getConfig, enabled: !readOnly });
   const [draft, setDraft] = useState<string[]>([]);
   const [showDiff, setShowDiff] = useState(false);
   // app_settings stores values as text. Fall back to the server default of 3
@@ -223,7 +232,8 @@ function LiveFormulaEditor({
                 type="checkbox"
                 checked={included}
                 onChange={() => toggle(name)}
-                className="accent-blue-600"
+                disabled={readOnly}
+                className="accent-blue-600 disabled:cursor-default"
               />
               <span className={included ? "text-gray-200 capitalize" : "text-gray-500 capitalize line-through"}>
                 {name}
@@ -237,22 +247,24 @@ function LiveFormulaEditor({
           {includedCount} of {sourceNames.length} sources included
           {belowMin && <span className="text-red-400 ml-2">⚠ below minSources={minSources}</span>}
         </span>
-        <div className="flex gap-2">
-          <button
-            onClick={discard}
-            disabled={!dirty}
-            className="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 disabled:text-gray-700"
-          >
-            Discard
-          </button>
-          <button
-            onClick={() => setShowDiff(true)}
-            disabled={!dirty || belowMin}
-            className="px-3 py-1.5 text-xs bg-blue-700 hover:bg-blue-600 disabled:bg-gray-800 disabled:text-gray-600 text-white rounded transition-colors"
-          >
-            Save changes
-          </button>
-        </div>
+        {!readOnly && (
+          <div className="flex gap-2">
+            <button
+              onClick={discard}
+              disabled={!dirty}
+              className="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 disabled:text-gray-700"
+            >
+              Discard
+            </button>
+            <button
+              onClick={() => setShowDiff(true)}
+              disabled={!dirty || belowMin}
+              className="px-3 py-1.5 text-xs bg-blue-700 hover:bg-blue-600 disabled:bg-gray-800 disabled:text-gray-600 text-white rounded transition-colors"
+            >
+              Save changes
+            </button>
+          </div>
+        )}
       </div>
       {showDiff && (
         <FormulaDiffModal
@@ -424,16 +436,18 @@ export default function ConnectionsTab() {
 
   return (
     <div className="p-4 space-y-4">
-      {/* Auto-suspend banner — only visible when an auto-suspend trip is recent + un-dismissed */}
+      {/* Auto-suspend banner — read-only in demo (re-include CTA hidden). */}
       {sources?.sources && (
         <AutoSuspendBanner
           sources={sources.sources}
           onPrefillReinclude={(source) => setPrefill({ source, nonce: Date.now() })}
+          readOnly={isDemo()}
         />
       )}
 
-      {/* Live formula editor — top of tab */}
-      <LiveFormulaEditor sourceNames={sourceNames} externalPrefill={prefill} />
+      {/* Live formula editor — venue kill-switch. Read-only in demo: the source
+          included/excluded status stays visible, the toggles + save are inert. */}
+      <LiveFormulaEditor sourceNames={sourceNames} externalPrefill={prefill} readOnly={isDemo()} />
 
       {/* Stats row */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -445,7 +459,7 @@ export default function ConnectionsTab() {
         ].map(([label, value]) => (
           <div key={label} className="bg-gray-900 border border-gray-800 rounded-lg p-3">
             <div className="text-xs text-gray-500 mb-1">{label}</div>
-            <div className={`text-sm font-medium ${label === "Avg latency" ? latencyColor : "text-white"}`}>{value}</div>
+            <div className={`text-sm font-medium ${label === "Avg latency" ? latencyColor : "text-gray-50"}`}>{value}</div>
           </div>
         ))}
       </div>
@@ -470,7 +484,7 @@ export default function ConnectionsTab() {
         </span>
         <button
           onClick={heal}
-          disabled={healing}
+          disabled={healing || isDemo()}
           className="px-4 py-2 text-sm bg-gray-800 hover:bg-gray-700 disabled:bg-gray-900 disabled:text-gray-600 text-gray-200 rounded-lg transition-colors"
         >
           {healing ? "Healing…" : "Run heal scan"}

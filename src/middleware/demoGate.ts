@@ -1,16 +1,13 @@
 /**
- * Public demo gate (Phase 10.2). Global middleware — a no-op outside demo mode.
+ * Public demo gate. Global middleware — a no-op outside demo mode.
  *
- * When IS_DEMO:
- *  - /v1/* (API-key consumer surface) is disabled → 403. Demo serves the page,
- *    not the programmatic API.
- *  - The allow-listed public read paths (isDemoReadPath) are served WITHOUT a
- *    session iff the request is same-origin AND carries a valid signed page
- *    token (D4). On success we set req.demoRead so sessionAuth.authenticate
- *    grants view-only access; on failure we 403 (rather than fall through to a
- *    confusing session 401, since demo has no login).
- *  - Everything else under /monitor falls through to normal session auth, which
- *    401s (login is hidden in the demo UI → effectively unreachable).
+ * In demo the admin view is a PUBLIC READ-ONLY MIRROR:
+ *  - /v1/* (API-key consumer surface) → 403. Demo serves the page, not the API.
+ *  - Every /monitor GET is served WITHOUT a session iff same-origin + a valid
+ *    signed page token (sets req.demoRead → sessionAuth grants view-only),
+ *    EXCEPT the secret-bearing reads (config / api-key material) which 403.
+ *  - Every /monitor non-GET (mutation) → 403. Combined with the UI's disabled
+ *    controls, this is the "see everything, change nothing" demo posture.
  */
 import { Request, Response, NextFunction } from "express";
 import {
@@ -29,14 +26,18 @@ export async function demoGate(
     return res.status(403).json({ error: "API disabled in demo mode" });
   }
 
-  if (isDemoReadPath(req)) {
+  if (req.path.startsWith("/monitor/")) {
+    // All mutations are denied — the admin controls are inert in demo.
+    if (req.method !== "GET") {
+      return res.status(403).json({ error: "Read-only demo: this action is disabled" });
+    }
+    // A GET that's NOT an allowed read = a secret-bearing path (config / keys).
+    if (!isDemoReadPath(req)) {
+      return res.status(403).json({ error: "Not available in demo" });
+    }
     const token = demoTokenFromReq(req);
-    const originOk = isSameOrigin(req);
-    const tokenOk = verifyDemoToken(token);
-    if (!(originOk && tokenOk)) {
-      return res.status(403).json({
-        error: "Demo read requires a same-origin request with a valid page token",
-      });
+    if (!(isSameOrigin(req) && verifyDemoToken(token))) {
+      return res.status(403).json({ error: "Demo read requires a same-origin request with a valid page token" });
     }
     // Per-token request budget — a copied token can't be hammered forever.
     const charge = chargeDemoToken(token!);
