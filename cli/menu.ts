@@ -34,6 +34,27 @@ function runCtl(args: string[]): Promise<void> {
   });
 }
 
+// API request-counter submenu: pick a window, show its full per-source breakdown,
+// stay here until the operator backs out. Same recursive style as runMenu().
+async function apiMenu(): Promise<void> {
+  const menu =
+    "  --- API request counters ---\n" +
+    "  1    1h   full per-source breakdown\n" +
+    "  2    4h   full per-source breakdown\n" +
+    "  3    8h   full per-source breakdown\n" +
+    "  4    24h  full per-source breakdown\n" +
+    "  q    Back";
+
+  const ans = await getAnswer(menu);
+  if (ans === "q" || ans === "") return;
+
+  const win = WINDOWS[Number(ans) - 1];
+  if (win) await runCtl(["api", win]);
+  else console.log(`  Unknown option: ${ans}`);
+
+  return apiMenu();
+}
+
 export async function runMenu(): Promise<void> {
   const menu =
     "  ####### candleserv ctl #######\n" +
@@ -50,12 +71,9 @@ export async function runMenu(): Promise<void> {
     case "s":
       await runCtl(["stats"]);
       break;
-    case "a": {
-      await runCtl(["api"]);
-      const win = await getAnswer("  full per-source breakdown for a window? (1h/4h/8h/24h, enter to skip)");
-      if (WINDOWS.includes(win)) await runCtl(["api", win]);
+    case "a":
+      await apiMenu();
       break;
-    }
     case "c":
       await runCtl(["cache:flush"]);
       break;
