@@ -11,7 +11,13 @@
  */
 process.env.TZ = "UTC";
 import dotenv from "dotenv";
-dotenv.config();
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+
+// ctl.ts lives in cli/, but the server's .env (PORT etc.) is in the repo root.
+// Resolve relative to this file — not cwd — so it works no matter where it's run from.
+const __dirname = dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: resolve(__dirname, "../.env") });
 
 const PORT = parseInt(process.env.PORT ?? "3007", 10);
 const BASE = `http://127.0.0.1:${PORT}`;
