@@ -1,5 +1,5 @@
 /**
- * Localhost-only operator endpoints (consumed by scripts/ctl.ts). NOT
+ * Localhost-only operator endpoints (consumed by cli/ctl.ts). NOT
  * authenticated — instead locked to a DIRECT loopback connection:
  *   - req.socket.remoteAddress must be a loopback address (the raw socket, NOT
  *     req.ip, which trust-proxy could spoof), AND

@@ -178,7 +178,7 @@ export function chargeDemoToken(token: string): { ok: boolean; count: number; ca
   return { ok: rec.count <= DEMO_TOKEN_BUDGET, count: rec.count };
 }
 
-/** Current count of tracked page tokens (for ops visibility — see scripts/ctl.ts). */
+/** Current count of tracked page tokens (for ops visibility — see cli/ctl.ts). */
 export function tokenBudgetMapSize(): number {
   return tokenHits.size;
 }

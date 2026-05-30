@@ -5,9 +5,9 @@
  * the DB directly. Must be run on the same host as the server.
  *
  * Usage:
- *   npx tsx scripts/ctl.ts stats            # in-memory + process stats
- *   npx tsx scripts/ctl.ts cache:flush      # drop the candle redis cache (candles:*)
- *   npx tsx scripts/ctl.ts sessions:flush   # delete ALL sessions (forces re-login)
+ *   npx tsx cli/ctl.ts stats            # in-memory + process stats
+ *   npx tsx cli/ctl.ts cache:flush      # drop the candle redis cache (candles:*)
+ *   npx tsx cli/ctl.ts sessions:flush   # delete ALL sessions (forces re-login)
  */
 process.env.TZ = "UTC";
 import dotenv from "dotenv";
@@ -16,7 +16,7 @@ dotenv.config();
 const PORT = parseInt(process.env.PORT ?? "3007", 10);
 const BASE = `http://127.0.0.1:${PORT}`;
 
-const USAGE = `usage: npx tsx scripts/ctl.ts <command>
+const USAGE = `usage: npx tsx cli/ctl.ts <command>
 
 commands:
   stats              in-memory + process stats from the running server

@@ -80,7 +80,7 @@ function makeIpLimiter(label: string) {
 const readLimiter = makeIpLimiter("read");
 const pageLimiter = makeIpLimiter("page");
 
-/** Tracked-IP counts for both limiter maps (ops visibility — see scripts/ctl.ts). */
+/** Tracked-IP counts for both limiter maps (ops visibility — see cli/ctl.ts). */
 export function demoRateLimitStats(): { readIps: number; pageIps: number } {
   return { readIps: readLimiter.size(), pageIps: pageLimiter.size() };
 }

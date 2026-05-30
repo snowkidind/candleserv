@@ -1,12 +1,12 @@
-#!/usr/bin/env npx tsx
 /**
  * Human-usable interactive menu for the candleserv operator CLI — same house
- * style as the other servs' cli/index.ts. It does NOT reimplement anything: each
- * choice shells out to `scripts/ctl.ts <command>`, so the scriptable interface
+ * style as the other servs' cli/menu.ts. It does NOT reimplement anything: each
+ * choice shells out to `cli/ctl.ts <command>`, so the scriptable interface
  * stays the single source of truth (and is still callable directly for automation).
  *
- *   npx tsx scripts/menu.ts        # interactive menu
- *   npx tsx scripts/ctl.ts stats   # same action, scriptable
+ * Launched by cli/index.ts:
+ *   npx tsx cli/index.ts        # interactive menu
+ *   npx tsx cli/ctl.ts stats    # same action, scriptable
  */
 import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
@@ -34,7 +34,7 @@ function runCtl(args: string[]): Promise<void> {
   });
 }
 
-async function mainMenu(): Promise<void> {
+export async function runMenu(): Promise<void> {
   const menu =
     "  ####### candleserv ctl #######\n" +
     "  s    Runtime stats (heap, token map, rate-limit IPs, SSE, sessions, redis)\n" +
@@ -44,7 +44,7 @@ async function mainMenu(): Promise<void> {
     "  q    Exit";
 
   const ans = await getAnswer(menu);
-  if (!ans) return mainMenu();
+  if (!ans) return runMenu();
 
   switch (ans) {
     case "s":
@@ -73,10 +73,5 @@ async function mainMenu(): Promise<void> {
       console.log(`  Unknown option: ${ans}`);
   }
 
-  return mainMenu();
+  return runMenu();
 }
-
-mainMenu().catch((err) => {
-  console.error("\n  Fatal:", err instanceof Error ? err.message : err);
-  process.exit(1);
-});

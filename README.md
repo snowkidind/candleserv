@@ -54,7 +54,8 @@ src/
     monitor/        Monitor UI routes (session auth)
   types/            TypeScript interfaces
 frontend/           React SPA (monitor UI)
-scripts/            Utility scripts (rederive, testCaller, healGaps)
+cli/                Operator CLI (index, menu, ctl)
+scripts/            Utility scripts (healGaps, synchronizeWithRemoteDb, rederive, mintConsumerKey, testCaller)
 ```
 
 ### Data flow

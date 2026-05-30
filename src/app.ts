@@ -91,7 +91,7 @@ export async function createApp(): Promise<express.Application> {
   // API consumer routes — API key auth
   app.use("/v1", v1CandlesRouter);
 
-  // Operator routes — localhost-only (scripts/ctl.ts). No demo/session gating;
+  // Operator routes — localhost-only (cli/ctl.ts). No demo/session gating;
   // the router enforces a direct loopback connection itself.
   app.use("/internal", internalRouter);
 
