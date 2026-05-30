@@ -43,10 +43,12 @@ async function apiMenu(): Promise<void> {
     "  2    4h   full per-source breakdown\n" +
     "  3    8h   full per-source breakdown\n" +
     "  4    24h  full per-source breakdown\n" +
-    "  q    Back";
+    "  b    Back\n" +
+    "  q    Quit";
 
   const ans = await getAnswer(menu);
-  if (ans === "q" || ans === "") return;
+  if (ans === "b" || ans === "") return;
+  if (ans === "q") { console.log("  Exit."); rl.close(); return; }
 
   const win = WINDOWS[Number(ans) - 1];
   if (win) await runCtl(["api", win]);
