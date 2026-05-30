@@ -59,7 +59,7 @@ async function apiMenu(): Promise<void> {
 
 export async function runMenu(): Promise<void> {
   const menu =
-    "  ####### candleserv ctl #######\n" +
+    "  ####### candleserv cli #######\n" +
     "  s    Runtime stats (heap, token map, rate-limit IPs, SSE, sessions, redis)\n" +
     "  a    API request counters (rolling 1h/4h/8h/24h)\n" +
     "  c    Flush candle cache\n" +
