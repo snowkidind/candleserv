@@ -1,0 +1,9 @@
+{
+  "name": "candleserv-cli",
+  "type": "module",
+  "scripts": {
+    "start": "npx tsx index.ts",
+    "cli": "npx tsx index.ts"
+  },
+  "comment": "the cli has its own package.json so it can run from this folder (npm start / npm run cli) instead of falling through to the parent and booting the server"
+}
