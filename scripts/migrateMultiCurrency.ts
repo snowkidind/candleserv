@@ -90,8 +90,8 @@ async function constraintsFor(table: string): Promise<Constraint[]> {
   const { rows } = await query(
     `SELECT con.conname,
             con.contype::text                              AS contype,
-            COALESCE(array_agg(att.attname ORDER BY u.ord)
-                     FILTER (WHERE att.attname IS NOT NULL), '{}') AS cols,
+            COALESCE(array_agg(att.attname::text ORDER BY u.ord)
+                     FILTER (WHERE att.attname IS NOT NULL), '{}')::text[] AS cols,
             CASE WHEN con.confrelid <> 0
                  THEN con.confrelid::regclass::text END    AS reftable
        FROM pg_constraint con
