@@ -9,6 +9,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import healthRouter from "./routes/health.js";
 import setupRouter from "./routes/setup.js";
 import v1CandlesRouter from "./routes/v1/candles.js";
+import v1PremiumRouter from "./routes/v1/premium.js";
 import monitorAuthRouter from "./routes/monitor/auth.js";
 import monitorErrorsRouter from "./routes/monitor/errors.js";
 import monitorOperationalRouter from "./routes/monitor/operational.js";
@@ -90,6 +91,7 @@ export async function createApp(): Promise<express.Application> {
 
   // API consumer routes — API key auth
   app.use("/v1", v1CandlesRouter);
+  app.use("/v1", v1PremiumRouter);
 
   // Operator routes — localhost-only (cli/ctl.ts). No demo/session gating;
   // the router enforces a direct loopback connection itself.

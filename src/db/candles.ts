@@ -390,6 +390,34 @@ export async function getSourceCandles(currency: string, from: Date, to: Date): 
 }
 
 /**
+ * Per-source presence + coverage window over candles_1m_sources for one
+ * currency. Powers GET /v1/premium/venues (which venues have derivable premium
+ * history and how far back). `oldest`/`newest` are unix-ms bar-open timestamps;
+ * null when the venue has never produced a row for the currency.
+ */
+export async function getSourcePresence(currency: string): Promise<
+  { source: string; oldest: number | null; newest: number | null; count: number }[]
+> {
+  const res = await query(
+    `SELECT source,
+            MIN("timestamp") AS oldest,
+            MAX("timestamp") AS newest,
+            COUNT(*)          AS count
+       FROM candles_1m_sources
+      WHERE "currency" = $1
+      GROUP BY source
+      ORDER BY source ASC`,
+    [currency],
+  );
+  return res.rows.map((row: Record<string, unknown>) => ({
+    source: row.source as string,
+    oldest: row.oldest == null ? null : new Date(row.oldest as string | Date).getTime(),
+    newest: row.newest == null ? null : new Date(row.newest as string | Date).getTime(),
+    count: Number(row.count),
+  }));
+}
+
+/**
  * Returns the source with the highest total volume across the last N accepted
  * 1m source-candle rows. Used by the collector to select the dominant H/L source.
  * Returns null if candles_1m_sources is empty (cold start).

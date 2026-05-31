@@ -34,6 +34,8 @@ const BLOCK_LIST: Array<{ method: string; path: string }> = [
   { method: "GET",  path: "/v1/candles"           },
   { method: "GET",  path: "/v1/candles/latest"    },
   { method: "POST", path: "/v1/candles/multi"     },
+  { method: "GET",  path: "/v1/premium"           },
+  { method: "GET",  path: "/v1/premium/venues"    },
   { method: "GET",  path: "/monitor/candles"      },
   { method: "GET",  path: "/monitor/candles/latest" },
 ];

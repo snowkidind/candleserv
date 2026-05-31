@@ -38,7 +38,7 @@ const PAGE_MINT_PER_MINUTE = 30;
  * returns false. One instance per surface so read and page traffic don't share a
  * bucket.
  */
-function makeIpLimiter(label: string) {
+export function makeIpLimiter(label: string) {
   const hits = new Map<string, number[]>();
   let lastSweep = 0;
 
