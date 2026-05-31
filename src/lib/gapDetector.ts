@@ -1,5 +1,5 @@
 import { query } from "../db/pool.js";
-import { upsertGap, setGapState, markAlertSent, getPendingGaps } from "../db/gaps.js";
+import { upsertGap, setGapState, markAlertSent, getPendingGaps, reconcileHealedGaps } from "../db/gaps.js";
 import { healRange, reHealLowConfidence, runBackfill, isBackfillRunning } from "./healer.js";
 import { getEnabledCurrencies, getInceptionTs } from "../db/currencies.js";
 import { recordError } from "../db/errors.js";
@@ -166,6 +166,12 @@ export async function runGapScan(windowDays: number, currency: string): Promise<
 
     await detectGapsInWindow(currency, from, to);
     await healPendingGaps(currency);
+
+    // Reconcile terminal gaps against reality: an 'unresolvable' row whose minute
+    // has since been filled (by a repair, or by a now-fixable peg-hole heal) is
+    // flipped to 'healed'. The detector never revisits terminal rows otherwise.
+    const reconciled = await reconcileHealedGaps(currency, from, to);
+    if (reconciled > 0) log(`[gapDetector] reconciled ${reconciled} stale gap(s) for ${currency}`);
   } catch (err) {
     logError(`[gapDetector] runGapScan failed for ${currency}:`, err);
     await recordError("healer", "runGapScan", String(err));

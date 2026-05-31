@@ -17,6 +17,7 @@ import { ADAPTER_BY_NAME } from "../adapters/registry.js";
 import { recordApiRequest } from "./apiCounter.js";
 import { getActiveFeeds } from "../db/currencyFeeds.js";
 import { getCurrency } from "../db/currencies.js";
+import { reconcileHealedGaps } from "../db/gaps.js";
 import { isOutOfHistory } from "../adapters/errors.js";
 import { composeMinute } from "./compose.js";
 import type { Formula } from "./compose.js";
@@ -263,9 +264,14 @@ export async function recomposeRange(
     }
   }
 
+  // Reconcile the gaps table: recomposeRange writes candles_1m directly and never
+  // touches gap state, so any gap whose minute we just filled must be flipped to
+  // healed or it lingers as a stale 'unresolvable'/'detected' row.
+  const reconciled = await reconcileHealedGaps(currency, from, to);
+
   const result: RecomposeRangeResult = { recomposed, skippedNoSources, failed };
   if (clamped.from || clamped.to) result.clamped = clamped;
-  log(`[repair] recomposeRange: recomposed=${recomposed} skipped=${skippedNoSources} failed=${failed}`);
+  log(`[repair] recomposeRange: recomposed=${recomposed} skipped=${skippedNoSources} failed=${failed} gapsReconciled=${reconciled}`);
   return result;
 }
 

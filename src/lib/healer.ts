@@ -1,5 +1,6 @@
 import { ADAPTER_BY_NAME } from "../adapters/registry.js";
-import { recordApiRequest } from "./apiCounter.js";
+import { recordApiRequest, PEG_CURRENCY } from "./apiCounter.js";
+import { upsertStableRate } from "../db/stableRates.js";
 import { getActiveFeeds } from "../db/currencyFeeds.js";
 import { getInceptionTs } from "../db/currencies.js";
 import { applyGuards, buildComposite } from "./composite.js";
@@ -113,6 +114,17 @@ export async function healRange(currency: string, from: Date, to: Date, overwrit
   }
   const feedSources = feeds.map((f) => f.source);
 
+  // Heal (overwrite) must ALSO restore each USDT venue's peg rate for the range,
+  // or composeMinute drops every USDT venue as missing_paired_rate and the minute
+  // stays an unresolvable gap. The backfill path (overwrite=false) deliberately
+  // stays raw — stableRateBackfill + a later recomposeRange reconcile it — so the
+  // peg wave only runs when overwrite=true.
+  const fetchPegs = overwrite;
+  const usdtFeeds = fetchPegs
+    ? feeds.filter((f) => ADAPTER_BY_NAME[f.source].normalize.pegFetcherRange)
+    : [];
+  const pegByMinute = new Map<number, Map<string, number>>();
+
   // Pre-populate every expected minute slot
   const byMinute = new Map<number, SourceResult[]>();
   for (let t = from.getTime(); t < to.getTime(); t += 60000) {
@@ -132,10 +144,17 @@ export async function healRange(currency: string, from: Date, to: Date, overwrit
     const tileStart   = new Date(tileStartMs);
     const limit       = Math.round((tileEnd.getTime() - tileStartMs) / 60000);
 
+    // Adapters disagree on endTime inclusivity: binance/bybit/bitget INCLUDE the
+    // endTime minute and so drop the bottom of a [tileStart, tileEnd) window,
+    // while gate/bitfinex/coinbase include the bottom. Fetch one extra minute
+    // (limit+1) so every adapter returns a superset of the tile, then filter each
+    // row to the half-open tile window below — every minute lands in exactly one
+    // tile regardless of venue. (Without this the very first minute of a backfilled
+    // day — 00:00 — never lands, leaving a recurring single-minute gap.)
     const settled = await Promise.allSettled(
       feeds.map((f) => {
         recordApiRequest(currency, f.source, "backfill");
-        return ADAPTER_BY_NAME[f.source].fetchRange(f.symbol, tileEnd, limit);
+        return ADAPTER_BY_NAME[f.source].fetchRange(f.symbol, tileEnd, limit + 1);
       }),
     );
 
@@ -153,8 +172,42 @@ export async function healRange(currency: string, from: Date, to: Date, overwrit
       }
       for (const { timestamp, candle } of res.value) {
         const tsMs = timestamp.getTime();
+        if (tsMs < tileStartMs || tsMs >= tileEnd.getTime()) continue; // half-open tile window
         if (!byMinute.has(tsMs)) continue;
         byMinute.get(tsMs)!.push({ source: name, candle });
+      }
+    }
+
+    // Peg wave for this tile (heal only) — same chunking/throttle as the candle
+    // fetch above, per-USDT-venue pegFetcherRange, accumulated per-minute. Adapter
+    // out-of-history is expected at depth and aggregated into the same summary.
+    if (usdtFeeds.length) {
+      const pegSettled = await Promise.allSettled(
+        usdtFeeds.map((f) => {
+          recordApiRequest(PEG_CURRENCY, f.source, "backfill");
+          return ADAPTER_BY_NAME[f.source].normalize.pegFetcherRange!(tileEnd, limit + 1);
+        }),
+      );
+      for (let i = 0; i < usdtFeeds.length; i++) {
+        const name = usdtFeeds[i].source;
+        const res = pegSettled[i];
+        if (res.status === "rejected") {
+          if (isOutOfHistory(res.reason)) {
+            const prev = outOfHistoryEarliest[name];
+            if (!prev || tileStart < prev) outOfHistoryEarliest[name] = tileStart;
+          } else {
+            logError(`[healer] healRange: ${currency}/${name} peg tile failed`, res.reason);
+          }
+          continue;
+        }
+        for (const { timestamp, rate } of res.value) {
+          const tsMs = timestamp.getTime();
+          if (tsMs < tileStartMs || tsMs >= tileEnd.getTime()) continue; // half-open tile window
+          if (!byMinute.has(tsMs)) continue;
+          let m = pegByMinute.get(tsMs);
+          if (!m) { m = new Map(); pegByMinute.set(tsMs, m); }
+          m.set(name, rate);
+        }
       }
     }
 
@@ -180,7 +233,8 @@ export async function healRange(currency: string, from: Date, to: Date, overwrit
     const allResults: SourceResult[] = feedSources.map(
       (s) => results.find((r) => r.source === s) ?? { source: s, candle: null, error: "not_in_tile" }
     );
-    const guarded = applyGuards(allResults, minSources, sigma);
+    const minutePegs = fetchPegs ? (pegByMinute.get(tsMs) ?? new Map<string, number>()) : undefined;
+    const guarded = applyGuards(allResults, minSources, sigma, minutePegs);
 
     // Write archive rows first. usedInFormula left NULL — composeMinute will
     // set it via the bulk UPDATE.
@@ -193,6 +247,20 @@ export async function healRange(currency: string, from: Date, to: Date, overwrit
         rejected: g.rejected, rejectedReason: g.rejectedReason,
         usedInFormula: null,
       });
+    }
+
+    // Restore paired peg rates BEFORE composeMinute reads them back — without
+    // these, every USDT venue is dropped as missing_paired_rate and the minute
+    // can never heal. Only for venues that returned a candle this minute (archive
+    // row written just above), keeping the rate↔candle bundle coherent.
+    if (overwrite && minutePegs) {
+      for (const [source, rate] of minutePegs) {
+        if (!guarded.some((g) => g.source === source && g.candle)) continue;
+        await upsertStableRate({
+          timestamp: minuteTs, source, rate,
+          pegSourcePair: ADAPTER_BY_NAME[source].normalize.pegSourcePair!,
+        });
+      }
     }
 
     if (overwrite) {
@@ -251,7 +319,24 @@ export async function healMinute(currency: string, minuteTs: Date): Promise<bool
     const baseline     = await getSourceCountBaseline(currency);
     const sigma        = await getRecentCloseStddev(currency);
     const volumeLeader = await getTrailingVolumeLeader(currency, 10);
-    const guarded      = applyGuards(results, minSources, sigma);
+
+    // Peg wave: fetch each USDT venue's rate for this minute, so the outlier
+    // guard compares in USD space and (below) the paired rate rows exist for
+    // composeMinute. USD-native venues have no pegFetcher and stay identity.
+    const usdtResults = results.filter((r) => r.candle && ADAPTER_BY_NAME[r.source]?.normalize.pegFetcher);
+    const pegSettled = await Promise.allSettled(
+      usdtResults.map((r) => {
+        recordApiRequest(PEG_CURRENCY, r.source, "heal1m");
+        return ADAPTER_BY_NAME[r.source].normalize.pegFetcher!(minuteTs);
+      }),
+    );
+    const minutePegs = new Map<string, number>();
+    for (let i = 0; i < usdtResults.length; i++) {
+      const res = pegSettled[i];
+      if (res.status === "fulfilled" && res.value != null) minutePegs.set(usdtResults[i].source, res.value);
+    }
+
+    const guarded = applyGuards(results, minSources, sigma, minutePegs);
 
     // Step 1: write fetched archive rows with their applyGuards verdict.
     // usedInFormula stays NULL; composeMinute sets it via bulk UPDATE.
@@ -263,6 +348,16 @@ export async function healMinute(currency: string, minuteTs: Date): Promise<bool
         close: g.candle.close, volume: g.candle.volume,
         rejected: g.rejected, rejectedReason: g.rejectedReason,
         usedInFormula: null,
+      });
+    }
+
+    // Step 1b: write paired peg rates BEFORE composeMinute reads them, or every
+    // USDT venue is dropped as missing_paired_rate and the minute can't heal.
+    for (const [source, rate] of minutePegs) {
+      if (!guarded.some((g) => g.source === source && g.candle)) continue;
+      await upsertStableRate({
+        timestamp: minuteTs, source, rate,
+        pegSourcePair: ADAPTER_BY_NAME[source].normalize.pegSourcePair!,
       });
     }
 

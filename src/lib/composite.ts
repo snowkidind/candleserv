@@ -51,8 +51,24 @@ function stddev(values: number[]): number {
 /**
  * Apply input guards to a set of raw source candles.
  * Returns an array of GuardedSource (accepted + rejected).
+ *
+ * pegRates: optional Map<sourceName, localStableToUsdRate>. When provided, the
+ *   outlier guard compares peg-normalized closes (USDT venues × rate; USD-native
+ *   venues identity) rather than raw quotes. This is required for correctness:
+ *   the composite itself is built in peg-normalized USD space (buildComposite),
+ *   and historicalSigma is derived from composite closes — also USD space. Running
+ *   the outlier check on RAW closes systematically rejects USD-native venues
+ *   (kraken, coinbase) whenever USDT carries a premium larger than σ, even though
+ *   they agree with the others once normalized. Absent map → raw comparison
+ *   (cold-start / single-currency callers unchanged). The returned candle is
+ *   always the RAW candle — only the outlier *decision* runs in normalized space.
  */
-export function applyGuards(results: SourceResult[], minSources: number, historicalSigma?: number): GuardedSource[] {
+export function applyGuards(
+  results: SourceResult[],
+  minSources: number,
+  historicalSigma?: number,
+  pegRates?: Map<string, number>,
+): GuardedSource[] {
   // Step 1a + 1b: zero guard + OHLC consistency
   const afterBasic: GuardedSource[] = results.map(({ source, candle }) => {
     if (!candle) return { source, candle: candle as unknown as SourceCandle, rejected: true, rejectedReason: "fetch_failed" };
@@ -74,14 +90,24 @@ export function applyGuards(results: SourceResult[], minSources: number, histori
   // Step 1c: outlier guard — only if we have enough sources
   if (passed.length < minSources) return afterBasic;
 
-  const closes = passed.map((g) => g.candle.close);
+  // Normalize the close into USD space for the outlier comparison. USDT venues
+  // get multiplied by their peg rate; USD-native venues (absent from the map)
+  // and the no-peg path are identity.
+  const normClose = (g: GuardedSource): number => {
+    const rate = pegRates?.get(g.source);
+    return rate === undefined ? g.candle.close : g.candle.close * rate;
+  };
+
+  const closes = passed.map(normClose);
   const med = median(closes);
   const sigma = historicalSigma ?? Math.max(stddev(closes), 10);
 
   return afterBasic.map((g) => {
     if (g.rejected) return g;
-    if (Math.abs(g.candle.close - med) > sigma) {
-      logError(`[composite] outlier rejected: ${g.source} close=${g.candle.close} median=${med} σ=${sigma.toFixed(2)}`);
+    const c = normClose(g);
+    if (Math.abs(c - med) > sigma) {
+      const rawNote = c === g.candle.close ? "" : ` (adj=${c.toFixed(2)})`;
+      logError(`[composite] outlier rejected: ${g.source} close=${g.candle.close}${rawNote} median=${med.toFixed(2)} σ=${sigma.toFixed(2)}`);
       return { ...g, rejected: true, rejectedReason: "outlier" };
     }
     return g;

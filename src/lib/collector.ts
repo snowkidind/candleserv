@@ -271,6 +271,12 @@ export async function collect(minuteTs: Date): Promise<boolean> {
       }
     }
 
+    // Rate-only view of the peg wave for the outlier guard, so it compares
+    // peg-normalized closes (USD space) rather than raw mixed quotes — same
+    // basis the composite and historicalSigma already use.
+    const pegRateMap = new Map<string, number>();
+    for (const [s, p] of pegMap) pegRateMap.set(s, p.rate);
+
     // BTC is first-class (Required): with stables (peg) already fetched above,
     // fetch + compose BTC BEFORE any alt enters the per-venue rate gate or
     // consumes the deadline window, so BTC never queues behind an alt on a shared
@@ -370,7 +376,7 @@ export async function collect(minuteTs: Date): Promise<boolean> {
         const baseline     = await getSourceCountBaseline(currency);
         const sigma        = await getRecentCloseStddev(currency);
         const volumeLeader = await getTrailingVolumeLeader(currency, 10);
-        const guarded      = applyGuards(results, minSources, sigma);
+        const guarded      = applyGuards(results, minSources, sigma, pegRateMap);
 
         // Write each fetched source's archive row. usedInFormula left NULL —
         // composeMinute sets it via its bulk UPDATE. Inline the insert (do NOT

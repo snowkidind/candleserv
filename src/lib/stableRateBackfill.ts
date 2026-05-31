@@ -77,11 +77,15 @@ export async function backfillStableRates(
     const tileStart   = new Date(tileStartMs);
     const limit       = Math.round((tileEnd.getTime() - tileStartMs) / 60000);
 
-    // Fan out per-venue pegFetcherRange for this tile.
+    // Fan out per-venue pegFetcherRange for this tile. Fetch one extra minute
+    // (limit+1): binance/bybit/bitget include the endTime minute and drop the
+    // bottom of the window, so without the +1 every 300-min tile boundary loses
+    // its first minute (the recurring :47 stable-rate hole). The [tileStartMs,
+    // tileEnd) filter below trims the overlap; the upsert makes it idempotent.
     const settled = await Promise.allSettled(
       usdtSources.map((name) => {
         const a = ADAPTER_BY_NAME[name];
-        return a.normalize.pegFetcherRange!(tileEnd, limit);
+        return a.normalize.pegFetcherRange!(tileEnd, limit + 1);
       }),
     );
 
