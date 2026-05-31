@@ -17,7 +17,7 @@ import { getTheme, type Theme } from "@/lib/theme";
 // invert, so it must carry its own palette rather than ride the page filter.
 const CHART_THEME: Record<Theme, { background: string; text: string; grid: string; border: string }> = {
   dark:  { background: "#030712", text: "#9ca3af", grid: "#111827", border: "#1f2937" },
-  dim:   { background: "#22272e", text: "#768390", grid: "#2d333b", border: "#444c56" },
+  dim:   { background: "#2f343b", text: "#768390", grid: "#2d333b", border: "#444c56" },
   light: { background: "#ffffff", text: "#374151", grid: "#e5e7eb", border: "#d1d5db" },
 };
 

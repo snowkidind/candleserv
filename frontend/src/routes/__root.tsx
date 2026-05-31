@@ -61,7 +61,7 @@ function RootLayout() {
             rel="noopener noreferrer"
             className="text-gray-50 font-semibold text-sm tracking-wide hover:text-blue-400 transition-colors"
           >
-            CANDLESERV
+            CANDLESERV COMPOSITE
           </a>
           {health && (
             <span className={`text-xs ml-4 ${latencyColor}`}>
