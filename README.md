@@ -1,8 +1,10 @@
 # candleserv
 
-Self-contained 1-minute OHLCV candle store for Bitcoin. Collects from five public exchange REST APIs (Binance, Bybit, Kraken, Coinbase, Bitfinex), reconciles them into a composite, stores to PostgreSQL, heals gaps automatically, and serves any requester via REST.
+Self-contained 1-minute OHLCV **composite candle store**. Collects from up to eight public exchange REST APIs, normalizes each venue's stablecoin quote into real-USD space, reconciles them into a single canonical candle per minute, stores to PostgreSQL, heals gaps automatically, and serves any requester over REST.
 
-Candleserv has no knowledge of the trading system that consumes it. It stores candles and serves candles. It could be published as a standalone open-source tool.
+Candleserv has no knowledge of the trading system that consumes it. It stores candles and serves candles. It owns its database exclusively and runs as a standalone open-source service.
+
+Originally a Bitcoin-only store, it is now **multi-currency**: every table is keyed by `(currency, timestamp)` and the collector composes each enabled asset independently. BTC is the only enabled currency in a default install; the machinery (symbol map, per-venue feeds, peg layer) supports adding others.
 
 ---
 
@@ -11,7 +13,7 @@ Candleserv has no knowledge of the trading system that consumes it. It stores ca
 - Node.js 20+
 - PostgreSQL (any version supporting `timestamptz` and `serial`)
 - pm2 (`npm install -g pm2`)
-- Redis (optional — auto-detected on localhost:6379)
+- Redis (optional — auto-detected on `localhost:6379`)
 
 ---
 
@@ -25,7 +27,7 @@ cd frontend && npm install && npm run build && cd ..
 pm2 start npm --name candleserv -- start
 ```
 
-Open `http://localhost:3007/setup` and follow the four-step wizard. Default port is 3007; set `PORT` in `.env` before starting to change it.
+Open `http://localhost:3007/setup` and follow the wizard. Default port is 3007; set `PORT` in `.env` before starting to change it.
 
 ---
 
@@ -43,200 +45,169 @@ Open `http://localhost:3007/setup` and follow the four-step wizard. Default port
 
 ```
 src/
-  adapters/         Exchange fetch adapters (binance, bybit, kraken, coinbase, bitfinex)
-  db/               Database access layer (candles, gaps, errors, sessions, schema, etc.)
-  lib/              Core logic (collector, composite, healer, gapDetector, emitter, redis)
-  middleware/       Auth middleware (API key, session)
+  adapters/         Per-venue fetch adapters + normalization profiles (registry.ts), symbol map
+  db/               Database access layer (candles, stableRates, gaps, currencies, errors, sessions, schema, …)
+  lib/              Core logic (collector, compose, composite, healer, gapDetector, repair, emitter, redis, premium)
+  middleware/       Auth + gates (apiKeyAuth, sessionAuth, demoGate, demoRateLimit, premiumRateLimit, repairLock)
   routes/
     health.ts       GET /health (unauthenticated)
     setup.ts        Setup wizard routes
-    v1/candles.ts   API consumer routes (API key auth)
+    v1/candles.ts   Candle consumer API (API key auth)
+    v1/premium.ts   Premium-offset consumer API (API key auth)
     monitor/        Monitor UI routes (session auth)
+    internal.ts     Localhost-only operator routes (cli/ctl.ts)
   types/            TypeScript interfaces
 frontend/           React SPA (monitor UI)
-cli/                Operator CLI (index, menu, ctl)
-scripts/            Utility scripts (healGaps, synchronizeWithRemoteDb, rederive, mintConsumerKey, testCaller)
+cli/                Operator CLI (index → menu → ctl)
+scripts/            Utility scripts (healGaps, reconcileGaps, synchronizeWithRemoteDb, rederive, migrateMultiCurrency, mintConsumerKey, testCaller)
+docs/api/           Postman collection + environment + API README (served at /api-docs)
 ```
 
 ### Data flow
 
-1. **Collector** fires at :04 past each minute, fetches the just-closed 1m candle from all five exchanges in parallel (6s per-source timeout).
-2. **Input guards** reject bad data per-source (zero values, invalid OHLC geometry, statistical outliers).
-3. **Composite engine** merges surviving sources into a single canonical candle and writes it to `candles_1m`.
-4. **SSE emitter** broadcasts the new candle to connected monitor and API consumers.
-5. **Gap detector** runs on startup (7-day scan) and hourly (1-day scan), healing any missing rows.
-6. **Backfill** on first startup fills the last 3 months from Binance.
+1. **Collector** fires at `:04` past each minute and composes BTC first (own 15s deadline), then any other enabled currencies (separate deadline), so an alt never delays BTC.
+2. For each currency it fetches the just-closed 1m candle from every enabled venue in parallel, and — for USDT-quoted venues — the venue's **local stablecoin rate** for the same minute (the two are bundled: both halves commit or neither does).
+3. **Input guards** reject bad data per-source (zero values, invalid OHLC geometry, statistical outliers — the outlier check runs in peg-normalized USD space).
+4. **Composite engine** peg-normalizes each surviving source, applies the premium-offset correction, takes field-wise medians, and writes one row to `candles_1m` plus the per-source rows to `candles_1m_sources` and the paired rates to `stable_rates_1m_sources`.
+5. **SSE emitter** broadcasts the new candle to connected monitor and API consumers.
+6. **Gap detector** runs on startup (7-day scan) and hourly (1-day scan), healing missing rows.
+7. **Backfill** on first startup fills ~90 days from the enabled venues.
 
 ### Database tables
 
 | Table | Purpose | Retention |
 |-------|---------|-----------|
-| `candles_1m` | Composite candles, one row per UTC minute | Indefinite |
-| `candles_1m_sources` | Per-source raw candles for debugging | 30 days |
-| `gaps` | Detected/healed gap records | Indefinite |
-| `stream_events` | Source connection state transitions | Indefinite |
+| `candles_1m` | Composite candles, PK `(currency, timestamp)` | Indefinite |
+| `candles_1m_sources` | Per-source raw candles, PK `(currency, timestamp, source)` | 180 days |
+| `stable_rates_1m_sources` | Per-venue local USDT→USD rate, PK `(timestamp, source)` — currency-agnostic | 180 days |
+| `currencies` | Enabled assets + per-currency settings (premiumEnabled, minSources, flatFillEmpty, inceptionTs) | Indefinite |
+| `currency_sources` | Per-(currency, venue) symbol + availability + enabled flag (Feeds tab) | Indefinite |
+| `gaps` | Detected/healing/healed/unresolvable gap records, unique `(currency, timestamp)` | Indefinite |
+| `stream_events` / `service_events` | Source connection-state transitions / outage events | Indefinite |
+| `formula_changes` | Global venue-exclusion (kill-switch) history | Indefinite |
 | `service_errors` | Internal error log | 90 days |
+| `admin_actions` | Operator audit log | Indefinite |
 | `api_keys` | API consumer credentials | Indefinite |
 | `users` / `sessions` / `user_permissions` | Monitor authentication | Sessions pruned daily |
 | `app_settings` | Runtime configuration | Indefinite |
+
+Only the composite *inputs* (`candles_1m_sources`, `stable_rates_1m_sources`) are pruned at 180 days — the composite itself is kept indefinitely.
 
 ---
 
 ## Data sources
 
-| Source | Pair | Denomination | Max candles/call |
-|--------|------|-------------|-----------------|
-| Binance | BTCUSDT | USDT | 1000 |
-| Bybit | BTCUSDT | USDT | 1000 |
-| Kraken | XBTUSD | USD (internal ledger) | 720 |
-| Coinbase | BTC-USDC | USDC | 300 |
-| Bitfinex | tBTCUSD | USDT (labeled USD) | 1000 |
+Eight venue adapters ship in `src/adapters/registry.ts`. Each carries a **normalization profile** declaring whether it quotes BTC in real USD or in a stablecoin (and, if so, where to fetch that venue's own local stablecoin→USD rate).
 
-All five are free, public, no API key required.
+| Venue | BTC pair | Quote | Peg source |
+|-------|----------|-------|-----------|
+| Binance | `BTCUSDT` | USDT | `USDCUSDT` (inverted) |
+| Bybit | `BTCUSDT` | USDT | `USDTUSD` |
+| Gate | `BTC_USDT` | USDT | `USDC_USDT` |
+| Bitget | `BTCUSDT` | USDT | `USDCUSDT` (inverted) |
+| Kraken | `XBTUSD` | USD-native | — |
+| Coinbase | `BTC-USD` | USD-native | — |
+| Bitfinex | `tBTCUSD` | USD-native (internally-redeemed USDT) | — |
+| OKX | `BTC-USDT` | (disabled in this deployment) | — |
 
-**Currency basis:** There is no true USD source. Binance, Bybit, and Bitfinex settle in Tether. Coinbase settles in USDC. Kraken's "USD" is an internal unit. The composite does not normalize across these bases — per-source deviation from the median is tracked empirically, and the confidence score reflects how tightly the sources agreed.
+All are free, public, no API key required. **OKX is geo-restricted from some regions** (e.g. Thailand) and is disabled here — left in the registry but not collected. The working set is six to seven venues.
+
+### There is no canonical USDT
+
+USDT does not trade at exactly $1.00, and there is **no single USDT/USD rate** — only the local stablecoin price at each specific venue. Rather than pretend otherwise, candleserv fetches each USDT-quoted venue's *own* USDC×USDT (or USDT×USD) 1-minute close and uses it to convert that venue's BTC price into real-USD space before compositing. USD-native venues (Kraken, Coinbase) pass through untouched. Bitfinex is deliberately treated as USD-native even though its "USD" is internally-redeemed USDT — its basis is left to surface as signal (see [Premium offset](#premium-offset)).
+
+This is the principle the whole composite is built around. The long-form study lives in `chit/articles/01_bitfinex_premium`.
 
 ---
 
 ## Composite algorithm
 
-### Step 1 — Input guards
+Per minute, per currency, using only sources that passed the guards:
 
-Applied per-source before composite assembly. Rejections are recorded in `candles_1m_sources` with a `rejectedReason`.
+**1. Input guards** (`applyGuards`) — recorded in `candles_1m_sources` with a `rejectedReason`:
+- *zero guard* — any of O/H/L/C ≤ 0 → `zero_value`
+- *OHLC consistency* — impossible geometry (low > high, high < open, …) → `ohlc_invalid`
+- *outlier guard* — runs when surviving sources ≥ `minSources` (default 3). Compares each venue's **peg-normalized** close to the population median; rejects beyond σ (derived from the trailing 24h of composite closes, $10 floor) → `outlier`. Running the check in normalized USD space is what stops USD-native venues being rejected whenever USDT carries a premium.
 
-**1a. Zero guard** — Reject if any of open/high/low/close is zero or negative. `rejectedReason = "zero_value"`
+**2. Peg adjustment** — each USDT venue's O/H/L/C is multiplied by its local stablecoin rate; USD-native venues are identity. After this step every venue is in approximate real-USD space. Volume is never peg-adjusted (price only). A USDT venue with no paired rate row for the minute is dropped (`missing_paired_rate`).
 
-**1b. OHLC consistency guard** — Reject if the candlestick geometry is impossible (low > high, high < open, etc). `rejectedReason = "ohlc_invalid"`
+**3. Premium-offset correction** — for each field (O/H/L/C) and each venue, compute the **leave-one-out median** of the other venues (its consensus), and pull the venue's contribution `CORRECTION_FACTOR = 0.8` of the way toward consensus. This neutralizes per-venue basis while preserving real price moves. Gated per currency by `currencies.premiumEnabled`; skipped (plain medians) when fewer than 3 venues survive.
 
-**1c. Outlier guard** — Runs only when `sourceCount >= minSources` (default 3). Computes the median close across remaining sources and the population standard deviation (σ) with a $10 floor. Any source whose close deviates more than 1σ from the median is rejected. `rejectedReason = "outlier"`
+**4. Composite OHLC** = field-wise medians of the post-correction contributions, with a defensive guard that widens the wick to enclose the body.
 
-The σ used by the outlier guard is derived from the trailing 24h of composite close prices (1440 rows), not just the current minute's sources. This prevents a single bad tick from distorting the threshold. If fewer than 1440 rows exist (cold start), the $10 floor applies.
+**5. Volume** — raw sum across accepted sources, plus `volumeNormalized = volume × (sourceCountBaseline / sourceCount)` so a source dropout doesn't read as a volume collapse. Both columns are persisted.
 
-### Step 2 — Composite OHLCV calculation
-
-Using only sources that passed all guards:
-
-| Field | Method |
-|-------|--------|
-| `open` | Median of source opens |
-| `close` | Median of source closes |
-| `high` | Taken from the **dominant source** (trailing volume leader over the last 10 accepted minutes). Extended upward if needed to contain the median-derived body. |
-| `low` | Taken from the **dominant source**. Extended downward if needed to contain the median-derived body. |
-| `volume` | Sum of all accepted source volumes |
-
-**Why median for O/C and dominant-source for H/L:** Open and close represent consensus price — median gives a robust central estimate that resists outliers. High and low represent extreme wicks within the candle, which are exchange-specific microstructure events. Taking these from the highest-volume exchange (which has the deepest orderbook and most representative price discovery) produces more meaningful wicks than a max/min across all exchanges, which would accumulate noise from thin-book venues.
-
-The dominant source is selected by summing volume across the last 10 accepted source-candle rows in `candles_1m_sources` and picking the source with the highest total. If that source was rejected or absent for the current minute, the system falls back to whichever accepted source had the highest volume this tick.
-
-### Step 3 — Volume normalization
-
-**`sourceCountBaseline`** = mode (most common value) of `sourceCount` over the trailing 1440 rows (24h). Represents what "normal" looks like recently. Cold-start default: 5.
-
-**`volumeNormalized`** = `volume × (sourceCountBaseline / sourceCount)`. When a source drops out, the raw volume sum naturally falls. `volumeNormalized` scales the sum up to compensate, preventing a source outage from producing a false volume collapse in downstream signal analysis. When all sources are present (`sourceCount = sourceCountBaseline`), both columns are identical.
-
-The raw `volume` column is always preserved alongside `volumeNormalized`. Use raw volume when you need an unmodified number; use normalized volume for momentum/signal work.
-
-**Known limitation:** Volume is summed across exchanges that may share liquidity (e.g. arbitrage, market makers mirroring orders). Some double-counting is likely. Additionally, the exchanges price Bitcoin in different synthetic dollar units (USDT, USDC, internal USD) that are not strictly equivalent. `volumeNormalized` addresses source dropout continuity but does not correct the underlying currency basis mismatch. These are acceptable tradeoffs for the intended use case.
-
-### Step 4 — Confidence score
-
-A single 0.0–1.0 value stored on every candle:
-
+**6. Confidence** — a single `[0,1]` value on every candle:
 ```
 sourceRatio   = sourceCount / sourceCountBaseline
 rejectedRatio = rejectedCount / sourcesAttempted
-confidence    = sourceRatio × (1 - rejectedRatio)
+confidence    = sourceRatio × (1 − rejectedRatio)
 ```
-
-| Scenario | Confidence |
-|----------|------------|
-| 5/5 sources, none rejected | 1.0 |
-| 4/5 sources, none rejected | 0.8 |
-| 5/5 sources, 1 rejected (outlier) | 0.8 |
-| 3/5 sources, 2 rejected | 0.36 |
-
-If only 1 source survives all guards, the composite is still written (a degraded candle is better than a gap) and an error is logged.
+where `sourceCountBaseline` is the 24h mode of `sourceCount`. The monitor renders confidence as candle opacity — degraded minutes look pale at a glance. If only one source survives, the composite is still written (a degraded candle beats a gap) and an error is logged.
 
 ### Sources bitmask
 
-Each accepted source sets a bit in the integer `sources` column:
+Each accepted venue sets a bit in the integer `sources` column. Bit numbers are part of the on-disk format and are append-only:
 
-| Bit | Source |
-|-----|--------|
-| 0 | Binance |
-| 1 | Bybit |
-| 2 | Kraken |
-| 3 | Coinbase |
-| 4 | Bitfinex |
+| Bit | Value | Source |  | Bit | Value | Source |
+|-----|-------|--------|--|-----|-------|--------|
+| 0 | 1 | binance |  | 4 | 16 | bitfinex |
+| 1 | 2 | bybit |  | 5 | 32 | okx |
+| 2 | 4 | kraken |  | 6 | 64 | gate |
+| 3 | 8 | coinbase |  | 7 | 128 | bitget |
 
 ---
 
-## Handling exchange dropouts and self-repair
+## Premium offset
 
-### Source dropout detection
+The premium-offset correction (step 3 above) computes, per venue per field per minute, the signed-USD deviation from the cross-venue consensus — `pegged − leave-one-out-median(peers)`. Internally it's a transient used to pull contributions toward consensus, then discarded. But it's a meaningful signal in its own right: the **Bitfinex** slice in particular is a real-time read on tether-system / venue-specific stress, and no public index publishes per-venue cross-exchange basis.
 
-A dropout is distinct from a gap — the candle row exists but `sourceCount` has fallen below `sourceCountBaseline`. When `sourceCount < sourceCountBaseline` for 3+ consecutive candles, the collector logs a warning and fires a webhook alert (`type: "source_degraded"`) if configured. Recovery back to baseline triggers a `source_recovered` alert.
+`GET /v1/premium` re-derives this from the archived per-source candles + paired stable rates and serves it as an OHLC-of-offset series per venue (see [REST API](#premium-endpoints)). Background: `research/methods/12_premium_offset_as_publishable_index` and `chit/articles/01_bitfinex_premium`.
 
-### Source auto-pause
+---
 
-If a single source accumulates more than `sourceAutoSuspendThreshold` (default: 10) guard rejections or fetch failures within a rolling 24-hour window, it is automatically paused — excluded from all future collection runs. The collector tracks per-source failure timestamps in memory and prunes entries older than 24h on each check. A paused source's bit is cleared from future `sources` bitmasks.
+## Multi-currency
 
-Auto-pause fires a webhook (`type: "source_paused"`) and writes a `stream_events` row. The source remains paused until manually re-enabled from the Admin tab.
+- `currencies` is the control plane — one row per asset, with `enabled` (collect this chain), `premiumEnabled` (apply the offset correction), `flatFillEmpty` (thin-token empty-minute handling), an optional per-currency `minSources` override, and an `inceptionTs` backfill floor.
+- `currency_sources` maps each `(currency, venue)` to its symbol and tracks whether the venue lists that pair (`available`, auto-probed) and whether the operator wants it (`enabled`). The effective live fetch set is `available AND enabled`, minus any venue in the global formula kill-switch.
+- The **Feeds** tab manages all of the above. The collector composes BTC under its own deadline first, then the remaining enabled currencies, so alts never delay BTC.
+- All consumer endpoints take an optional `?currency=` (default `BTC`).
 
-### Gap detection
+---
 
-Gaps are missing rows in `candles_1m`. Detection runs:
-- On startup (scan last 7 days)
-- Hourly (scan last 24 hours)
-- On-demand via `POST /monitor/heal`
+## Self-repair
 
-Detection uses `generate_series` against the expected minute sequence and identifies any timestamps with no corresponding row.
+### Source dropout
 
-### Gap healing
+A dropout is not a gap — the row exists but `sourceCount` fell below baseline. When `sourceCount < sourceCountBaseline` for 3+ consecutive candles, the collector warns and (if configured) fires a `source_degraded` webhook; recovery fires `source_recovered`.
 
-Contiguous missing minutes are grouped into ranges and each range is fetched from all five exchanges in 300-minute tiles via `healRange`. Per-source guards (zero, OHLC, outlier) run exactly as in the live collector, and surviving sources are composited through `buildComposite` — so a healed row carries the same confidence score, volume-leader-derived high/low, and `sources` bitmask as any live-collected row. Minutes that all five exchanges refuse are marked `unresolvable`.
+### Source auto-suspend
 
-Gaps transition through states: `detected` → `healing` → `healed` or `unresolvable`. Healed gaps are retained as history.
+If a venue accumulates more than `sourceAutoSuspendThreshold` (default 10) guard rejections or fetch failures in a rolling 24h window, it's auto-suspended (excluded from collection), fires a `source_paused` webhook, and writes a `stream_events` row. Re-enable from the Connections/Feeds tab. Per-venue outbound rate-gating (`venueGate`) keeps concurrent same-venue requests across currencies under each venue's limit.
 
-If more than 100 gaps are pending (indicating a fresh database), healing defers to the backfill process rather than issuing thousands of individual requests.
+### Gaps & healing
 
-### Manual healer — `scripts/healGaps.ts`
+Gaps are missing `candles_1m` rows, detected via `generate_series` against the expected minute sequence on startup (7-day scan), hourly (1-day scan), and on demand (`POST /monitor/heal`). Contiguous missing minutes are grouped and fetched from the enabled venues in 300-minute tiles via `healRange`, running the same guards, peg wave, and `buildComposite` as the live collector — so a healed row is full-quality. Healing also writes the paired stable-rate rows, so a stable-rate hole is repairable (not just an unfillable `unresolvable`). States: `detected → healing → healed | unresolvable`; healed gaps are kept as history. If more than 100 gaps are pending (fresh DB), healing defers to backfill.
 
-The in-process healer has one failure mode on a live instance: when a **single multi-hour outage** produces more than 100 missing minutes, `healPendingGaps` defers to the backfill — but backfill only runs on first startup (it sets `backfillComplete=true` in `app_settings` and skips on every subsequent boot). The result is that a 3-hour+ outage can sit detected-but-unhealed indefinitely, and even `POST /monitor/heal` won't fix it (it trips the same guard).
-
-`scripts/healGaps.ts` is the escape hatch. It bypasses the guard and calls `healRange(from, to, true)` directly per contiguous block of missing minutes — same code path the hourly scan uses for small gaps, so the resulting composites are full-quality (all five exchanges, guards applied, confidence + volume-leader normalization).
-
-```bash
-npx tsx scripts/healGaps.ts              # last 7 days
-npx tsx scripts/healGaps.ts 3            # last 3 days
-npx tsx scripts/healGaps.ts 7 --dry-run  # detect only, no fetches/writes
-```
-
-The script keeps the `gaps` table coherent (`detected` → `healing` → `healed`/`unresolvable`) and prints a post-heal confidence histogram so you can verify the window came out clean. Network cost is bounded by range span: each 300-minute tile is one parallel fetch across the five exchanges with a 5s throttle between tiles.
-
-Reach for `healGaps.ts` when `/monitor/gaps` shows a large block stuck in `detected`, or after a known exchange/collector outage. It does **not** touch `backfillComplete`, so it is safe to re-run.
+`POST /monitor/repair` (ensureSourceCoverage → backfillStableRates → recomposeRange) rebuilds composites over a window from the source archive and reconciles the `gaps` table.
 
 ### Backfill
 
-On first startup, if fewer than 3 months of data exist, the backfill process scans day-by-day from 90 days ago to present. For each day with fewer than 1440 rows, it calls `healRange(dayStart, dayEnd, false)` — the same multi-source fetch and composite path used by the gap healer, but in `insertCandleIfMissing` mode so existing rows are never overwritten. Backfill therefore produces full-confidence composites, not single-source placeholders.
+On first start, if less than ~90 days of data exist, backfill walks day-by-day from the inception floor, calling `healRange(..., overwrite=false)` (`insertCandleIfMissing`, never clobbers live data). Idempotent per currency via a `backfillComplete:<code>` latch; subsequent boots skip it. Runs 30s after start (to avoid hammering venues on a mass restart) and concurrently with the live collector.
 
-Backfill is idempotent per-instance: completion writes `backfillComplete=true` to `app_settings` and subsequent boots skip it. To recover a specific window on a live instance — for example a multi-hour outage that the hourly scan refuses to heal under the 100-gap guard — use `scripts/healGaps.ts` instead of clearing `backfillComplete`.
+### Manual scripts
 
-Backfill runs concurrently with the live collector. After completion it clears stale detected gaps and rescans the last 7 days.
+```bash
+npx tsx scripts/healGaps.ts [days] [--dry-run]   # force-heal blocks the 100-gap guard defers; prints a post-heal confidence histogram
+npx tsx scripts/reconcileGaps.ts [days]          # flip stale terminal gap rows to healed where the minute now has data
+npx tsx scripts/synchronizeWithRemoteDb.ts       # idempotent pull of candles + sources + rates from a remote candleserv DB
+```
 
-### Collection deadline
-
-The collector enforces a 15-second deadline from the minute boundary. If the composite has not been written by the deadline, the minute is skipped and left for the gap healer. An overlap guard prevents concurrent collection runs.
+`healGaps.ts` is the escape hatch when `/monitor/gaps` shows a large block stuck `detected` (a multi-hour outage exceeds the 100-gap guard and backfill only runs once). It does not touch `backfillComplete`, so it's safe to re-run.
 
 ### Webhook alerting
 
-If `alertWebhookUrl` is configured in `app_settings`, the system sends HTTP POST alerts for:
-- `gap_detected` — timestamp and duration of the missing candle
-- `source_degraded` — sourceCount has dropped below baseline for 3+ consecutive minutes
-- `source_recovered` — sourceCount returned to baseline
-- `source_paused` — a source was auto-paused after exceeding the failure threshold
-
-Repeat-alert suppression prevents the same gap from firing multiple webhooks across detection runs.
+If `alertWebhookUrl` is set, the system POSTs `gap_detected`, `source_degraded`, `source_recovered`, and `source_paused` alerts, with repeat-suppression so one gap doesn't fire repeatedly across scans.
 
 ---
 
@@ -244,126 +215,82 @@ Repeat-alert suppression prevents the same gap from firing multiple webhooks acr
 
 ### Authentication
 
-API consumer routes under `/v1/*` require API key authentication via the `Authorization` header.
-
-**Token construction (client side):**
+`/v1/*` routes require a per-request nonce-signed token in the `Authorization` header (the header value **is** the token — no `Bearer` prefix). `/health` is unauthenticated.
 
 ```javascript
-const nonce = Date.now();
-const enc   = SHA256(secret + ':' + nonce).toString('hex');
-const chop  = enc.slice(0, 19);
-const raw   = api_key + ':' + nonce + ':' + chop;
-const token = Buffer.from(raw, 'utf8').toString('base64');
-// sent as: Authorization: <token>
+const nonce = Date.now();                                  // must strictly increase per key (replay protection)
+const chop  = SHA256(secret + ':' + nonce).hex.slice(0, 19);
+const token = base64(api_key + ':' + nonce + ':' + chop);  // → Authorization: <token>
 ```
 
-Nonce must be monotonically increasing (replay protection). The secret never leaves the client.
+A Postman collection that signs requests for you (pre-request script) ships in `docs/api/` and is served live at **`/api-docs/candleserv.postman_collection.json`**. The monitor's **API** tab is a static reference for the whole surface.
 
 ### Candle endpoints
 
 ```
-GET /v1/candles?tf=<tf>&endingAt=<iso>&limit=<n>[&waitForFresh=true&maxWaitMs=<ms>]
-GET /v1/candles/latest?tf=<tf>&n=<count>
+GET  /v1/candles?tf=<tf>&endingAt=<iso>&limit=<n>[&currency=BTC][&waitForFresh=true&maxWaitMs=<ms>]
+GET  /v1/candles/latest?tf=<tf>&n=<count>[&currency=BTC]
+POST /v1/candles/multi      body: { requests: [ { tf, endingAt, limit, currency? }, … ] }   # ≤16, all-or-nothing
+GET  /v1/candles/subscriptions
+GET  /v1/candles/stream?n=<count>[&currency=BTC]   # SSE, 1m only, rolling buffer 1–200
 ```
 
-Maximum limit: 5000. All higher timeframes are aggregated from 1m rows on read.
+Max `limit` 5000. Higher timeframes are aggregated from 1m on read. **Timeframes:** `1m, 5m, 10m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d, 3d, 7d, 30d` (`7d` aligns to Monday 00:00 UTC; `30d` to calendar months).
 
-**Supported timeframes:** `1m`, `5m`, `10m`, `15m`, `1h`, `2h`, `4h`, `6h`, `12h`, `1d`, `3d`, `7d`, `30d`
+**`waitForFresh`** holds the response until the bar closing at `endingAt` is ingested (eliminates feed-lag races). Requires `endingAt` on the tf boundary; supported tfs `1m,5m,15m,30m,1h,4h,6h,1d,7d`; `maxWaitMs` default 15000, max 60000; `504` on timeout, `503` during a repair job.
 
-The `7d` timeframe aligns to Monday 00:00 UTC. The `30d` timeframe aligns to calendar month boundaries (actual width varies 28–31 days).
+Candle JSON: `{ timestamp(ms), open, high, low, close, volume, sourceCount, sourceCountBaseline, sources, confidence }` — `volume` is the normalized value.
 
-**`waitForFresh` (long-poll):** when `waitForFresh=true`, the server holds the response until a 1m candle whose close timestamp is at-or-after `endingAt` has been ingested. Eliminates the exchange-feed-lag race for callers that must consume bars at the moment of close. Constraints:
+### Premium endpoints
 
-- Requires `endingAt` aligned to the `tf` boundary (`endingAt % tfMs === 0`).
-- Supported tfs: `1m`, `5m`, `15m`, `1h`, `4h`, `1d`, `7d`.
-- `maxWaitMs` defaults to 15000 and is clamped to 60000.
-- If the bar arrives in time, the response is identical in shape to a normal fetch.
-- On timeout, returns `504 Gateway Timeout` with `{ error, tf, endingAt, lastAvailableTs, waitedMs }`.
-
-**Response format:**
-
-```json
-{
-  "candles": [
-    {
-      "timestamp": 1708500000000,
-      "open": 45000.50,
-      "high": 45200.75,
-      "low": 44900.25,
-      "close": 45100.00,
-      "volume": 1250000.00,
-      "volumeNormalized": 1562500.00,
-      "sourceCount": 4,
-      "sourceCountBaseline": 5,
-      "sources": 23,
-      "confidence": 0.8
-    }
-  ]
-}
+```
+GET /v1/premium?[currency=BTC][&tf=1m][&endingAt=<iso>][&limit=200][&venue=<name>]
+GET /v1/premium/venues[?currency=BTC]
 ```
 
-### SSE streams
-
-**Monitor stream** (session cookie, all timeframes):
-```
-GET /candles/stream?tf=<tf>
-```
-
-**API consumer stream** (API key, 1m only, rolling buffer):
-```
-GET /v1/candles/stream?n=<count>
-```
-
-On connect, immediately pushes the last N candles. On each new composite, pushes the latest N candles. Range: 1–200.
-
-**Subscription check:**
-```
-GET /v1/candles/subscriptions
-```
+Per-venue OHLC-of-offset bars (signed USD): `o`/`c` are the open/close-field offset at the bucket's first/last minute, `h`/`l` the widest/narrowest the basis got intraday, `n` the contributing minutes. All standard timeframes except `30d`. Rate-limited per key (sliding 60s window, threshold `rateLimitPerMinute`, default 120; `429` + `Retry-After: 60`); `503` during a repair job.
 
 ### Operational endpoints
 
 | Endpoint | Auth | Description |
 |----------|------|-------------|
-| `GET /health` | None | Status, uptime, latest candle, sources active, gaps pending |
-| `GET /monitor/sources` | Session | Per-source state, last fetch, consecutive errors, last close |
-| `GET /monitor/stats` | Session | Total rows, oldest/newest candle, sourceCount distribution, collection latency |
-| `GET /monitor/gaps` | Session | Gap records with state and heal timestamps |
-| `GET /monitor/errors` | Session | Error log with service/time/message filters |
-| `GET /monitor/stream-events` | Session | Connection state history for the timeline |
+| `GET /health` | None | Status, uptime, latest candle, gaps pending, latency, recent outages |
+| `GET /monitor/*` | Session | Stats, sources, gaps, errors, events, feeds, candles, config (operator UI) |
+| `GET /api-docs/*` | None | Postman collection + environment (public, non-secret) |
 
 ---
 
 ## Configuration
 
-### `.env` reference
+### `.env`
 
 ```
 DATABASE_URL=postgres://user:pass@host:port/dbname   # written by setup wizard
-DEMO_TOKEN_SECRET=<64-char random hex>                # auto-generated at setup; signs the demo page token (unused unless IS_DEMO)
+DEMO_TOKEN_SECRET=<64-char random hex>                # auto-generated at setup; signs the demo page token (only used if IS_DEMO)
 SETUP_COMPLETE=true                                   # gates the setup wizard
 PORT=3007                                             # set before first start if needed
-READONLY_MODE=true                                    # for read-only instances (see below)
+READONLY_MODE=true                                    # read-only replica (see below)
+IS_DEMO=true                                          # public read-only demo droplet (see below); also settable via app_settings
 ```
 
-### `app_settings` (managed from Admin tab)
+### `app_settings` (managed from the Admin tab)
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `minSources` | `3` | Minimum sources for full-confidence composite; also the threshold before the outlier guard fires |
+| `minSources` | `3` | Minimum surviving sources for a composite; also the outlier-guard threshold. Per-currency override in `currencies.minSources`. |
 | `alertWebhookUrl` | `""` | HTTP POST target for gap/source alerts (empty = disabled) |
-| `sourceAutoSuspendThreshold` | `10` | Guard rejections or fetch failures in 24h before auto-pause |
-| `redisUrl` | `""` | Redis URL (auto-detected on localhost:6379 if blank) |
+| `sourceAutoSuspendThreshold` | `10` | Guard rejections / fetch failures in 24h before auto-suspend |
+| `redisUrl` | `""` | Redis URL (auto-detected on `localhost:6379` if blank) |
+| `rateLimitEnabled` | `false` | Demo IP rate-limit on/off |
+| `rateLimitPerMinute` | `120` | Sliding-window threshold (demo reads + `/v1/premium`) |
 
-Settings are cached in Redis with a 1-hour TTL. Writes via the Admin tab immediately invalidate the cache.
+Settings are cached (Redis, 1h TTL); Admin-tab writes invalidate immediately.
 
 ---
 
 ## Connecting downstream services
 
-Each service that consumes candleserv gets its own API key issued from the Admin tab.
-
-Add to the consumer's `.env`:
+Each consumer gets its own API key from the Admin tab. The secret is shown once at issue and cannot be retrieved — revoke and reissue if lost.
 
 ```
 CANDLESERV_URL=http://localhost:3007
@@ -371,20 +298,10 @@ CANDLESERV_API_KEY=<key>
 CANDLESERV_SECRET=<secret>
 ```
 
-The secret is shown once at issue time and cannot be retrieved again. If lost, revoke and reissue.
-
-### Testing the connection
-
+Test:
 ```bash
-CANDLESERV_URL=http://localhost:3007 \
-CANDLESERV_API_KEY=<key> \
-CANDLESERV_SECRET=<secret> \
-npx tsx scripts/testCaller.ts
-```
-
-Or simply:
-
-```bash
+CANDLESERV_URL=… CANDLESERV_API_KEY=… CANDLESERV_SECRET=… npx tsx scripts/testCaller.ts
+# or
 curl http://localhost:3007/health
 ```
 
@@ -392,112 +309,75 @@ curl http://localhost:3007/health
 
 ## Caching (Redis)
 
-Popular queries are cached in Redis. Cache keys expire at the start of the next boundary for the requested timeframe (e.g. a `1h` query expires at the next hour). Historical range queries that don't overlap the current open candle receive a 24-hour TTL.
-
-Redis is optional. If unavailable, all queries hit Postgres directly.
+Popular queries are cached; keys expire at the next boundary for the requested timeframe (a `1h` query expires at the next hour). Historical ranges that don't overlap the open candle get a 24h TTL. Redis is optional — if unavailable, all queries hit Postgres directly.
 
 ---
 
 ## Monitor UI
 
-A built-in browser-based admin interface served at `/monitor` with four tabs:
+A browser admin interface at `/monitor`, session-authed (PBKDF2-SHA512 passwords, 7-day sessions). Tabs:
 
-- **Candles** — Real-time candlestick chart (TradingView Lightweight Charts), timeframe selector, historical query, source quality overlay
-- **Connections** — Per-exchange status cards with state badges, connection timeline, collection latency, heal button
-- **Errors** — Filterable error log table with auto-refresh
-- **Admin** — API key management, app settings, source management, user management (superadmin only)
-
-Authentication uses session cookies (PBKDF2-SHA512 passwords, 7-day session expiry).
+- **Candles** — real-time candlestick chart (confidence = opacity), timeframe selector, historical query, per-source overlay
+- **Connections** — per-venue status cards, connection timeline, latency, live formula editor, gaps, heal/repair controls
+- **Feeds** — currency control plane: enable assets, per-venue symbol/availability/enable, per-currency settings
+- **Errors** — filterable error log with auto-refresh
+- **Events** — venue outage timeline
+- **Admin** — API key management, app settings, source management, user management (superadmin)
+- **API** — static reference for the consumer API + Postman download
 
 ### Permissions
 
 | Permission | Description |
 |-----------|-------------|
 | `SUPERADMIN` | Full access, single user |
-| `CAN_VIEW_CANDLESERV` | Read-only access to monitor |
-| `CAN_MODIFY_CANDLESERV` | Can trigger heals, manage keys, change config |
+| `CAN_VIEW_CANDLESERV` | Read-only access to the monitor |
+| `CAN_MODIFY_CANDLESERV` | Trigger heals/repairs, manage keys, change config |
+
+---
+
+## Demo mode
+
+With `IS_DEMO=true` (env or `app_settings`), the instance is a public read-only mirror: `/v1/*` is disabled wholesale (`403`), every `/monitor` GET is served without a session given a same-origin request carrying a server-injected signed page token (secret-bearing reads — config, keys, audit log — stay denied), all mutations are `403`, and reads are clamped to 200 rows. An optional per-IP rate limit (`rateLimitEnabled` + `rateLimitPerMinute`) sheds floods. Requires `DEMO_TOKEN_SECRET`.
 
 ---
 
 ## Setup wizard
 
-On first start, candleserv serves a setup wizard at `/setup`. All other routes return 503 until setup completes. The wizard has four steps:
+On first start, candleserv serves a wizard at `/setup`; all other routes return 503 until it completes:
 
-1. **Database connection** — host, port, database name, username, password. Test button validates before proceeding.
-2. **Admin account** — email and password (min 12 characters). Receives `SUPERADMIN`.
-3. **Service configuration** — minimum sources, alert webhook URL. Defaults are safe.
-4. **Confirm and install** — creates tables, seeds settings, hashes password, writes `.env`.
+1. **Database connection** — host/port/db/user/password, with a test button.
+2. **Admin account** — email + password (min 12 chars); receives `SUPERADMIN`.
+3. **Service configuration** — minimum sources, alert webhook URL.
+4. **Confirm and install** — creates tables, seeds settings + the currency control plane, hashes the password, writes `.env`.
 
-No restart is required after setup. To reset to factory state, delete `.env` and restart.
+No restart required. To reset to factory state, delete `.env` and restart.
 
 ---
 
-## Read-only instances (non-destructive access)
+## Read-only instances
 
-Multiple read-only instances can connect to the same production database. They can view all candle data and use the monitor UI, but cannot write candle data, trigger heals, modify config, or manage API keys. Only the master (production) instance runs the collector and writes data.
+Multiple read-only instances can connect to the same production database — full monitor UI and candle reads, but no writes, heals, config changes, or key management. Only the master instance runs the collector and writes.
 
-Enforcement is at two layers:
+Enforcement is two-layered: a PostgreSQL role with `SELECT` everywhere and write access only to `sessions`, plus `READONLY_MODE=true`, which suppresses all background workers (collector, healer, gap detector, maintenance) and blocks every HTTP mutation at the app layer (GET/HEAD/OPTIONS and `POST /v1/candles/multi` — a read — pass).
 
-- **PostgreSQL role** — the read-only user has `SELECT` on all tables and write access only to `sessions` (required for monitor login/logout and session keepalive to function).
-- **Application flag** — `READONLY_MODE=true` suppresses all background workers (collector, healer, gap detector, schema migration) and blocks all HTTP mutation endpoints at the app level.
-
-### Required session table permissions
-
-The `sessions` table requires `SELECT`, `INSERT`, `UPDATE`, and `DELETE` for the read-only role. Without `UPDATE`, the session `lastSeen` timestamp cannot be refreshed on each request. This causes `trackSession` to fail, which can result in a new anonymous session cookie being issued that silently overwrites the browser's authenticated cookie — producing spurious 401s that persist until the user logs out and back in.
-
-### Step 1 — Create the read-only PostgreSQL role (run once on the production DB)
-
-Connect to the production `candleserv` database as a superuser and run:
+### Create the read-only role (once, on the production DB)
 
 ```sql
--- Create the role
-CREATE ROLE candleserv_ro LOGIN PASSWORD '<choose a strong password>';
+CREATE ROLE candleserv_ro LOGIN PASSWORD '<strong password>';
 GRANT CONNECT ON DATABASE candleserv TO candleserv_ro;
 GRANT USAGE ON SCHEMA public TO candleserv_ro;
-
--- Read access to all tables
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO candleserv_ro;
-
--- Write access to sessions only (required for monitor login/logout and session keepalive)
+-- sessions is the one writable table (monitor login/logout + keepalive)
 GRANT INSERT, UPDATE, DELETE ON TABLE sessions TO candleserv_ro;
 GRANT USAGE, SELECT ON SEQUENCE sessions_id_seq TO candleserv_ro;
-
--- Ensure any future tables created by the master are also readable
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO candleserv_ro;
 ```
 
-> **Note:** `ALTER DEFAULT PRIVILEGES` only covers tables created after that command runs. If new tables are added to the schema later (e.g. `service_events`), re-run the following to catch up:
-> ```sql
-> GRANT SELECT ON ALL TABLES IN SCHEMA public TO candleserv_ro;
-> ```
+> `ALTER DEFAULT PRIVILEGES` only covers tables created *after* it runs. If the schema gains tables later, re-run `GRANT SELECT ON ALL TABLES IN SCHEMA public TO candleserv_ro;` to catch up.
 
-To verify the role cannot write to candle tables but can manage sessions:
+The `sessions` table needs `UPDATE` as well as `SELECT`/`INSERT`/`DELETE` — without it the per-request `lastSeen` refresh fails, which can issue an anonymous cookie that silently overwrites the authenticated one and produces spurious 401s.
 
-```sql
-SET ROLE candleserv_ro;
-INSERT INTO candles_1m (timestamp) VALUES (NOW());                     -- must fail: permission denied
-INSERT INTO sessions ("sessionId") VALUES ('test');                    -- must succeed
-UPDATE sessions SET "lastSeen" = NOW() WHERE "sessionId" = 'test';    -- must succeed
-DELETE FROM sessions WHERE "sessionId" = 'test';                      -- must succeed
-RESET ROLE;
-```
-
-### Stale session cleanup
-
-Each login creates a new session row. The master instance prunes them daily (authenticated sessions older than 7 days). If sessions accumulate — for example from repeated logout/login cycles while debugging the 401 issue — clean them up manually:
-
-```sql
--- Keep only the most recent session per user, delete the rest
-DELETE FROM sessions
-WHERE id NOT IN (
-  SELECT MAX(id) FROM sessions WHERE "userId" IS NOT NULL GROUP BY "userId"
-)
-AND "userId" IS NOT NULL;
-```
-
-### Step 2 — Configure the read-only instance
-
-Create a `.env` in the candleserv root on the dev/secondary machine:
+### Configure the replica
 
 ```
 DATABASE_URL=postgres://candleserv_ro:<password>@<production-host>:5432/candleserv
@@ -507,49 +387,15 @@ READONLY_MODE=true
 PORT=3007
 ```
 
-`SETUP_COMPLETE=true` skips the setup wizard — the production database is already initialised.
+Generate a secret: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. Start with `pm2 start npm --name candleserv-ro -- start`; the log confirms `READONLY_MODE — collector, healer, gap detector, and maintenance disabled`.
 
-Generate a unique `DEMO_TOKEN_SECRET`:
+Read-only instances issue their own DB-backed session cookies (no shared signing secret) and never write candle/gap/event/settings rows; their sessions are pruned by the master's daily job.
 
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-```
+---
 
-### Step 3 — Start
+## Operator CLI
 
 ```bash
-npm run dev
-# or
-pm2 start npm --name candleserv-dev -- start
+npx tsx cli/index.ts          # interactive menu
+npx tsx cli/ctl.ts <command>  # same actions, scriptable (localhost /internal)
 ```
-
-On startup the log will confirm:
-
-```
-[server] READONLY_MODE — collector, healer, gap detector, and maintenance disabled
-```
-
-### What works in read-only mode
-
-| Feature | Available |
-|---------|-----------|
-| Monitor UI (all tabs) | Yes |
-| Candles tab — live SSE stream | Yes |
-| Candles tab — historical scroll | Yes |
-| Connections tab | Yes |
-| Errors tab | Yes |
-| Admin tab (view only) | Yes |
-| `/v1/candles/*` API endpoints | Yes |
-| `/health` | Yes |
-| Monitor login / logout | Yes |
-| Trigger heal (`POST /monitor/heal`) | No — 403 |
-| Modify config (`POST /monitor/config`) | No — 403 |
-| API key management | No — 403 |
-| Resume paused source | No — 403 |
-| Collector / healer / gap detector | Not started |
-
-### Notes
-
-- Multiple read-only instances can run simultaneously — each issues its own session cookies (random, DB-backed — there is no shared cookie-signing secret).
-- Sessions created by read-only instances are stored in the shared `sessions` table and pruned by the production instance's daily maintenance job. This is harmless.
-- The read-only instance never writes candle data, gap records, stream events, or app settings — enforcement is at both the PostgreSQL role level and the application middleware level.
