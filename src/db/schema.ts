@@ -52,15 +52,17 @@ CREATE TABLE IF NOT EXISTS candles_1m_sources (
   "updatedAt"      timestamptz  NOT NULL DEFAULT NOW(),
   PRIMARY KEY ("currency", "timestamp", "source")
 );
-DROP INDEX IF EXISTS candles_1m_sources_ts_desc;
-CREATE INDEX IF NOT EXISTS candles_1m_sources_curr_ts_desc ON candles_1m_sources ("currency", "timestamp" DESC);
-
--- Idempotent migration for installs that pre-date the usedInFormula/createdAt/updatedAt columns.
+-- Idempotent migrations for pre-existing installs. These ADD COLUMNs MUST run
+-- BEFORE the index below: CREATE TABLE IF NOT EXISTS no-ops on an existing table,
+-- so on a pre-multi-currency DB the "currency" column does not exist until added
+-- here — and candles_1m_sources_curr_ts_desc references it.
 ALTER TABLE candles_1m_sources ADD COLUMN IF NOT EXISTS "usedInFormula" boolean;
 ALTER TABLE candles_1m_sources ADD COLUMN IF NOT EXISTS "createdAt"     timestamptz NOT NULL DEFAULT NOW();
 ALTER TABLE candles_1m_sources ADD COLUMN IF NOT EXISTS "updatedAt"     timestamptz NOT NULL DEFAULT NOW();
 -- Multi-currency Phase 1 (Phase 12 migration). PK rebuild → (currency, timestamp, source) is a separate heavy step.
 ALTER TABLE candles_1m_sources ADD COLUMN IF NOT EXISTS "currency"      varchar NOT NULL DEFAULT 'BTC';
+DROP INDEX IF EXISTS candles_1m_sources_ts_desc;
+CREATE INDEX IF NOT EXISTS candles_1m_sources_curr_ts_desc ON candles_1m_sources ("currency", "timestamp" DESC);
 
 -- Per-venue local USDT/USD rate paired with each candle. The peg is per-venue
 -- and asset-independent, so this table stays currency-agnostic: one rate row per
