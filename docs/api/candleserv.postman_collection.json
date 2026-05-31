@@ -1,0 +1,305 @@
+{
+  "info": {
+    "_postman_id": "c4d1e7a0-1f3b-4a2e-9c6d-candleserv0001",
+    "name": "candleserv API",
+    "description": "Consumer-facing REST API for **candleserv** — a self-contained multi-source 1m BTC OHLCV composite candle store.\n\n## Base URL\n\nSet the `baseUrl` collection/environment variable. Defaults to `http://localhost:3007` (the service's default `PORT`).\n\n## Authentication\n\nEvery `/v1/*` route requires a nonce-signed token in the `Authorization` header (no `Bearer` prefix — the header value **is** the token). `/health` is unauthenticated.\n\nThe token is built per request as:\n\n```\ntoken = base64( apiKey + \":\" + nonce + \":\" + chop )\nchop  = SHA256( apiSecret + \":\" + nonce ).hex.slice(0, 19)\n```\n\n- `nonce` must **strictly increase** for a given key — the server rejects any nonce `<=` the last one it saw (`401 Nonce replay rejected`). This collection's pre-request script uses `Date.now()` and persists the last value in the `lastNonce` variable to guarantee monotonicity, so parallel sends in the same millisecond don't collide.\n- The pre-request script runs at the **collection level** and only attaches the header to requests whose path starts with `/v1`.\n\nSet `apiKey` and `apiSecret` as environment variables (template provided alongside this collection). **Never commit the secret.**\n\n## Composite candle shape\n\nEvery candle object returned by the `/v1/candles*` endpoints:\n\n| Field | Type | Meaning |\n|---|---|---|\n| `timestamp` | number | Bar-open time, unix **milliseconds** |\n| `open` / `high` / `low` / `close` | number | Composite OHLC, real-USD space |\n| `volume` | number | **Normalized** volume (`raw × baseline/sourceCount`) |\n| `sourceCount` | number | Venues that contributed this bar |\n| `sourceCountBaseline` | number | 24h mode of `sourceCount` |\n| `sources` | number | Bitmask of contributing venues (see below) |\n| `confidence` | number | `[0,1]` — `sourceRatio × (1 − rejectedRatio)` |\n\n**Source bitmask** (`sources` is the OR of these): binance=1, bybit=2, kraken=4, coinbase=8, bitfinex=16, okx=32, gate=64, bitget=128.\n\n## Timeframes\n\n`1m, 5m, 10m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d, 3d, 7d, 30d`. Higher timeframes are aggregated from 1m on the fly; `30d` is a calendar-month rollup. (`/v1/premium` supports all of these **except** `30d`.)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET /health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            },
+            "description": "Unauthenticated liveness + freshness probe.\n\nReturns:\n- `status` — `\"ok\"`\n- `uptime` — process uptime, seconds\n- `latestCandle` — timestamp of the newest composite candle (or null)\n- `gapsPending` — count of gaps in `detected`/`healing` state\n- `activeSubscriptions` — open SSE streams\n- `collectionLatency` — `{ avgMs, minMs, maxMs, sampleSize }` over the last 60 bars\n- `recentOutages` — up to 5 recent venue outage events"
+          },
+          "response": []
+        }
+      ],
+      "description": "Unauthenticated service health."
+    },
+    {
+      "name": "Candles (v1)",
+      "item": [
+        {
+          "name": "GET /v1/candles/latest",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/candles/latest?tf=1h&n=10&currency={{currency}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "candles", "latest"],
+              "query": [
+                {
+                  "key": "tf",
+                  "value": "1h",
+                  "description": "Required. Timeframe: 1m,5m,10m,15m,30m,1h,2h,4h,6h,12h,1d,3d,7d,30d."
+                },
+                {
+                  "key": "n",
+                  "value": "10",
+                  "description": "Optional. Number of candles to return, oldest-first. Default 1, max 5000."
+                },
+                {
+                  "key": "currency",
+                  "value": "{{currency}}",
+                  "description": "Optional. Asset code. Default BTC (pre-multi-currency consumers may omit it)."
+                }
+              ]
+            },
+            "description": "The most recent `n` candles for a timeframe, ending at now (oldest-first). Redis-cached with a boundary-aware TTL.\n\nReturns `{ \"candles\": [ ...candle ] }`."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /v1/candles",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/candles?tf=1h&endingAt=2026-05-31T00:00:00.000Z&limit=100&currency={{currency}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "candles"],
+              "query": [
+                {
+                  "key": "tf",
+                  "value": "1h",
+                  "description": "Required. Timeframe (see /latest)."
+                },
+                {
+                  "key": "endingAt",
+                  "value": "2026-05-31T00:00:00.000Z",
+                  "description": "Required. ISO-8601 instant; returns the `limit` candles ending at/just before this time."
+                },
+                {
+                  "key": "limit",
+                  "value": "100",
+                  "description": "Optional. Default 100, max 5000."
+                },
+                {
+                  "key": "currency",
+                  "value": "{{currency}}",
+                  "description": "Optional. Default BTC."
+                },
+                {
+                  "key": "waitForFresh",
+                  "value": "true",
+                  "description": "Optional. When `true`, long-poll: hold the response until a 1m candle closing at/after `endingAt` is ingested, then return. `endingAt` must align to the tf boundary. Supported tfs: 1m,5m,15m,30m,1h,4h,6h,1d,7d. 504 on timeout, 503 if a repair job is running.",
+                  "disabled": true
+                },
+                {
+                  "key": "maxWaitMs",
+                  "value": "15000",
+                  "description": "Optional. Only with waitForFresh. Default 15000, max 60000.",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "A window of `limit` candles ending at `endingAt` (oldest-first).\n\nReturns `{ \"candles\": [ ...candle ] }`.\n\n**waitForFresh long-poll:** enable the `waitForFresh`/`maxWaitMs` params to block until the bar closing at `endingAt` exists — used by downstream cron consumers that need the just-closed bar without polling. Returns 504 (`candle not available within maxWaitMs`, includes `lastAvailableTs`) on timeout, 503 (`repair in progress`) if a recompose/repair job is in flight."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /v1/candles/multi",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"requests\": [\n    { \"tf\": \"1h\", \"endingAt\": \"2026-05-31T00:00:00.000Z\", \"limit\": 24 },\n    { \"tf\": \"1d\", \"endingAt\": \"2026-05-31T00:00:00.000Z\", \"limit\": 30, \"currency\": \"BTC\" }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/candles/multi",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "candles", "multi"]
+            },
+            "description": "Batched multi-timeframe read in a single auth/nonce pair. All-or-nothing: any invalid or failing entry fails the whole batch with the offending index.\n\nBody: `{ \"requests\": [ { \"tf\", \"endingAt\", \"limit\", \"currency?\" }, ... ] }`\n- Max 16 entries, each `limit` capped at 5000, `limit` must be a positive integer.\n- `waitForFresh` is intentionally not supported here.\n\nReturns `{ \"results\": [ { \"tf\", \"currency\", \"endingAt\", \"candles\" }, ... ] }` in input order.\n\nNote: this POST is semantically a read — it is allowed on read-only replicas and is blocked (503) during repair jobs."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /v1/candles/subscriptions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/candles/subscriptions",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "candles", "subscriptions"]
+            },
+            "description": "Whether the calling API key currently has an active SSE stream open, plus its parameters. Useful before opening a `/v1/candles/stream`."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /v1/candles/stream (SSE)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "text/event-stream" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/candles/stream?n=5&currency={{currency}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "candles", "stream"],
+              "query": [
+                {
+                  "key": "n",
+                  "value": "5",
+                  "description": "Optional. Rolling buffer size pushed on each event. Default 1, clamped 1..200."
+                },
+                {
+                  "key": "currency",
+                  "value": "{{currency}}",
+                  "description": "Optional. Default BTC — an event for another currency never wakes this stream."
+                }
+              ]
+            },
+            "description": "Server-Sent Events stream — **1m only**. On connect, immediately pushes the last `n` candles; thereafter pushes the rolling last `n` whenever a new 1m composite for `currency` is ingested.\n\nEvent name: `candles`. Data: `{ \"candles\": [ ...candle ], \"count\": <n> }`.\n\nUse Postman's *Send* on this request to open the stream (Postman renders SSE events live). The stream is dropped briefly at the start of a repair job and should be reconnected by the client."
+          },
+          "response": []
+        }
+      ],
+      "description": "Composite OHLCV reads. All routes require nonce-auth (attached automatically by the collection pre-request script)."
+    },
+    {
+      "name": "Premium (v1)",
+      "item": [
+        {
+          "name": "GET /v1/premium",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/premium?currency={{currency}}&tf=1h&endingAt=2026-05-31T00:00:00.000Z&limit=200&venue=bitfinex",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "premium"],
+              "query": [
+                {
+                  "key": "currency",
+                  "value": "{{currency}}",
+                  "description": "Optional. Default BTC."
+                },
+                {
+                  "key": "tf",
+                  "value": "1h",
+                  "description": "Optional. Timeframe, default 1m. All standard tfs except 30d."
+                },
+                {
+                  "key": "endingAt",
+                  "value": "2026-05-31T00:00:00.000Z",
+                  "description": "Optional. ISO-8601 instant the window ends at. Default now.",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "200",
+                  "description": "Optional. Bars per venue. Default 200, capped at 5000 and by a ~93-day raw-minute budget (so tf=1d reaches ~90 days; tf=1m is bar-capped to ~3.5 days/call)."
+                },
+                {
+                  "key": "venue",
+                  "value": "bitfinex",
+                  "description": "Optional. Restrict to one venue: binance,bybit,kraken,coinbase,bitfinex,okx,gate,bitget. Omit for all venues.",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Per-venue **cross-exchange premium-offset** history — the signed-USD leave-one-out basis that the composite engine computes internally and discards, re-derived from the archived per-source candles + paired stable rates.\n\nFor each venue and minute, the offset is `peg_adjusted − median(peers' peg_adjusted)` (USD-native venues pass through un-pegged). Per-minute offsets are aggregated to **OHLC-of-offset** bars per timeframe:\n- `o` / `c` — open/close-field offset at the bucket's first/last minute\n- `h` / `l` — widest / narrowest the basis got anywhere in the bucket (the intraday excursion closes hide); the wick always encloses the body\n- `n` — contributing minutes\n\nOffsets exist only for minutes with ≥3 accepted venues (mirrors the engine). **Bitfinex** is the headline slice (USD-native → its entire basis lands in the offset, a tether/venue-stress observable).\n\nReturns `{ \"currency\", \"tf\", \"unit\": \"usd\", \"venues\": { \"<venue>\": [ { t, o, h, l, c, n }, ... ] } }` (bars ascending, `t` = bucket-open unix ms)."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /v1/premium/venues",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/premium/venues?currency={{currency}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "premium", "venues"],
+              "query": [
+                {
+                  "key": "currency",
+                  "value": "{{currency}}",
+                  "description": "Optional. Default BTC."
+                }
+              ]
+            },
+            "description": "Which venues have derivable premium history for a currency, whether each is peg-corrected (USDT) or USD-native, and the coverage window of its archived source data.\n\nReturns `{ \"currency\", \"venues\": [ { \"name\", \"usdNative\", \"hasData\", \"oldest\", \"newest\", \"count\" } ] }` (`oldest`/`newest` are unix ms or null)."
+          },
+          "response": []
+        }
+      ],
+      "description": "Per-venue premium-offset (cross-exchange basis) history. See research/methods #12 and chit/articles/01_bitfinex_premium. Nonce-auth, attached automatically."
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Attach the candleserv nonce-signed Authorization header to /v1/* requests.",
+          "// token = base64( apiKey + ':' + nonce + ':' + sha256(apiSecret+':'+nonce).hex.slice(0,19) )",
+          "const path = pm.request.url.getPath() || '';",
+          "if (path.indexOf('/v1') === 0) {",
+          "  const apiKey = pm.variables.get('apiKey');",
+          "  const apiSecret = pm.variables.get('apiSecret');",
+          "  if (!apiKey || !apiSecret) {",
+          "    console.warn('candleserv: set apiKey and apiSecret variables (environment or collection).');",
+          "  } else {",
+          "    // Nonce must strictly increase per key; persist the last one used.",
+          "    let last = parseInt(pm.collectionVariables.get('lastNonce') || '0', 10);",
+          "    let nonce = Date.now();",
+          "    if (!(nonce > last)) nonce = last + 1;",
+          "    pm.collectionVariables.set('lastNonce', String(nonce));",
+          "    const chop = CryptoJS.SHA256(apiSecret + ':' + nonce).toString(CryptoJS.enc.Hex).slice(0, 19);",
+          "    const raw = apiKey + ':' + nonce + ':' + chop;",
+          "    const token = CryptoJS.enc.Base64.stringify(CryptoJS.enc.Utf8.parse(raw));",
+          "    pm.request.headers.upsert({ key: 'Authorization', value: token });",
+          "  }",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3007",
+      "type": "string"
+    },
+    {
+      "key": "currency",
+      "value": "BTC",
+      "type": "string"
+    },
+    {
+      "key": "apiKey",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "apiSecret",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "lastNonce",
+      "value": "0",
+      "type": "string"
+    }
+  ]
+}

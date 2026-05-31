@@ -103,6 +103,12 @@ export async function createApp(): Promise<express.Application> {
   app.use("/monitor", monitorOperationalRouter);
   app.use("/monitor", monitorStreamRouter);
 
+  // Serve the canonical API docs (Postman collection + environment) so the
+  // monitor's API tab can offer a download without duplicating the files into
+  // the frontend bundle. docs/api sits at the repo root, one level above dist/
+  // (and above src/ in dev). Public, non-secret — exempt from demo/session gates.
+  app.use("/api-docs", express.static(path.join(__dirname, "..", "docs", "api")));
+
   // Serve frontend static files. In demo, index.html (the SPA entry + every
   // deep-link fallback) is served with a freshly-minted signed page token
   // injected as window.__DEMO__ (Phase 10.3); assets still come from static.

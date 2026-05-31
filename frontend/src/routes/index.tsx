@@ -8,6 +8,7 @@ import FeedsTab from "@/routes/monitor/-FeedsTab";
 import ErrorsTab from "@/routes/monitor/-ErrorsTab";
 import EventsTab from "@/routes/monitor/-EventsTab";
 import AdminTab from "@/routes/monitor/-AdminTab";
+import ApiTab from "@/routes/monitor/-ApiTab";
 
 export const Route = createFileRoute("/")({ component: MonitorPage });
 
@@ -16,7 +17,7 @@ export const Route = createFileRoute("/")({ component: MonitorPage });
 // read-only and gates its mutation controls on `useCanModify()` (lib/access),
 // which mirrors the backend's requirePerm guards. Reads denied to a given viewer
 // (e.g. API keys, or secrets in demo) fall back to a locked placeholder in-tab.
-const ALL_TABS = ["Candles", "Connections", "Feeds", "Errors", "Events", "Admin"] as const;
+const ALL_TABS = ["Candles", "Connections", "Feeds", "Errors", "Events", "Admin", "API"] as const;
 type Tab = typeof ALL_TABS[number];
 
 function MonitorPage() {
@@ -79,6 +80,7 @@ function MonitorContent() {
         {tab === "Errors"      && <ErrorsTab />}
         {tab === "Events"      && <EventsTab />}
         {tab === "Admin"       && <AdminTab />}
+        {tab === "API"         && <ApiTab />}
       </div>
     </div>
   );
