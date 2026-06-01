@@ -376,7 +376,7 @@ export async function collect(minuteTs: Date): Promise<boolean> {
         const baseline     = await getSourceCountBaseline(currency);
         const sigma        = await getRecentCloseStddev(currency);
         const volumeLeader = await getTrailingVolumeLeader(currency, 10);
-        const guarded      = applyGuards(results, minSources, sigma, pegRateMap);
+        const guarded      = applyGuards(results, minSources, sigma, pegRateMap, meta?.premiumEnabled ?? true);
 
         // Write each fetched source's archive row. usedInFormula left NULL —
         // composeMinute sets it via its bulk UPDATE. Inline the insert (do NOT

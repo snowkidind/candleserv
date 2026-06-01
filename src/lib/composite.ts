@@ -49,6 +49,20 @@ function stddev(values: number[]): number {
 }
 
 /**
+ * Leave-one-out premium-offset correction for one field's values, returned in
+ * the same order. Each value is pulled CORRECTION_FACTOR of the way toward the
+ * median of its peers. This is the SAME correction buildComposite step 2 applies
+ * to the close field (close is always corrected there); it is factored out so
+ * the outlier guard can judge corrected closes without re-deriving the math.
+ */
+function correctByConsensus(values: number[]): number[] {
+  return values.map((v, i) => {
+    const consensus = median(values.filter((_, j) => j !== i));
+    return v - CORRECTION_FACTOR * (v - consensus);
+  });
+}
+
+/**
  * Apply input guards to a set of raw source candles.
  * Returns an array of GuardedSource (accepted + rejected).
  *
@@ -62,12 +76,23 @@ function stddev(values: number[]): number {
  *   they agree with the others once normalized. Absent map → raw comparison
  *   (cold-start / single-currency callers unchanged). The returned candle is
  *   always the RAW candle — only the outlier *decision* runs in normalized space.
+ *
+ * premiumEnabled: when true (and ≥ MIN_FOR_OFFSET_CORRECTION sources survive the
+ *   zero/OHLC checks), the outlier decision also applies buildComposite's
+ *   leave-one-out premium-offset correction to the normalized closes before the
+ *   σ test. Peg normalization only neutralizes the USDT/USD quote basis; it does
+ *   NOT remove a USD-native venue's structural cross-exchange premium (e.g.
+ *   bitfinex, which has no peg → identity under normalization). Without this, a
+ *   structurally-premiumed venue is rejected as an outlier before the very
+ *   correction designed to absorb that premium runs in buildComposite. When false
+ *   or fewer than 3 sources, the test judges the peg-normalized close unchanged.
  */
 export function applyGuards(
   results: SourceResult[],
   minSources: number,
   historicalSigma?: number,
   pegRates?: Map<string, number>,
+  premiumEnabled: boolean = true,
 ): GuardedSource[] {
   // Step 1a + 1b: zero guard + OHLC consistency
   const afterBasic: GuardedSource[] = results.map(({ source, candle }) => {
@@ -98,16 +123,27 @@ export function applyGuards(
     return rate === undefined ? g.candle.close : g.candle.close * rate;
   };
 
-  const closes = passed.map(normClose);
-  const med = median(closes);
-  const sigma = historicalSigma ?? Math.max(stddev(closes), 10);
+  // Judge the premium-corrected normalized close, so a USD-native venue's
+  // structural basis (which normalization leaves untouched) doesn't read as an
+  // outlier. Falls back to the plain normalized close when correction is off or
+  // the population is below the leave-one-out floor — i.e. the peg-normalized-
+  // only behavior is preserved in those cases.
+  const normalized = passed.map(normClose);
+  const judged = premiumEnabled && passed.length >= MIN_FOR_OFFSET_CORRECTION
+    ? correctByConsensus(normalized)
+    : normalized;
+  const judgedBySource = new Map<string, number>();
+  passed.forEach((g, i) => judgedBySource.set(g.source, judged[i]));
+
+  const med = median(judged);
+  const sigma = historicalSigma ?? Math.max(stddev(judged), 10);
 
   return afterBasic.map((g) => {
     if (g.rejected) return g;
-    const c = normClose(g);
-    if (Math.abs(c - med) > sigma) {
-      const rawNote = c === g.candle.close ? "" : ` (adj=${c.toFixed(2)})`;
-      logError(`[composite] outlier rejected: ${g.source} close=${g.candle.close}${rawNote} median=${med.toFixed(2)} σ=${sigma.toFixed(2)}`);
+    const x = judgedBySource.get(g.source)!;
+    if (Math.abs(x - med) > sigma) {
+      const note = x === g.candle.close ? "" : ` (judged=${x.toFixed(2)})`;
+      logError(`[composite] outlier rejected: ${g.source} close=${g.candle.close}${note} median=${med.toFixed(2)} σ=${sigma.toFixed(2)}`);
       return { ...g, rejected: true, rejectedReason: "outlier" };
     }
     return g;
