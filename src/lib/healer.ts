@@ -411,6 +411,22 @@ export async function runBackfill(currency: string): Promise<void> {
     return;
   }
 
+  // Feed-availability gate (startup-ordering fix). On a fresh DB every
+  // currency_sources row seeds available=false until the operator's first probe
+  // marks venues available. With zero active feeds there is nothing to backfill,
+  // and healRange would just log "no active feeds" for all ~90 days while the
+  // loop below still latched backfillComplete:<code>="true" — a silent success
+  // that permanently skipped the 3-month backfill until a restart. Bail here
+  // WITHOUT latching so a later trigger (the probe endpoint when feeds first
+  // become available; the hourly gap scan as backstop) runs the real backfill.
+  // A currency with genuinely no enabled feeds just no-ops cleanly each trigger.
+  const excluded = new Set(getCurrentFormula().excludedSources);
+  const feeds = (await getActiveFeeds(currency)).filter((f) => !excluded.has(f.source));
+  if (!feeds.length) {
+    logError(`[healer] runBackfill: no active feeds for ${currency} (none probed available yet) — deferring; NOT marking backfill complete. Will run when feeds become available.`);
+    return;
+  }
+
   backfillRunning = true;
   beginActivity("runBackfill", { currency, windowDays: 90 });
   try {

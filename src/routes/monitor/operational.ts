@@ -12,7 +12,7 @@ import {
   getEnabledCurrencies, listCurrencies, getCurrency,
   setCurrencyEnabled, setPremiumEnabled, setMinSources, setInceptionTs,
 } from "../../db/currencies.js";
-import { getFeedMap, setFeedEnabled, setAvailability } from "../../db/currencyFeeds.js";
+import { getFeedMap, setFeedEnabled, setAvailability, getActiveFeeds } from "../../db/currencyFeeds.js";
 import { onboardCurrency } from "../../lib/healer.js";
 import { ADAPTER_BY_NAME } from "../../adapters/registry.js";
 import { getSourceStatus, resumeSource } from "../../lib/collector.js";
@@ -862,13 +862,27 @@ router.post("/currencies/:code/probe", ...modify, async (req, res) => {
         }
       }),
     );
+    // Startup-ordering fix: the probe is what flips currency_sources.available
+    // from its fresh-DB false → true. If that just gave an enabled currency its
+    // first active feeds and it hasn't finished its initial backfill, kick it now
+    // — this is the "re-trigger once feeds first become available" path, so the
+    // boot-time backfill (which correctly deferred while no feeds were available)
+    // doesn't need a process restart. onboardCurrency serializes behind the
+    // global in-flight guard and is a no-op-equivalent if already running.
+    let backfill: "started" | "deferred" | undefined;
+    const excluded = new Set(getCurrentFormula().excludedSources);
+    const activeAfter = (await getActiveFeeds(code)).filter((f) => !excluded.has(f.source));
+    const backfillDone = (await getSetting(`backfillComplete:${code}`)) === "true";
+    if (existing.enabled && activeAfter.length && !backfillDone) {
+      backfill = await onboardCurrency(code);
+    }
     void recordAdminAction({
       actor: await actorOf(req),
       action: "currency.probe",
       target: code,
-      detail: { available: results.filter((r) => r.available).map((r) => r.source) },
+      detail: { available: results.filter((r) => r.available).map((r) => r.source), ...(backfill ? { backfill } : {}) },
     });
-    return res.json({ ok: true, code, probedAt: probeTs.toISOString(), results });
+    return res.json({ ok: true, code, probedAt: probeTs.toISOString(), results, ...(backfill ? { backfill } : {}) });
   } catch (err) {
     logError(`[monitor] POST /currencies/${code}/probe failed:`, err);
     return res.status(500).json({ error: String(err) });
