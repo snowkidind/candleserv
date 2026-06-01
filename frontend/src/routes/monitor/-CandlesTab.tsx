@@ -162,6 +162,18 @@ export default function CandlesTab() {
   const showSourcesRef = useRef(showSources);
   useEffect(() => { showSourcesRef.current = showSources; }, [showSources]);
 
+  // Feed-error markers (1m only). Errors are currently not currency-scoped, so
+  // every currency's errors show on every tab — this toggle hides them all.
+  // Sticky in localStorage, default OFF.
+  const [showErrors, setShowErrorsState] = useState<boolean>(() => localStorage.getItem("candleserv:showErrors") === "1");
+  function setShowErrors(v: boolean) { localStorage.setItem("candleserv:showErrors", v ? "1" : "0"); setShowErrorsState(v); }
+  const showErrorsRef = useRef(showErrors);
+  useEffect(() => {
+    showErrorsRef.current = showErrors;
+    updateErrorMarkers();
+    if (!showErrors) setErrorTooltip(null);
+  }, [showErrors]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // All loaded candles, keyed by Unix-seconds timestamp to deduplicate across
   // SSE updates and historical fetches
   const allCandles     = useRef<Map<number, CandlestickData>>(new Map());
@@ -343,7 +355,7 @@ export default function CandlesTab() {
       const chartH = chartRef.current?.clientHeight ?? 1;
       const inErrorZone = params.point.y / chartH >= 0.75;
       const msgs = errorBars.current.get(sec);
-      setErrorTooltip(inErrorZone && msgs && msgs.length > 0
+      setErrorTooltip(showErrorsRef.current && inErrorZone && msgs && msgs.length > 0
         ? { x: params.point.x, y: params.point.y, messages: msgs } : null);
 
       // Per-source popup — only when enabled + the cache holds this currency.
@@ -551,7 +563,7 @@ export default function CandlesTab() {
     if (!volumeSeries.current) return;
     // Error timestamps are 1m-resolution events. On higher TFs the confidence
     // field already captures data quality, so markers are only shown at 1m.
-    if (tfRef.current !== "1m") {
+    if (tfRef.current !== "1m" || !showErrorsRef.current) {
       volumeSeries.current.setMarkers([]);
       return;
     }
@@ -765,6 +777,10 @@ export default function CandlesTab() {
             })}
           </div>
           <div className="flex items-center gap-3 ml-auto text-xs">
+            <label className="flex items-center gap-1 cursor-pointer" style={{ color: showErrors ? "#ef4444" : "#4b5563" }} title="Show feed-error markers (1m only)">
+              <input type="checkbox" checked={showErrors} onChange={e => setShowErrors(e.target.checked)} />
+              Errors
+            </label>
             <label className="flex items-center gap-1 cursor-pointer" style={{ color: showSources ? "#fbbf24" : "#4b5563" }} title="Show per-source OHLC on hover (1m only)">
               <input type="checkbox" checked={showSources} onChange={e => setShowSources(e.target.checked)} />
               Sources
