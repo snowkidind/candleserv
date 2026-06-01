@@ -288,11 +288,15 @@ export async function getCollectionLatencyStats(currency: string, sample = 60): 
   maxMs: number;
   sampleSize: number;
 }> {
+  // "timestamp" is the candle's OPEN minute, so it covers [timestamp, timestamp+60s)
+  // and cannot exist until it closes at timestamp+60s. Collection latency is the gap
+  // from candle CLOSE to persistence — subtract the 1-minute candle duration, else
+  // every reading carries a meaningless +60000ms baseline (the candle's own length).
   const res = await query(
     `SELECT
-       AVG(EXTRACT(EPOCH FROM ("createdAt" - "timestamp")) * 1000) AS avg_ms,
-       MIN(EXTRACT(EPOCH FROM ("createdAt" - "timestamp")) * 1000) AS min_ms,
-       MAX(EXTRACT(EPOCH FROM ("createdAt" - "timestamp")) * 1000) AS max_ms,
+       AVG(EXTRACT(EPOCH FROM ("createdAt" - "timestamp" - INTERVAL '1 minute')) * 1000) AS avg_ms,
+       MIN(EXTRACT(EPOCH FROM ("createdAt" - "timestamp" - INTERVAL '1 minute')) * 1000) AS min_ms,
+       MAX(EXTRACT(EPOCH FROM ("createdAt" - "timestamp" - INTERVAL '1 minute')) * 1000) AS max_ms,
        COUNT(*) AS cnt
      FROM (SELECT "timestamp", "createdAt" FROM candles_1m WHERE "currency" = $1 ORDER BY "timestamp" DESC LIMIT $2) sub`,
     [currency, sample]
