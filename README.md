@@ -6,6 +6,8 @@ Candleserv has no knowledge of the trading system that consumes it. It stores ca
 
 Originally a Bitcoin-only store, it is now **multi-currency**: every table is keyed by `(currency, timestamp)` and the collector composes each enabled asset independently. BTC is the only enabled currency in a default install; the machinery (symbol map, per-venue feeds, peg layer) supports adding others.
 
+**Live demo:** [cocooracle.com](https://cocooracle.com/) — a public, read-only instance running in [demo mode](#demo-mode).
+
 ---
 
 ## Requirements
