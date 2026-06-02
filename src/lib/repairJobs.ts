@@ -192,6 +192,8 @@ async function runRepairJob(jobId: string, controller: AbortController): Promise
       new Date(state.to),
       {
         sources: state.sources,
+        currency: state.currency,
+        retryEmpty: state.retryEmpty,
         signal: controller.signal,
       },
     );
