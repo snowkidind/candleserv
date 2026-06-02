@@ -397,6 +397,12 @@ export default function CandlesTab() {
     gapRanges.current = [];
     errorBars.current = new Map();
     setAtHistoryStart(false);
+    // Re-enable price-scale autoscaling. A user drag/pinch on the right axis
+    // permanently disables autoScale for that scale; without this, switching
+    // currency (e.g. BTC→ETH) leaves the vertical range frozen on the old
+    // price band and the new bars render off-screen. The time scale is reset
+    // separately when the first snapshot lands (see the [snapshot] effect).
+    series.current?.priceScale().applyOptions({ autoScale: true });
     // Blank the chart immediately so the previous tf/currency's bars don't
     // linger (or visually mix) until the first new snapshot lands.
     series.current?.setData([]);

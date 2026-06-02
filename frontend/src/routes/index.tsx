@@ -30,9 +30,28 @@ function MonitorPage() {
   );
 }
 
+// This product is built for a wide desktop layout — the chart toolbars and the
+// price/volume panes don't reflow to a phone. Surface a dismissible notice on
+// narrow/touch viewports rather than silently rendering a broken layout.
+function useIsMobile(): boolean {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 768px), (pointer: coarse)");
+    const update = () => setIsMobile(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+  return isMobile;
+}
+
 function MonitorContent() {
   const [tab, setTab] = useState<Tab>("Candles");
   const tabs = ALL_TABS;
+  const isMobile = useIsMobile();
+  const [mobileNoticeDismissed, setMobileNoticeDismissed] = useState(
+    () => sessionStorage.getItem("candleserv:mobileNoticeDismissed") === "1"
+  );
   const { newCandleTick } = useCandleStream();
   const [hasNewCandle, setHasNewCandle] = useState(false);
   const prevTick = useRef(newCandleTick);
@@ -55,6 +74,24 @@ function MonitorContent() {
 
   return (
     <div className="flex flex-col h-full">
+      {isMobile && !mobileNoticeDismissed && (
+        <div className="flex items-start gap-3 bg-amber-900/40 border-b border-amber-700 px-4 py-2 text-xs text-amber-100 shrink-0">
+          <span className="flex-1">
+            This dashboard is built for a desktop screen — the charts and controls don't fit a phone.
+            For the full experience, open it on a larger display.
+          </span>
+          <button
+            onClick={() => {
+              sessionStorage.setItem("candleserv:mobileNoticeDismissed", "1");
+              setMobileNoticeDismissed(true);
+            }}
+            className="shrink-0 text-amber-300 hover:text-amber-100"
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       <div className="flex gap-0 border-b border-gray-800 px-4 shrink-0">
         {tabs.map(t => (
           <button
