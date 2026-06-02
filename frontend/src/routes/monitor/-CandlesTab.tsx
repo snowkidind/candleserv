@@ -10,7 +10,19 @@ const SOURCE_ABBR: Record<string, string> = {
   bitfinex: "BFX", okx: "OKX", gate: "GT", bitget: "BG",
 };
 const srcAbbr = (s: string) => SOURCE_ABBR[s] ?? s.slice(0, 3).toUpperCase();
-const fmtPrice = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+
+// Price precision scales with magnitude. lightweight-charts defaults to
+// precision 2 / minMove 0.01, which quantizes a sub-dollar token (TRX ~$0.08)
+// to a handful of indistinguishable gridlines and blanks the axis. Derive both
+// the chart's priceFormat and our own label formatting from the live price so
+// BTC keeps 2 decimals and sub-$1 tokens get the resolution they need.
+function priceFormatFor(price: number): { precision: number; minMove: number } {
+  const p = Math.abs(price);
+  if (p >= 1000) return { precision: 2, minMove: 0.01 };
+  if (p >= 1)    return { precision: 4, minMove: 0.0001 };
+  if (p >= 0.01) return { precision: 5, minMove: 0.00001 };
+  return { precision: 6, minMove: 0.000001 };
+}
 import { getTheme, type Theme } from "@/lib/theme";
 
 // The chart is a <canvas> counter-inverted out of the global light-mode CSS
@@ -139,6 +151,7 @@ export default function CandlesTab() {
   const smaSlowSeries  = useRef<ISeriesApi<"Line"> | null>(null);
   const smaFastSeries  = useRef<ISeriesApi<"Line"> | null>(null);
   const initialized    = useRef(false);
+  const priceFormatRef = useRef<number>(2); // precision currently applied to the series
   const [loading, setLoading]         = useState(true);
   const [fetchingHistory, setFetchingHistory] = useState(false);
   const [atHistoryStart, setAtHistoryStart]   = useState(false);
@@ -483,6 +496,17 @@ export default function CandlesTab() {
       allCloses.current.set(sec, c.close);
     }
 
+    // Match the axis precision to the current currency's magnitude. Only
+    // re-applies when the precision tier actually changes (e.g. BTC→TRX).
+    const lastClose = snapshot.at(-1)?.close;
+    if (lastClose != null) {
+      const { precision, minMove } = priceFormatFor(lastClose);
+      if (precision !== priceFormatRef.current) {
+        series.current.applyOptions({ priceFormat: { type: "price", precision, minMove } });
+        priceFormatRef.current = precision;
+      }
+    }
+
     try {
       const data = sortedCandlesWithGaps();
       series.current.setData(data);
@@ -623,6 +647,11 @@ export default function CandlesTab() {
     }
   }
 
+  // Label precision tracks the live price magnitude (same tiers as the axis), so
+  // sub-$1 tokens aren't truncated to 2 decimals in the readouts.
+  const pricePrecision = latest ? priceFormatFor(latest.close).precision : 2;
+  const fmtPx = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: pricePrecision });
+
   const conf = latest?.confidence ?? null;
   const confColor = conf === null ? "text-gray-500"
     : conf >= 0.8 ? "text-green-400"
@@ -657,7 +686,7 @@ export default function CandlesTab() {
         <div className="flex items-center gap-4 ml-auto text-xs">
           {latest && (
             <>
-              <span className="text-gray-50 font-mono">${latest.close.toLocaleString()}</span>
+              <span className="text-gray-50 font-mono">${fmtPx(latest.close)}</span>
               <span className="text-gray-500">{latest.sourceCount}/{latest.sourceCountBaseline} sources</span>
               <span className={confColor}>conf {(latest.confidence * 100).toFixed(0)}%</span>
             </>
@@ -686,10 +715,10 @@ export default function CandlesTab() {
         <div ref={chartRef} className="w-full h-full" />
         {ohlcLabel && (
           <div className="absolute top-2 left-2 z-10 pointer-events-none flex gap-3 text-xs font-mono">
-            <span className="text-gray-500">O <span className="text-gray-300">{ohlcLabel.o.toLocaleString()}</span></span>
-            <span className="text-gray-500">H <span className="text-gray-300">{ohlcLabel.h.toLocaleString()}</span></span>
-            <span className="text-gray-500">L <span className="text-gray-300">{ohlcLabel.l.toLocaleString()}</span></span>
-            <span className="text-gray-500">C <span className={ohlcLabel.c >= ohlcLabel.o ? "text-green-400" : "text-red-400"}>{ohlcLabel.c.toLocaleString()}</span></span>
+            <span className="text-gray-500">O <span className="text-gray-300">{fmtPx(ohlcLabel.o)}</span></span>
+            <span className="text-gray-500">H <span className="text-gray-300">{fmtPx(ohlcLabel.h)}</span></span>
+            <span className="text-gray-500">L <span className="text-gray-300">{fmtPx(ohlcLabel.l)}</span></span>
+            <span className="text-gray-500">C <span className={ohlcLabel.c >= ohlcLabel.o ? "text-green-400" : "text-red-400"}>{fmtPx(ohlcLabel.c)}</span></span>
             <span className="text-gray-500">V <span className="text-gray-300">{ohlcLabel.v.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></span>
           </div>
         )}
@@ -729,7 +758,7 @@ export default function CandlesTab() {
                       : comp != null
                         ? (() => {
                             const d = r.c - comp;
-                            return <span className={d >= 0 ? "text-green-400" : "text-red-400"}>{`pm: ${d >= 0 ? "+" : "-"}$${fmtPrice(Math.abs(d))}`}</span>;
+                            return <span className={d >= 0 ? "text-green-400" : "text-red-400"}>{`pm: ${d >= 0 ? "+" : "-"}$${fmtPx(Math.abs(d))}`}</span>;
                           })()
                         : null;
                     const rowCls = `${r.rejected ? "opacity-40 line-through" : ""} ${r.source === dominant ? "bg-amber-500/25" : ""}`;
@@ -737,10 +766,10 @@ export default function CandlesTab() {
                     return (
                       <tr key={r.source} className={rowCls}>
                         <td className="px-1.5 py-px text-amber-400 text-left">{srcAbbr(r.source)}</td>
-                        <td className={cell}>o:<span className="text-gray-300">{fmtPrice(r.o)}</span></td>
-                        <td className={cell}>h:<span className="text-gray-300">{fmtPrice(r.h)}</span></td>
-                        <td className={cell}>l:<span className="text-gray-300">{fmtPrice(r.l)}</span></td>
-                        <td className={cell}>c:<span className="text-gray-300">{fmtPrice(r.c)}</span></td>
+                        <td className={cell}>o:<span className="text-gray-300">{fmtPx(r.o)}</span></td>
+                        <td className={cell}>h:<span className="text-gray-300">{fmtPx(r.h)}</span></td>
+                        <td className={cell}>l:<span className="text-gray-300">{fmtPx(r.l)}</span></td>
+                        <td className={cell}>c:<span className="text-gray-300">{fmtPx(r.c)}</span></td>
                         <td className={cell}>v:<span className="text-gray-300">{num(r.v)}</span></td>
                         <td className="px-1.5 py-px text-right">{extra}</td>
                       </tr>
