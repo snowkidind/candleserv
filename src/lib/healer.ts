@@ -33,6 +33,48 @@ const BACKFILL_TILE = 300;
 let backfillRunning = false;
 export function isBackfillRunning(): boolean { return backfillRunning; }
 
+/**
+ * Per-currency operator pause for the AUTOMATIC healer.
+ *
+ * HOW TO PAUSE A TOKEN (no UI yet — set the app_settings row directly with a
+ * write-capable role; the candleserv_ro handle can't write):
+ *
+ *   INSERT INTO app_settings (key, value, "updatedAt")
+ *   VALUES ('HEALER_PAUSE:TON', 'true', NOW())
+ *   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "updatedAt" = NOW();
+ *
+ *   -- un-pause: set 'false', or just delete the row
+ *   UPDATE app_settings SET value='false', "updatedAt"=NOW() WHERE key='HEALER_PAUSE:TON';
+ *
+ * Key format: HEALER_PAUSE:<CURRENCY CODE> (mirrors the backfillComplete:<CODE>
+ * keyed-setting pattern). Value 'true' = paused; anything else / absent = active.
+ *
+ * Scope — gates the three automatic heal/backfill ENTRY points only:
+ * reHealLowConfidence, runGapScan, runBackfill. A paused token is SKIPPED at the
+ * next startup / hourly tick. This is entry-gate only: it does NOT interrupt a
+ * pass already in flight (a future in-loop check in healRange could add that),
+ * and it deliberately does NOT touch the live collector — real-time candles for
+ * the token keep flowing; only historical heal/backfill work is paused. Repair
+ * jobs are operator-triggered and unaffected.
+ *
+ * Read CACHE-FREE (direct query, not the 1h-cached getSetting) so a toggle takes
+ * effect on the very next pass instead of lagging the cache. On DB error we log
+ * and default to NOT paused — healing is the safe default; we never silently
+ * halt the healer on a transient read failure.
+ *
+ * When the UI is built: surface this as a per-token toggle on the Feeds tab next
+ * to chain-enabled / minSources, writing the same HEALER_PAUSE:<CODE> key.
+ */
+export async function isHealerPaused(currency: string): Promise<boolean> {
+  try {
+    const res = await query(`SELECT value FROM app_settings WHERE key = $1`, [`HEALER_PAUSE:${currency}`]);
+    return res.rows.length > 0 && res.rows[0].value === "true";
+  } catch (err) {
+    logError(`[healer] isHealerPaused read failed for ${currency} — treating as NOT paused:`, err);
+    return false;
+  }
+}
+
 // B3 temporal floor: the earliest minute a currency should ever be scanned or
 // backfilled from. A not-yet-probed currency has inceptionTs = NULL — it MUST
 // coalesce to now − 90d, never epoch (finding B-null). Resolve the NULL with
@@ -404,6 +446,12 @@ export async function runBackfill(currency: string): Promise<void> {
     log(`[healer] backfill already in progress — skipping ${currency}`);
     return;
   }
+  // HEALER_PAUSE gate — bail BEFORE the latch so an un-pause later still runs
+  // the backfill (we never mark it complete while paused). See isHealerPaused.
+  if (await isHealerPaused(currency)) {
+    log(`[healer] runBackfill: ${currency} paused (HEALER_PAUSE:${currency}) — skipping`);
+    return;
+  }
   const latchKey = `backfillComplete:${currency}`;
   const alreadyDone = await getSetting(latchKey);
   if (alreadyDone === "true") {
@@ -484,6 +532,12 @@ export async function onboardCurrency(currency: string): Promise<"started" | "de
  * A 20-minute power failure → 1 range → 1 range request instead of 20.
  */
 export async function reHealLowConfidence(currency: string, windowDays = 7): Promise<void> {
+  // HEALER_PAUSE gate — skip (and don't even register the activity) when the
+  // operator has paused this token. See isHealerPaused for the how-to.
+  if (await isHealerPaused(currency)) {
+    log(`[healer] reHealLowConfidence: ${currency} paused (HEALER_PAUSE:${currency}) — skipping`);
+    return;
+  }
   beginActivity("reHealLowConfidence", { currency, windowDays });
   try {
     const minSources = await getSettingInt("minSources", 3);

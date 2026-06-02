@@ -1,6 +1,6 @@
 import { query } from "../db/pool.js";
 import { upsertGap, setGapState, markAlertSent, getPendingGaps, reconcileHealedGaps } from "../db/gaps.js";
-import { healRange, reHealLowConfidence, runBackfill, isBackfillRunning } from "./healer.js";
+import { healRange, reHealLowConfidence, runBackfill, isBackfillRunning, isHealerPaused } from "./healer.js";
 import { getEnabledCurrencies, getInceptionTs } from "../db/currencies.js";
 import { recordError } from "../db/errors.js";
 import { setSetting } from "../db/appSettings.js";
@@ -149,6 +149,12 @@ async function healPendingGaps(currency: string): Promise<void> {
  * Full scan: detect + heal. Run on startup (7-day window) and hourly.
  */
 export async function runGapScan(windowDays: number, currency: string): Promise<void> {
+  // HEALER_PAUSE gate — skip a paused token's scan (and its in-line heal). See
+  // healer.ts/isHealerPaused for the how-to.
+  if (await isHealerPaused(currency)) {
+    log(`[gapDetector] runGapScan: ${currency} paused (HEALER_PAUSE:${currency}) — skipping`);
+    return;
+  }
   beginActivity("gapScan", { currency, windowDays });
   try {
     const to = new Date();
