@@ -294,7 +294,7 @@ router.put("/formula", ...modify, async (req, res) => {
  * Single-flight: rejects with 409 if a job is already running.
  *
  * Window guards (validateRepairWindow):
- *   from ≥ NOW() - 180d
+ *   from ≥ NOW() - repairHorizonDays  (operator-configurable; default 180d)
  *   to   ≤ floor(NOW() to minute) - 1m  (never touches the in-progress minute)
  */
 router.post("/repair", ...modify, async (req, res) => {
@@ -319,7 +319,7 @@ router.post("/repair", ...modify, async (req, res) => {
   }
   const from = new Date(body.from);
   const to   = new Date(body.to);
-  const winErr = validateRepairWindow(from, to);
+  const winErr = await validateRepairWindow(from, to);
   if (winErr) return res.status(400).json({ error: winErr });
 
   let sources: string[] | undefined;

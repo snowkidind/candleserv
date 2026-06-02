@@ -10,8 +10,10 @@
  *   repairRange            — convenience: ensureSourceCoverage then
  *                            recomposeRange in sequence.
  *
- * All three are hard-bounded by the 180-day retention window. Window-end
- * clamps are the caller's responsibility (the REST handler enforces them).
+ * All three are hard-bounded by the repair horizon (operator-configurable via
+ * the `repairHorizonDays` app_setting; defaults to 180d — see retention.ts).
+ * Window-end clamps are the caller's responsibility (the REST handler enforces
+ * them).
  */
 import { ADAPTER_BY_NAME } from "../adapters/registry.js";
 import { recordApiRequest } from "./apiCounter.js";
@@ -27,6 +29,7 @@ import {
 } from "../db/candles.js";
 import { getCurrentFormula } from "../db/formulaChanges.js";
 import { getSettingInt } from "../db/appSettings.js";
+import { getRepairHorizonMs } from "./retention.js";
 import { query } from "../db/pool.js";
 import { log, logError } from "./log.js";
 
@@ -60,8 +63,8 @@ export interface EnsureSourceCoverageOpts {
  * it later). On empty/throw, insert a sentinel row (rejected=true,
  * rejectedReason='no_data') so subsequent calls skip it.
  *
- * Hard-clamped to the 180-day retention window. Existing rows are never
- * overwritten (ON CONFLICT DO NOTHING).
+ * Hard-clamped to the repair horizon (repairHorizonDays app_setting, default
+ * 180d). Existing rows are never overwritten (ON CONFLICT DO NOTHING).
  */
 export async function ensureSourceCoverage(
   currency: string,
@@ -70,7 +73,7 @@ export async function ensureSourceCoverage(
   opts?: EnsureSourceCoverageOpts,
 ): Promise<EnsureSourceCoverageResult> {
   // Clamp to retention horizon.
-  const retentionHorizon = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000);
+  const retentionHorizon = new Date(Date.now() - await getRepairHorizonMs());
   const clamped: EnsureSourceCoverageResult["clamped"] = {};
   if (from < retentionHorizon) {
     clamped.from = retentionHorizon.toISOString();
@@ -228,7 +231,7 @@ export async function recomposeRange(
   to: Date,
   opts?: RecomposeRangeOpts,
 ): Promise<RecomposeRangeResult> {
-  const retentionHorizon = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000);
+  const retentionHorizon = new Date(Date.now() - await getRepairHorizonMs());
   const clamped: RecomposeRangeResult["clamped"] = {};
   if (from < retentionHorizon) {
     clamped.from = retentionHorizon.toISOString();

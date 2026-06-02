@@ -22,6 +22,7 @@ import { getActiveFeeds } from "../db/currencyFeeds.js";
 import { getCurrentFormula } from "../db/formulaChanges.js";
 import { closeAllListeners } from "./emitter.js";
 import { redisDelByPrefix } from "./redis.js";
+import { getRepairHorizonDays } from "./retention.js";
 import { query } from "../db/pool.js";
 import { log, logError } from "./log.js";
 
@@ -358,21 +359,23 @@ export async function previewRepair(req: StartRepairJobRequest): Promise<RepairP
 // ── Retention / window guards ────────────────────────────────────────────────
 
 /**
- * Validate the [from, to) window against the plan's two hard rules:
- *   - from ≥ NOW() - 180 days   (retention horizon)
+ * Validate the [from, to) window against the two hard rules:
+ *   - from ≥ NOW() - repairHorizonDays   (operator-configurable; default 180d)
  *   - to   ≤ floor(NOW() to minute) - 1 minute   (most recently closed minute)
  *
- * Returns null on success or a human-readable error on failure. Used by the
- * REST handler before invoking startRepairJob / previewRepair.
+ * Returns null on success or a human-readable error on failure. Async because
+ * the horizon is read cache-free from app_settings (see retention.ts). Used by
+ * the REST handler before invoking startRepairJob / previewRepair.
  */
-export function validateRepairWindow(from: Date, to: Date): string | null {
+export async function validateRepairWindow(from: Date, to: Date): Promise<string | null> {
   if (!(from instanceof Date) || isNaN(from.getTime())) return "from must be a valid ISO timestamp";
   if (!(to instanceof Date)   || isNaN(to.getTime()))   return "to must be a valid ISO timestamp";
   if (to.getTime() <= from.getTime()) return "to must be strictly after from";
 
-  const retentionHorizon = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000);
+  const horizonDays = await getRepairHorizonDays();
+  const retentionHorizon = new Date(Date.now() - horizonDays * 24 * 60 * 60 * 1000);
   if (from < retentionHorizon) {
-    return `from is older than 180-day retention (${retentionHorizon.toISOString()})`;
+    return `from is older than the ${horizonDays}-day repair horizon (${retentionHorizon.toISOString()})`;
   }
 
   // Most recently closed minute = floor(NOW() to minute) - 1 minute boundary.

@@ -14,6 +14,7 @@
  */
 import { ADAPTER_BY_NAME, SOURCE_NAMES } from "../adapters/registry.js";
 import { isOutOfHistory } from "../adapters/errors.js";
+import { getRepairHorizonMs } from "./retention.js";
 import { query } from "../db/pool.js";
 import { log, logError } from "./log.js";
 
@@ -37,8 +38,8 @@ export async function backfillStableRates(
   to: Date,
   opts?: BackfillStableRatesOpts,
 ): Promise<BackfillStableRatesResult> {
-  // Clamp to retention horizon.
-  const retentionHorizon = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000);
+  // Clamp to the repair horizon (repairHorizonDays app_setting, default 180d).
+  const retentionHorizon = new Date(Date.now() - await getRepairHorizonMs());
   const clamped: BackfillStableRatesResult["clamped"] = {};
   if (from < retentionHorizon) {
     clamped.from = retentionHorizon.toISOString();

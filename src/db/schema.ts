@@ -256,6 +256,12 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   alertWebhookUrl: "",
   sourceAutoSuspendThreshold: "10",
   redisUrl: "",
+  // How far back (days) a repair job may reach. Default 180 = the per-venue
+  // SOURCE archive prune horizon. Raise for a one-off deep backfill: repair
+  // re-fetches the older window from the exchange and recomposes candles_1m
+  // (kept forever); the re-fetched source rows still prune at 180d. Read
+  // cache-free at repair time (lib/retention.ts); set via the sysadmin CLI.
+  repairHorizonDays: "180",
   // Public demo mode (Phase 10). IS_DEMO can also be forced via the env var of
   // the same name (env wins — see lib/demoMode.ts). When demo: api-key auth off,
   // monitor reads require a same-origin signed page token, limit/n clamped to

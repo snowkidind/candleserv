@@ -350,9 +350,13 @@ export async function get24hSourceStats(source: string): Promise<{
 }
 
 /**
- * Prune candles_1m_sources older than 180 days. 180d is the hard ceiling
- * on the repair window (Phase 5) — anything older is composite-only and
- * effectively immutable.
+ * Prune candles_1m_sources older than 180 days. 180d is the SOURCE-archive
+ * retention floor and the default repair horizon. The repair horizon is now
+ * operator-configurable (repairHorizonDays app_setting; see lib/retention.ts):
+ * a repair reaching beyond 180d re-fetches that window from the exchange and
+ * recomposes candles_1m (kept forever), then those re-fetched source rows prune
+ * here again on the next daily cycle. So source older than 180d is composite-
+ * only between repairs by design — the archive does not grow unbounded.
  */
 export async function pruneSourceCandles(): Promise<void> {
   await query(
