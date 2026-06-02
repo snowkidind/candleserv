@@ -263,6 +263,11 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   // cache-free at repair time (lib/retention.ts); set via the cli (ctl.ts
   // `horizon` / menu `h`) or the /monitor/config admin panel.
   repairHorizonDays: "180",
+  // Kill-switch for source-archive pruning. "true" → daily maintenance skips
+  // pruneSourceCandles + pruneOldStableRates (preserves a deep backfill's
+  // source/pegs for recompose-only). Read cache-free (lib/retention.ts).
+  // Temporary until per-currency sourceRetentionDays lands.
+  sourcePrunePaused: "false",
   // Public demo mode (Phase 10). IS_DEMO can also be forced via the env var of
   // the same name (env wins — see lib/demoMode.ts). When demo: api-key auth off,
   // monitor reads require a same-origin signed page token, limit/n clamped to

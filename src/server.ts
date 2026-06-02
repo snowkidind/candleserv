@@ -10,6 +10,7 @@ import { startGapDetector } from "./lib/gapDetector.js";
 import { pruneOldSessions } from "./db/sessions.js";
 import { pruneSourceCandles } from "./db/candles.js";
 import { pruneOldStableRates } from "./db/stableRates.js";
+import { isSourcePrunePaused } from "./lib/retention.js";
 import { logApiSummary } from "./lib/apiCounter.js";
 import { initRedis } from "./lib/redis.js";
 import { createSchema } from "./db/schema.js";
@@ -121,8 +122,16 @@ async function main(): Promise<void> {
     setInterval(async () => {
       try {
         await pruneOldSessions();
-        await pruneSourceCandles();
-        await pruneOldStableRates();
+        // Source/stable-rate prune is gated by the sourcePrunePaused kill-switch
+        // (see lib/retention.ts) — lets an operator preserve a deep backfill's
+        // source + pegs for recompose-only before they age past retention.
+        // Session pruning is unrelated and always runs.
+        if (await isSourcePrunePaused()) {
+          log("[server] sourcePrunePaused=true — skipping source + stable-rate prune");
+        } else {
+          await pruneSourceCandles();
+          await pruneOldStableRates();
+        }
         logApiSummary(); // daily outgoing-request summary (rolling 24h)
         log("[server] daily maintenance complete");
       } catch (err) {
