@@ -13,6 +13,12 @@ import { Router, Request, Response, NextFunction } from "express";
 import { buildRuntimeSnapshot, flushCandleCache } from "../lib/runtimeStats.js";
 import { apiStatsSnapshot } from "../lib/apiCounter.js";
 import { deleteAllSessions } from "../db/sessions.js";
+import { setSetting } from "../db/appSettings.js";
+import {
+  getRepairHorizonDays,
+  REPAIR_HORIZON_DEFAULT_DAYS,
+  REPAIR_HORIZON_SETTING_KEY,
+} from "../lib/retention.js";
 import { log, logError } from "../lib/log.js";
 
 const router = Router();
@@ -64,6 +70,39 @@ router.post("/sessions/flush", async (_req, res) => {
     return res.json({ ok: true, removed });
   } catch (err) {
     logError("[internal] POST /sessions/flush failed:", err);
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+/** GET /internal/repair-horizon — current repair-reach horizon (days). */
+router.get("/repair-horizon", async (_req, res) => {
+  try {
+    const days = await getRepairHorizonDays();
+    return res.json({ days, default: REPAIR_HORIZON_DEFAULT_DAYS, isDefault: days === REPAIR_HORIZON_DEFAULT_DAYS });
+  } catch (err) {
+    logError("[internal] GET /repair-horizon failed:", err);
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+/**
+ * POST /internal/repair-horizon?days=N — set how far back (days) a repair may
+ * reach. Raising it lets an operator do a one-off deep backfill; the per-venue
+ * source archive still prunes at the default, so a repair beyond it re-fetches
+ * from the exchange and persists only the composite (see lib/retention.ts).
+ */
+router.post("/repair-horizon", async (req, res) => {
+  const days = parseInt(String(req.query.days), 10);
+  if (!Number.isInteger(days) || days <= 0) {
+    return res.status(400).json({ error: "days must be a positive integer (query param ?days=N)" });
+  }
+  try {
+    const previous = await getRepairHorizonDays();
+    await setSetting(REPAIR_HORIZON_SETTING_KEY, String(days));
+    log(`[internal] repair horizon set ${previous} → ${days} days`);
+    return res.json({ ok: true, previous, days });
+  } catch (err) {
+    logError("[internal] POST /repair-horizon failed:", err);
     return res.status(500).json({ error: String(err) });
   }
 });

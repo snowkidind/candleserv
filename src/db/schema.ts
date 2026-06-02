@@ -260,7 +260,8 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   // SOURCE archive prune horizon. Raise for a one-off deep backfill: repair
   // re-fetches the older window from the exchange and recomposes candles_1m
   // (kept forever); the re-fetched source rows still prune at 180d. Read
-  // cache-free at repair time (lib/retention.ts); set via the sysadmin CLI.
+  // cache-free at repair time (lib/retention.ts); set via the cli (ctl.ts
+  // `horizon` / menu `h`) or the /monitor/config admin panel.
   repairHorizonDays: "180",
   // Public demo mode (Phase 10). IS_DEMO can also be forced via the env var of
   // the same name (env wins — see lib/demoMode.ts). When demo: api-key auth off,

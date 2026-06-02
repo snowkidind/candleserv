@@ -27,6 +27,7 @@ const USAGE = `usage: npx tsx cli/ctl.ts <command>
 commands:
   stats              in-memory + process stats from the running server
   api [1h|4h|8h|24h] outgoing exchange-request counters (rolling windows)
+  horizon [days]     view (no arg) or set the repair-reach horizon in days
   cache:flush        drop the candle redis cache (candles:* keys)
   sessions:flush     delete ALL sessions (forces every browser to re-login)`;
 
@@ -111,6 +112,26 @@ async function main(): Promise<void> {
         const cur = Object.entries(r.windows["24h"].byCurrency).sort((a: any, b: any) => b[1] - a[1]).map(([c, n]) => `${c}=${n}`).join(" ");
         console.log(`  by currency (24h): ${cur || "-"}`);
         console.log(`  (run 'api <window>' for the full per-source breakdown)`);
+      }
+      break;
+    }
+    case "horizon": {
+      const arg = process.argv[3];
+      if (arg === undefined) {
+        const r = await call("/internal/repair-horizon");
+        console.log(`repair horizon: ${r.days} days${r.isDefault ? " (default)" : ""}`);
+      } else {
+        const days = parseInt(arg, 10);
+        if (!Number.isInteger(days) || days <= 0) {
+          console.error("days must be a positive integer");
+          process.exit(1);
+        }
+        const r = await call(`/internal/repair-horizon?days=${days}`, "POST");
+        console.log(`repair horizon: ${r.previous} → ${r.days} days`);
+        if (days > r.previous) {
+          console.log(`  note: source archive still prunes at the default; repairs beyond it re-fetch from`);
+          console.log(`        the exchange. Confirm per-venue reach with: npx tsx cli/probe-earliest.ts`);
+        }
       }
       break;
     }

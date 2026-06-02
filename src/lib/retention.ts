@@ -5,9 +5,11 @@ import { logError } from "./log.js";
  * How far back a repair job is allowed to reach, in days.
  *
  * Operator-configurable via the `repairHorizonDays` app_setting (set from the
- * sysadmin CLI). Defaults to 180 — the original hard-coded retention horizon,
- * and the floor at which the per-venue SOURCE archive is still pruned
- * (candles.ts/pruneSourceCandles, stableRates.ts/pruneOldStableRates).
+ * candleserv cli — ctl.ts `horizon` / menu `h` → POST /internal/repair-horizon,
+ * or the /monitor/config admin panel). Defaults to 180 — the original
+ * hard-coded retention horizon, and the floor at which the per-venue SOURCE
+ * archive is still pruned (candles.ts/pruneSourceCandles,
+ * stableRates.ts/pruneOldStableRates).
  *
  * Decoupled from the prune horizon on purpose: a repair reaching beyond 180d
  * re-fetches that window from the exchange (ensureSourceCoverage hits the live
@@ -16,13 +18,13 @@ import { logError } from "./log.js";
  * daily cycle. So raising this lets an operator do a one-off deep backfill
  * without growing the source archive unbounded.
  *
- * IMPORTANT — read CACHE-FREE: the value is written by the sysadmin CLI in a
- * SEPARATE process (scripts/repairHorizon.ts), so the server's 1h getSetting
- * cache would not observe a fresh value and would silently clamp a legitimate
- * deep backfill — exactly the silent failure this codebase forbids. Repair is a
- * rare, operator-driven operation, so a direct DB read per call is the right
- * trade. On DB error we log loudly and fall back to the conservative 180d
- * default rather than widening the guard.
+ * IMPORTANT — read CACHE-FREE: repair must always see the true current value
+ * no matter how it was set (cli /internal endpoint, /monitor/config, or a
+ * direct DB edit). A stale 1h getSetting cache would silently clamp a
+ * legitimate deep backfill — exactly the silent failure this codebase forbids.
+ * Repair is a rare, operator-driven operation, so a direct DB read per call is
+ * the right trade. On DB error we log loudly and fall back to the conservative
+ * 180d default rather than widening the guard.
  */
 export const REPAIR_HORIZON_SETTING_KEY = "repairHorizonDays";
 export const REPAIR_HORIZON_DEFAULT_DAYS = 180;

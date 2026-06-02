@@ -62,6 +62,7 @@ export async function runMenu(): Promise<void> {
     "  ####### candleserv cli #######\n" +
     "  s    Runtime stats (heap, token map, rate-limit IPs, SSE, sessions, redis)\n" +
     "  a    API request counters (rolling 1h/4h/8h/24h)\n" +
+    "  h    Repair horizon — view / set backfill reach (days)\n" +
     "  c    Flush candle cache\n" +
     "  x    Flush all sessions (logs everyone out)\n" +
     "  q    Exit";
@@ -76,6 +77,12 @@ export async function runMenu(): Promise<void> {
     case "a":
       await apiMenu();
       break;
+    case "h": {
+      await runCtl(["horizon"]);
+      const days = await getAnswer("  New horizon in days (blank to keep current):");
+      if (days) await runCtl(["horizon", days]);
+      break;
+    }
     case "c":
       await runCtl(["cache:flush"]);
       break;
