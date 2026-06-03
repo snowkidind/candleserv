@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   previewRepair, runRepair, getRepairJob, getActiveRepairJob, cancelRepairJob,
-  getCurrencies, getFormulaVersions, addFormulaVersion, deleteFormulaVersion, getExchangeConfig,
+  getFormulaVersions, addFormulaVersion, deleteFormulaVersion, getExchangeConfig,
   type RepairPreview, type RepairJobState,
 } from "@/lib/api";
 import InfoTip from "@/components/InfoTip";
@@ -157,9 +157,12 @@ function RepairProgressPanel({ jobId, onDismiss }: { jobId: string; onDismiss: (
 
       <div className="flex justify-end gap-2 mt-4">
         {!terminal && (
-          <button onClick={cancel} disabled={cancelling} className="px-3 py-1.5 text-xs bg-yellow-700 hover:bg-yellow-600 text-white rounded transition-colors flex items-center gap-1">
-            {cancelling ? "Cancelling…" : "Cancel"} <InfoTip id="repair.cancel" />
-          </button>
+          <span className="inline-flex items-center gap-1">
+            <button onClick={cancel} disabled={cancelling} className="px-3 py-1.5 text-xs bg-yellow-700 hover:bg-yellow-600 text-white rounded transition-colors">
+              {cancelling ? "Cancelling…" : "Cancel"}
+            </button>
+            <InfoTip id="repair.cancel" />
+          </span>
         )}
         {terminal && (
           <button
@@ -175,14 +178,11 @@ function RepairProgressPanel({ jobId, onDismiss }: { jobId: string; onDismiss: (
 }
 
 // ── main panel ───────────────────────────────────────────────────────────────
-export default function RepairRangePanel({ sourceNames }: { sourceNames: string[] }) {
+// `currency` is driven by the Feeds tab's selected currency sub-tab — no
+// independent dropdown (Stage 8). Remounted by key={currency} in FeedsTab, so
+// per-currency state (preview, formula timeline, active job) starts clean.
+export default function RepairRangePanel({ currency, sourceNames }: { currency: string; sourceNames: string[] }) {
   const qc = useQueryClient();
-  const { data: currenciesResp } = useQuery({ queryKey: ["currencies"], queryFn: getCurrencies });
-  const currencyOptions = useMemo(
-    () => (currenciesResp?.currencies ?? []).filter((c) => c.enabled).map((c) => c.code),
-    [currenciesResp],
-  );
-  const [currency, setCurrency] = useState("BTC");
 
   const [from, setFrom] = useState<string>(() => toUtcInputValue(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)));
   const [to, setTo] = useState<string>(() => toUtcInputValue(new Date(Math.floor(Date.now() / 60000) * 60000 - 60000)));
@@ -275,24 +275,12 @@ export default function RepairRangePanel({ sourceNames }: { sourceNames: string[
 
   return (
     <div className="space-y-3">
-      <h2 className="text-sm font-medium text-gray-300">Repair Range</h2>
       <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 space-y-4">
         <p className="text-xs text-gray-500 leading-relaxed">
-          Repair fills/overwrites a historical window and re-derives the composite using this token's formula
-          timeline as of each minute. The live formula and live feeds are not affected.
+          Repair fills/overwrites a historical window for <span className="text-gray-300 font-mono">{currency}</span> and
+          re-derives the composite using this token's formula timeline as of each minute. The live formula and live
+          feeds are not affected.
         </p>
-
-        {/* Currency */}
-        <div>
-          <label className="text-xs text-gray-400 mb-1 flex items-center gap-1">Currency <InfoTip id="repair.currency" /></label>
-          <select
-            value={currency}
-            onChange={(e) => { setCurrency(e.target.value); invalidatePreview(); }}
-            className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 outline-none focus:border-blue-500"
-          >
-            {currencyOptions.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </div>
 
         {/* Window */}
         <div className="grid grid-cols-2 gap-3">
@@ -438,13 +426,16 @@ export default function RepairRangePanel({ sourceNames }: { sourceNames: string[
 
         {/* Run */}
         <div className="border-t border-gray-800 pt-3 flex items-center justify-end gap-2">
-          <button
-            onClick={() => setConfirmMode("recompose")}
-            disabled={!windowValid || !!activeJobId}
-            className="px-4 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 text-gray-100 rounded transition-colors flex items-center gap-1"
-          >
-            Recompose only <InfoTip id="repair.recomposeOnly" />
-          </button>
+          <span className="inline-flex items-center gap-1">
+            <button
+              onClick={() => setConfirmMode("recompose")}
+              disabled={!windowValid || !!activeJobId}
+              className="px-4 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 text-gray-100 rounded transition-colors"
+            >
+              Recompose only
+            </button>
+            <InfoTip id="repair.recomposeOnly" />
+          </span>
           <button
             onClick={() => setConfirmMode("full")}
             disabled={!preview || !windowValid || !!activeJobId}

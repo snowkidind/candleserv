@@ -2,12 +2,11 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   getApiKeys, createApiKey, revokeApiKey, toggleApiKey, repairApiKeyNonce,
-  getConfig, saveConfig, getSourcesStatus,
+  getConfig, saveConfig,
   getAdminActions, getRateLimits,
   getRuntime, getApiStats, flushCache, flushSessions,
   type ApiKey,
 } from "@/lib/api";
-import RepairRangePanel from "./-RepairRangePanel";
 import InfoTip from "@/components/InfoTip";
 import { isDemo } from "@/lib/demo";
 import { useCanModify } from "@/lib/access";
@@ -567,7 +566,7 @@ function RuntimeSection() {
 
 // ── tab shell ────────────────────────────────────────────────────────────────
 
-const SUBTABS = ["API Keys", "Repair", "Config", "Runtime", "Audit"] as const;
+const SUBTABS = ["API Keys", "Maintenance", "Config", "Runtime", "Audit"] as const;
 type SubTab = typeof SUBTABS[number];
 
 // Placeholder for panels the current viewer can't read. Two reasons, two
@@ -587,8 +586,6 @@ function LockedCard({ title }: { title: string }) {
 }
 
 export default function AdminTab() {
-  const { data: sources } = useQuery({ queryKey: ["sources", "status"], queryFn: getSourcesStatus });
-  const sourceNames = Object.keys(sources?.sources ?? {});
   const [sub, setSub] = useState<SubTab>("API Keys");
   const canModify = useCanModify();
   const demo = isDemo();
@@ -619,10 +616,12 @@ export default function AdminTab() {
 
       <div className="max-w-3xl">
         {sub === "API Keys" && (noModify ? <LockedCard title="API Keys" /> : <ApiKeysSection />)}
-        {sub === "Repair" && (
+        {sub === "Maintenance" && (
           <div className="space-y-6">
-            {noModify ? <LockedCard title="Repair Range" /> : <RepairRangePanel sourceNames={sourceNames} />}
-            {!noModify && <SourcePrunePauseCard readOnly={demo} />}
+            {noModify
+              ? <LockedCard title="Maintenance" />
+              : <SourcePrunePauseCard readOnly={demo} />}
+            <p className="text-xs text-gray-600">Repair Range moved to the Feeds tab (select a token there → expand “Repair Range”).</p>
           </div>
         )}
         {sub === "Config" && (demo ? <LockedCard title="Configuration" /> : (

@@ -6,6 +6,7 @@ import {
 import type { CurrencyInfo, AdminActionRow } from "@/lib/api";
 import { useCanModify } from "@/lib/access";
 import InfoTip from "@/components/InfoTip";
+import RepairRangePanel from "./-RepairRangePanel";
 
 // Stable venue order for the feed table.
 const SOURCES = ["binance", "bybit", "kraken", "coinbase", "bitfinex", "okx", "gate", "bitget"];
@@ -276,13 +277,16 @@ export default function FeedsTab() {
           <div>
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-gray-300 flex items-center gap-1">Exchange feeds <span className="text-gray-600 text-xs">(LIVE collection)</span></h3>
-              <button
-                onClick={() => probe(cur.code)}
-                disabled={ro || busy}
-                className="px-2 py-1 text-xs rounded bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 disabled:opacity-50 inline-flex items-center gap-1"
-              >
-                Re-probe availability <InfoTip id="feeds.reprobe" />
-              </button>
+              <span className="inline-flex items-center gap-1">
+                <button
+                  onClick={() => probe(cur.code)}
+                  disabled={ro || busy}
+                  className="px-2 py-1 text-xs rounded bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 disabled:opacity-50"
+                >
+                  Re-probe availability
+                </button>
+                <InfoTip id="feeds.reprobe" />
+              </span>
             </div>
             <table className="w-full text-xs">
               <thead>
@@ -331,6 +335,19 @@ export default function FeedsTab() {
               (e.g. okx is geo-blocked from some hosts).
             </p>
           </div>
+
+          {/* Repair Range — collapsible disclosure below the LIVE feeds. Currency
+              is this tab's selected token (no dropdown); key remounts per token. */}
+          {!ro && (
+            <details className="border-t border-gray-800 pt-4">
+              <summary className="cursor-pointer text-gray-300 text-sm select-none">
+                Repair Range <span className="text-gray-600">— historical fill / recompose for {cur.code}</span>
+              </summary>
+              <div className="mt-3">
+                <RepairRangePanel key={cur.code} currency={cur.code} sourceNames={SOURCES} />
+              </div>
+            </details>
+          )}
         </div>
       )}
     </div>

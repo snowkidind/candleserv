@@ -14,15 +14,14 @@ export default defineConfig({
   },
   server: {
     host: "0.0.0.0",
-    // mc clone — 5173-5174 belongs to the canonical candleserv/frontend, 5175-5177
-    // to modelserv/tgram (ss-devops/portRegistry.md). 5180 keeps this parallel
-    // dev clone clear of all of them; strictPort fails loud on a collision.
     port: 5180,
     strictPort: true,
+    // Canonical candleserv backend (CLAUDE.md port table). The multi-currency
+    // clone (candleserv-mc) runs its own backend on :3019 with its own frontend.
     proxy: {
-      "/v1": "http://localhost:3019",
-      "/monitor": "http://localhost:3019",
-      "/health": "http://localhost:3019",
+      "/v1": "http://localhost:3007",
+      "/monitor": "http://localhost:3007",
+      "/health": "http://localhost:3007",
     },
   },
 });
