@@ -31,7 +31,7 @@ import { findUserById } from "../../db/users.js";
 import { getAllServiceEvents } from "../../db/serviceEvents.js";
 import {
   startRepairJob, previewRepair, getRepairJob, getActiveRepairJob, cancelRepairJob,
-  isRepairInProgress, validateRepairWindow, ALL_REPAIR_STEPS,
+  isCurrencyRepairing, validateRepairWindow, ALL_REPAIR_STEPS,
 } from "../../lib/repairJobs.js";
 import type { RepairStep } from "../../lib/repairJobs.js";
 import { getHealerActivities } from "../../lib/healerStatus.js";
@@ -312,6 +312,7 @@ router.post("/repair", ...modify, async (req, res) => {
     formula?: { excludedSources?: unknown };
     retryEmpty?: unknown;
     steps?: unknown;
+    suspendGlobal?: unknown;
   };
   if (typeof body?.from !== "string" || typeof body?.to !== "string") {
     return res.status(400).json({ error: "Body must include from + to (ISO strings)" });
@@ -367,11 +368,15 @@ router.post("/repair", ...modify, async (req, res) => {
   }
 
   const retryEmpty = Boolean(body.retryEmpty);
+  // Block ALL candle reads during the repair (not just this currency). Set for
+  // stable-rate repairs since pegs are shared across currencies (Stage 4; the UI
+  // surfaces it in Stage 6).
+  const suspendGlobal = Boolean(body.suspendGlobal);
   const dry = req.query.dry === "true";
 
   if (dry) {
     try {
-      const preview = await previewRepair({ currency, from, to, sources, formula, retryEmpty, steps });
+      const preview = await previewRepair({ currency, from, to, sources, formula, retryEmpty, steps, suspendGlobal });
       return res.json({ preview });
     } catch (err) {
       logError("[monitor] POST /repair?dry=true failed:", err);
@@ -379,17 +384,17 @@ router.post("/repair", ...modify, async (req, res) => {
     }
   }
 
-  // Wet run — single-flight check + start job.
-  if (isRepairInProgress()) {
-    return res.status(409).json({ error: "a repair job is already in progress" });
+  // Wet run — per-currency single-flight check + start job.
+  if (isCurrencyRepairing(currency)) {
+    return res.status(409).json({ error: `a repair job is already in progress for ${currency}` });
   }
   try {
-    const { jobId } = startRepairJob({ currency, from, to, sources, formula, retryEmpty, steps });
+    const { jobId } = startRepairJob({ currency, from, to, sources, formula, retryEmpty, steps, suspendGlobal });
     void recordAdminAction({
       actor: await actorOf(req),
       action: "repair.start",
       target: currency,
-      detail: { jobId, from: from.toISOString(), to: to.toISOString(), retryEmpty, steps, formula: formula?.excludedSources },
+      detail: { jobId, from: from.toISOString(), to: to.toISOString(), retryEmpty, steps, suspendGlobal, formula: formula?.excludedSources },
     });
     return res.json({ jobId });
   } catch (err) {

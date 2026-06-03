@@ -129,6 +129,18 @@ export function resolveFormulaUnion(timeline: FormulaVersion[], from: Date, to: 
   return [...union];
 }
 
+/**
+ * The repair/heal FETCH set for [from, to): the union of every venue any minute
+ * in the window could compose with, resolved from the (lazily-seeded) timeline.
+ * This is the per-currency intent — NOT getActiveFeeds (the live set) and NOT
+ * minus the auto-ban overlay. Empty when the timeline can't be seeded yet.
+ */
+export async function resolveRepairSources(currency: string, from: Date, to: Date): Promise<string[]> {
+  const timeline = await ensureSeededTimeline(currency);
+  if (timeline.length === 0) return [];
+  return resolveFormulaUnion(timeline, from, to);
+}
+
 /** The current LIVE effective set: available ∩ enabled feeds minus the global kill-switch. */
 async function liveEffectiveSources(currency: string): Promise<string[]> {
   const excluded = new Set(getCurrentFormula().excludedSources);

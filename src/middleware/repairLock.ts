@@ -1,19 +1,21 @@
 /**
- * Repair-lock middleware — Phase 5d of the exchange-expansion plan.
+ * Repair-lock middleware — Phase 5d of the exchange-expansion plan; per-currency
+ * since Stage 4 of candleserv-repair-rework.
  *
- * While a repair job is in progress (`isRepairInProgress()`), candle-read
- * REST endpoints return HTTP 503. Everything else stays available — operator
- * can still inspect formula state, sources/status, gaps, errors, etc., and
- * the running progress panel keeps polling the repair job endpoints.
+ * A candle-read endpoint returns HTTP 503 ONLY if the currency it reads is
+ * mid-repair (`isCurrencyRepairing`). A TON repair therefore no longer 503s a BTC
+ * read. A stable-rate repair that asked to suspend globally
+ * (`isGlobalRepairSuspend`) 503s every candle read regardless of currency, since
+ * pegs are shared across currencies. Everything off the block list stays
+ * available — operator can still inspect formula state, sources/status, gaps,
+ * errors, and the running progress panel keeps polling the repair job endpoints.
  *
- * Long-poll waitForFresh waiters that were already past this middleware
- * before the job started are drained via emitter.closeAllListeners() at
- * job start; see startRepairJob.
- *
- * Pattern mirrors the existing READONLY_MODE middleware in app.ts:23-38.
+ * Long-poll waitForFresh waiters that were already past this middleware before
+ * the job started are drained via emitter.closeAllListeners() at job start; see
+ * startRepairJob. Pattern mirrors the READONLY_MODE middleware in app.ts.
  */
 import type { Request, Response, NextFunction } from "express";
-import { isRepairInProgress } from "../lib/repairJobs.js";
+import { isCurrencyRepairing, isGlobalRepairSuspend } from "../lib/repairJobs.js";
 
 /**
  * Exact (method, path) pairs that the lock should 503. Anything not on this
@@ -40,14 +42,44 @@ const BLOCK_LIST: Array<{ method: string; path: string }> = [
   { method: "GET",  path: "/monitor/candles/latest" },
 ];
 
-export function repairLock(req: Request, res: Response, next: NextFunction): void {
-  if (!isRepairInProgress()) return next();
-  const blocked = BLOCK_LIST.some(
-    (e) => e.method === req.method && e.path === req.path,
-  );
-  if (!blocked) return next();
+function send503(res: Response): void {
   res.status(503).json({
     error: "repair in progress",
     retryAfter: "candle reads are paused while a recompose/repair job runs",
   });
+}
+
+// Normalize a currency value the way the candle routes do: trim/upper, default BTC.
+function normCurrency(raw: unknown): string {
+  return (typeof raw === "string" && raw.trim() ? raw.trim() : "BTC").toUpperCase();
+}
+
+/**
+ * The currency(ies) a candle-read request touches. GET routes carry it in
+ * `req.query.currency` (default BTC). POST /v1/candles/multi carries a per-entry
+ * currency array — any entry mid-repair 503s the whole request (no partial
+ * results). Body is available here because express.json() runs before this
+ * middleware (app.ts).
+ */
+function requestCurrencies(req: Request): string[] {
+  if (req.method === "POST" && req.path === "/v1/candles/multi") {
+    const reqs = (req.body && Array.isArray(req.body.requests)) ? req.body.requests as Array<{ currency?: unknown }> : [];
+    if (reqs.length === 0) return ["BTC"];
+    return reqs.map((r) => normCurrency(r?.currency));
+  }
+  return [normCurrency(req.query?.currency)];
+}
+
+export function repairLock(req: Request, res: Response, next: NextFunction): void {
+  const blocked = BLOCK_LIST.some(
+    (e) => e.method === req.method && e.path === req.path,
+  );
+  if (!blocked) return next();
+
+  // A global-suspend repair (shared pegs) 503s every candle read regardless of currency.
+  if (isGlobalRepairSuspend()) return send503(res);
+
+  // Otherwise 503 only if THIS request's currency(ies) are mid-repair.
+  if (requestCurrencies(req).some((c) => isCurrencyRepairing(c))) return send503(res);
+  return next();
 }

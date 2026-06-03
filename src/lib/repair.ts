@@ -17,7 +17,7 @@
  */
 import { ADAPTER_BY_NAME } from "../adapters/registry.js";
 import { recordApiRequest } from "./apiCounter.js";
-import { getActiveFeeds } from "../db/currencyFeeds.js";
+import { getFeedMap } from "../db/currencyFeeds.js";
 import { getCurrency } from "../db/currencies.js";
 import { reconcileHealedGaps } from "../db/gaps.js";
 import { isOutOfHistory } from "../adapters/errors.js";
@@ -27,9 +27,8 @@ import {
   getSourceCountBaseline,
   getTrailingVolumeLeader,
 } from "../db/candles.js";
-import { getCurrentFormula } from "../db/formulaChanges.js";
 import {
-  ensureSeededTimeline, resolveFormulaAt, toExcludedSources,
+  ensureSeededTimeline, resolveFormulaAt, resolveRepairSources, toExcludedSources,
   type FormulaVersion,
 } from "../db/formulaVersions.js";
 import { getSettingInt } from "../db/appSettings.js";
@@ -86,12 +85,28 @@ export async function ensureSourceCoverage(
   }
   // Window-end clamp (must end in the past) is the REST layer's job; we trust the caller here.
 
-  // Effective fetch set for this currency: probed-available AND enabled feeds,
-  // minus the global formula kill-switch, optionally restricted by opts.sources.
-  const excluded = new Set(getCurrentFormula().excludedSources);
-  const restrict = opts?.sources ? new Set(opts.sources) : null;
-  const feeds = (await getActiveFeeds(currency))
-    .filter((f) => !excluded.has(f.source) && (!restrict || restrict.has(f.source)));
+  // Repair fetch set = the operator's SELECTED venues: the per-op allow-list
+  // (opts.sources) or, absent that, the per-currency formula TIMELINE union over
+  // the window. Deliberately NOT getActiveFeeds (the LIVE available∩enabled set
+  // — the wrong set for a deep repair: it dragged in venues with no deep data,
+  // returning ~390k no_data sentinels). NOT minus getCurrentFormula and NOT minus
+  // the Redis auto-ban overlay — repair is the remediation that fixes the gap a
+  // ban caused, and the timeline is the per-currency source of truth (Stage 4).
+  // Symbols come from currency_sources (the feed map), independent of `available`.
+  const selectedSources = opts?.sources ?? await resolveRepairSources(currency, from, to);
+  const feedMap = await getFeedMap(currency);
+  const feeds: { source: string; symbol: string }[] = [];
+  for (const source of selectedSources) {
+    const fm = feedMap[source];
+    if (!fm) {
+      log(`[repair] ensureSourceCoverage: ${currency}/${source} has no symbol mapping in currency_sources — skipping`);
+      continue;
+    }
+    feeds.push({ source, symbol: fm.symbol });
+  }
+  if (feeds.length === 0) {
+    log(`[repair] ensureSourceCoverage: no selected venues with a symbol for ${currency} — nothing to fetch`);
+  }
 
   let rowsFetched = 0;
   let sentinelsWritten = 0;
@@ -276,7 +291,7 @@ export interface RecomposeRangeResult {
 }
 
 export interface RecomposeRangeOpts {
-  formula?: Formula;        // default: getCurrentFormula() — does NOT write to formula_changes
+  formula?: Formula;        // explicit per-op override; absent → per-minute formula timeline (Stage 3). Never writes formula_changes.
   signal?: AbortSignal;     // honored at minute granularity
 }
 

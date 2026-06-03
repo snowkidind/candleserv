@@ -18,8 +18,7 @@ import { ensureSourceCoverage, recomposeRange } from "./repair.js";
 import type { EnsureSourceCoverageResult, RecomposeRangeResult } from "./repair.js";
 import { backfillStableRates } from "./stableRateBackfill.js";
 import type { BackfillStableRatesResult } from "./stableRateBackfill.js";
-import { getActiveFeeds } from "../db/currencyFeeds.js";
-import { getCurrentFormula } from "../db/formulaChanges.js";
+import { resolveRepairSources } from "../db/formulaVersions.js";
 import { closeAllListeners } from "./emitter.js";
 import { redisDelByPrefix } from "./redis.js";
 import { getRepairHorizonDays } from "./retention.js";
@@ -70,6 +69,7 @@ export interface RepairJobState {
   formula?: Formula;
   retryEmpty?: boolean;
   steps: RepairStep[];        // which units this job runs (subset of ALL_REPAIR_STEPS)
+  suspendGlobal?: boolean;    // true → blocked ALL candle reads during the repair (shared pegs)
 
   // Per-step results — populated as steps complete (null if the step wasn't run).
   ensure: EnsureSourceCoverageResult | null;
@@ -87,14 +87,31 @@ interface JobEntry {
 }
 
 const jobs = new Map<string, JobEntry>();
-let repairInProgress = false;
+// Per-currency lock (Stage 4): the set of currencies with an in-progress repair.
+// Single-flight is now PER CURRENCY — a TON repair no longer blocks a BTC read,
+// and a BTC repair can run while TON repairs. `globalSuspendCount` > 0 means a
+// repair asked to block ALL candle reads (stable-rate repairs, since pegs are
+// shared across currencies); a counter, not a bool, so overlapping global
+// suspends compose correctly.
+const repairingCurrencies = new Set<string>();
+let globalSuspendCount = 0;
+
+/** Is the given currency mid-repair? Used by the per-currency repair lock. */
+export function isCurrencyRepairing(currency: string): boolean {
+  return repairingCurrencies.has(currency);
+}
+
+/** Is a global-suspend repair running (block ALL candle reads)? */
+export function isGlobalRepairSuspend(): boolean {
+  return globalSuspendCount > 0;
+}
 
 /**
- * Is a repair job currently in any non-terminal phase? Used by the repair-
- * lock middleware to gate candle-poll endpoints.
+ * Any repair in any non-terminal phase? Retained for status/recovery callers.
+ * The repair LOCK no longer uses this — it gates per-currency (see repairLock).
  */
 export function isRepairInProgress(): boolean {
-  return repairInProgress;
+  return repairingCurrencies.size > 0 || globalSuspendCount > 0;
 }
 
 export function getRepairJob(jobId: string): RepairJobState | null {
@@ -108,7 +125,7 @@ export function getRepairJob(jobId: string): RepairJobState | null {
  * jobId to resume polling.
  */
 export function getActiveRepairJob(): RepairJobState | null {
-  if (!repairInProgress) return null;
+  if (repairingCurrencies.size === 0 && globalSuspendCount === 0) return null;
   for (const { state } of jobs.values()) {
     if (state.state !== "done" && state.state !== "failed" && state.state !== "cancelled") {
       return state;
@@ -135,15 +152,20 @@ export interface StartRepairJobRequest {
   formula?: Formula;
   retryEmpty?: boolean;
   steps?: RepairStep[];   // default: all three (today's full ensure→backfill→recompose chain)
+  suspendGlobal?: boolean; // block ALL candle reads during the repair (stable-rate repairs — pegs are shared)
 }
 
 export function startRepairJob(req: StartRepairJobRequest): { jobId: string } {
-  if (repairInProgress) {
-    throw new Error("a repair job is already in progress");
+  // Per-currency single-flight: a second repair for the SAME currency is rejected,
+  // but different currencies may repair concurrently (the per-venue rate gate
+  // serializes same-venue calls across jobs).
+  if (repairingCurrencies.has(req.currency)) {
+    throw new Error(`a repair job is already in progress for ${req.currency}`);
   }
   const jobId = crypto.randomUUID();
   const controller = new AbortController();
   const steps = req.steps ?? ALL_REPAIR_STEPS;
+  const suspendGlobal = req.suspendGlobal ?? false;
   const state: RepairJobState = {
     jobId,
     state: "queued",
@@ -156,12 +178,14 @@ export function startRepairJob(req: StartRepairJobRequest): { jobId: string } {
     formula:    req.formula,
     retryEmpty: req.retryEmpty,
     steps,
+    suspendGlobal,
     ensure:    null,
     backfill:  null,
     recompose: null,
   };
   jobs.set(jobId, { state, controller });
-  repairInProgress = true;
+  repairingCurrencies.add(req.currency);
+  if (suspendGlobal) globalSuspendCount++;
 
   // Drain in-flight long-poll waitForFresh subscribers and SSE consumers BEFORE
   // the job starts. New requests will be 503'd by repairLock middleware; this
@@ -174,7 +198,7 @@ export function startRepairJob(req: StartRepairJobRequest): { jobId: string } {
     logError(`[repair-job] ${jobId} fatal uncaught:`, err);
   });
 
-  log(`[repair-job] ${jobId} started: ${state.currency} ${state.from} → ${state.to} steps=[${steps.join(",")}]${req.formula ? ` formula-override=${JSON.stringify(req.formula.excludedSources)}` : ""}`);
+  log(`[repair-job] ${jobId} started: ${state.currency} ${state.from} → ${state.to} steps=[${steps.join(",")}]${suspendGlobal ? " suspendGlobal" : ""}${req.formula ? ` formula-override=${JSON.stringify(req.formula.excludedSources)}` : ""}`);
   return { jobId };
 }
 
@@ -266,7 +290,8 @@ async function runRepairJob(jobId: string, controller: AbortController): Promise
     // dropping them costs only a few extra DB queries on the next request.
     const flushed = await redisDelByPrefix("candles:");
     if (flushed > 0) log(`[repair-job] ${jobId} cache flushed (${flushed} keys)`);
-    repairInProgress = false;
+    repairingCurrencies.delete(state.currency);
+    if (state.suspendGlobal) globalSuspendCount = Math.max(0, globalSuspendCount - 1);
   }
 }
 
@@ -308,15 +333,12 @@ export async function previewRepair(req: StartRepairJobRequest): Promise<RepairP
   const willBeRecomposed = totalMinutes;
 
   // 3. Archive holes — how many (minute, source) pairs are missing in the
-  // window. Excludes formula-excluded sources from the denominator (we don't
-  // intend to fill those). Excludes 'no_data' sentinels unless retryEmpty.
-  // SOURCE_NAMES from the registry is the source of truth so a future 9th
-  // adapter gets included in the preview without touching this file.
-  const excluded = new Set(getCurrentFormula().excludedSources);
-  const restrict = sources ? new Set(sources) : null;
-  const requestedSources = (await getActiveFeeds(currency))
-    .map((f) => f.source)
-    .filter((s) => !excluded.has(s) && (!restrict || restrict.has(s)));
+  // window. The denominator is the repair's ACTUAL fetch set (Stage 4): the
+  // per-op allow-list or the per-currency formula timeline union — NOT
+  // getActiveFeeds, so the preview doesn't count holes for venues the repair
+  // won't fetch (the coinbase/gate no_data waste). Excludes 'no_data' sentinels
+  // unless retryEmpty.
+  const requestedSources = sources ?? await resolveRepairSources(currency, from, to);
 
   const sentinelsRes = await query(
     `SELECT COUNT(*) AS n FROM candles_1m_sources

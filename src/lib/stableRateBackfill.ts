@@ -22,6 +22,7 @@
  */
 import { ADAPTER_BY_NAME, SOURCE_NAMES } from "../adapters/registry.js";
 import { isOutOfHistory } from "../adapters/errors.js";
+import { resolveRepairSources } from "../db/formulaVersions.js";
 import { getRepairHorizonMs } from "./retention.js";
 import { query } from "../db/pool.js";
 import { log, logError } from "./log.js";
@@ -57,8 +58,13 @@ export async function backfillStableRates(
     from = retentionHorizon;
   }
 
-  // USDT venues only — drop anything with pegFetcherRange === null.
-  const requested = opts?.sources ?? SOURCE_NAMES;
+  // Venue set = the per-op allow-list, else the per-currency formula TIMELINE
+  // union over the window (the repair's selected venues — NOT the full
+  // SOURCE_NAMES default, which would fetch pegs for venues this repair never
+  // composes). Falls back to SOURCE_NAMES only for a direct call with no currency
+  // (no timeline to resolve). USDT-only filter still applies below.
+  const requested = opts?.sources
+    ?? (opts?.currency ? await resolveRepairSources(opts.currency, from, to) : SOURCE_NAMES);
   const usdtSources = requested.filter((name) => {
     const a = ADAPTER_BY_NAME[name];
     return a?.normalize.pegFetcherRange != null;
