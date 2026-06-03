@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import {
   getCurrencies, updateCurrency, setCurrencyFeed, probeCurrency, getHealerStatus,
-  getAdminActions,
+  getAdminActions, getExchangeConfig,
 } from "@/lib/api";
-import type { CurrencyInfo, AdminActionRow } from "@/lib/api";
+import type { CurrencyInfo, AdminActionRow, ExchangeTuning } from "@/lib/api";
 import { useCanModify } from "@/lib/access";
 import InfoTip from "@/components/InfoTip";
 import RepairRangePanel from "./-RepairRangePanel";
@@ -19,6 +19,16 @@ function ago(iso: string): string {
   const h = Math.floor(m / 60);
   if (h < 48) return `${h}h ago`;
   return `${Math.floor(h / 24)}d ago`;
+}
+
+// Probed max history depth (minutes) → compact label. Depths in
+// exchange_config.json are BTC-only today, so non-BTC currencies read "—".
+function fmtDepth(min: number | null | undefined): string {
+  if (min == null) return "—";
+  const d = min / 1440;
+  if (d < 2) return `${Math.round(min / 60)}h`;
+  if (d < 730) return `${Math.round(d)}d`;
+  return `${(d / 365).toFixed(1)}y`;
 }
 
 export default function FeedsTab() {
@@ -37,6 +47,18 @@ export default function FeedsTab() {
   // source → most-recent feed.enable/disable action for the selected currency
   // (from the admin_actions audit log), surfaced inline as "who changed it".
   const [feedHistory, setFeedHistory] = useState<Record<string, AdminActionRow>>({});
+
+  // Editable number fields are CONTROLLED + auto-save (debounced) — no save
+  // button, and no lost edits: they're seeded only when the selected currency
+  // changes (below), so a background reload can't clobber an in-progress edit.
+  const [minSrcInput, setMinSrcInput] = useState("");
+  const [retInput, setRetInput] = useState("");
+  const minSrcTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Per-venue probed depths (read-only) for the Max-depth column. Static-ish;
+  // fetched once on mount.
+  const [exConfig, setExConfig] = useState<Record<string, ExchangeTuning | null>>({});
 
   async function reload() {
     const r = await getCurrencies();
@@ -57,7 +79,19 @@ export default function FeedsTab() {
   }
 
   useEffect(() => { reload().catch(e => flash(String(e))); }, []);
+  useEffect(() => { getExchangeConfig().then(r => setExConfig(r.config)).catch(() => {}); }, []);
   useEffect(() => { if (selected) loadHistory(selected); }, [selected]);
+
+  // Seed the editable fields from the SELECTED currency only — keyed on
+  // `selected`, NOT `currencies`, so the every-5s healer reload doesn't reset a
+  // field the operator is mid-edit. (This is what silently dropped a typed
+  // minSources before.)
+  useEffect(() => {
+    const c = currencies.find(x => x.code === selected);
+    setMinSrcInput(c?.minSources != null ? String(c.minSources) : "");
+    setRetInput(c?.sourceRetentionDays != null ? String(c.sourceRetentionDays) : "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected]);
 
   // Poll healer status to surface which currency is actively backfilling. The
   // runBackfill activity is tagged with { currency } (Phase 5.5).
@@ -215,11 +249,15 @@ export default function FeedsTab() {
             <input
               type="number"
               min={1}
-              defaultValue={cur.minSources ?? ""}
+              value={minSrcInput}
               placeholder="(global default)"
-              disabled={ro || busy}
-              key={`${cur.code}:${cur.minSources}`}
-              onBlur={e => changeMinSources(cur.code, e.target.value)}
+              disabled={ro}
+              onChange={e => {
+                const v = e.target.value;
+                setMinSrcInput(v);
+                if (minSrcTimer.current) clearTimeout(minSrcTimer.current);
+                minSrcTimer.current = setTimeout(() => changeMinSources(cur.code, v), 700);
+              }}
               className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-gray-200 w-36 text-xs"
             />
           </label>
@@ -231,11 +269,15 @@ export default function FeedsTab() {
               <input
                 type="number"
                 min={1}
-                defaultValue={cur.sourceRetentionDays ?? ""}
+                value={retInput}
                 placeholder="(global default 180)"
-                disabled={ro || busy}
-                key={`${cur.code}:ret:${cur.sourceRetentionDays}`}
-                onBlur={e => changeSourceRetention(cur.code, e.target.value)}
+                disabled={ro}
+                onChange={e => {
+                  const v = e.target.value;
+                  setRetInput(v);
+                  if (retTimer.current) clearTimeout(retTimer.current);
+                  retTimer.current = setTimeout(() => changeSourceRetention(cur.code, v), 700);
+                }}
                 className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-gray-200 w-40 text-xs"
               />
             </label>
@@ -294,6 +336,7 @@ export default function FeedsTab() {
                   <th className="py-1 font-normal">Venue</th>
                   <th className="font-normal">Symbol</th>
                   <th className="font-normal"><span className="inline-flex items-center gap-1">Availability <InfoTip id="feeds.col.availability" /></span></th>
+                  <th className="font-normal"><span className="inline-flex items-center gap-1">Max depth <InfoTip id="feeds.col.maxdepth" /></span></th>
                   <th className="font-normal"><span className="inline-flex items-center gap-1">Sync <InfoTip id="feeds.col.sync" /></span></th>
                   <th className="font-normal">Last change</th>
                 </tr>
@@ -311,6 +354,7 @@ export default function FeedsTab() {
                           ? <span className="text-green-400">available</span>
                           : <span className="text-gray-600">unavailable</span>}
                       </td>
+                      <td className="text-gray-400 font-mono">{fmtDepth(exConfig[src]?.candle_depth_minutes?.[cur.code])}</td>
                       <td>
                         <input
                           type="checkbox"

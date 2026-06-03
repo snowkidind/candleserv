@@ -21,6 +21,8 @@ export const HELP_TEXT: Record<string, string> = {
     "Off: only fetch peg minutes with no row yet. On: re-fetch and overwrite every peg in the window — slower. Pegs are shared across all tokens, so prefer 'Suspend REST globally' when this is on.",
   "repair.suspendGlobal":
     "Peg rates are shared across every currency, so replacing them can momentarily affect all tokens' reads. On: pause candle-read REST for ALL currencies during this repair, not just this one. (Appears only when 'Repair Existing Stable Minutes' is on.)",
+  "repair.saveVersion":
+    "Writes the ticked venues as a dated version of this token's formula timeline (effective from the From date). Repair and Recompose read the TIMELINE — so to repair with this venue set you must Save it first; ticking venues without saving does NOT change the run (it uses the timeline as-is). Saving is optional: skip it to repair with whatever the timeline already holds (for a never-touched token, that's the auto-seeded live venues).",
   "repair.recomposeOnly":
     "Re-derive the composite from source already in the archive — no exchange fetches. Fast, DB-only. Use to re-run with a different formula. Works only while the source is still retained (see Source retention).",
   "repair.preview":
@@ -55,6 +57,8 @@ export const HELP_TEXT: Record<string, string> = {
     "Whether the venue currently lists this pair, per the last probe. Host-dependent (e.g. okx is geo-blocked from some hosts).",
   "feeds.col.sync":
     "Include this venue in LIVE collection for this token. Does NOT affect repairs — repairs use their own feed selection in Repair Range.",
+  "feeds.col.maxdepth":
+    "How far back this venue can serve 1m candles, from exchange_config.json (probed). A repair/backfill deeper than this is clamped/skipped for the venue. e.g. kraken serves only ~12h; gate ~7d. Depths are BTC-only today, so other tokens show — until probed.",
 
   // ── Admin ─────────────────────────────────────────────────────────────────
   "admin.sourcePrunePaused":

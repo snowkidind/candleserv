@@ -326,6 +326,7 @@ export default function RepairRangePanel({ currency, sourceNames }: { currency: 
             >
               {savingVersion ? "Saving…" : "Save as timeline version (effective from From)"}
             </button>
+            <InfoTip id="repair.saveVersion" />
           </div>
           {/* Current timeline */}
           <div className="mt-3 text-xs">
