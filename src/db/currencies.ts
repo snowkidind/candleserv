@@ -8,6 +8,7 @@ export interface CurrencyRow {
   flatFillEmpty: boolean;
   minSources: number | null;
   inceptionTs: Date | null;
+  sourceRetentionDays: number | null;   // null → global default 180 (Stage 7)
   createdAt: Date;
   updatedAt: Date;
 }
@@ -21,6 +22,7 @@ function rowToCurrency(row: Record<string, unknown>): CurrencyRow {
     flatFillEmpty: row.flatFillEmpty as boolean,
     minSources: (row.minSources as number) ?? null,
     inceptionTs: (row.inceptionTs as Date) ?? null,
+    sourceRetentionDays: (row.sourceRetentionDays as number) ?? null,
     createdAt: row.createdAt as Date,
     updatedAt: row.updatedAt as Date,
   };
@@ -88,6 +90,17 @@ export async function setInceptionTs(code: string, inceptionTs: Date | null): Pr
   await query(
     `UPDATE currencies SET "inceptionTs" = $2, "updatedAt" = NOW() WHERE "code" = $1`,
     [code, inceptionTs]
+  );
+}
+
+// Stage 7: per-currency source-archive retention (days). null → global default
+// (180; see retention.ts). The composite candles_1m is kept forever regardless;
+// this governs only the per-venue source archive (candles_1m_sources) and, via
+// the snap-to-oldest rule, the shared peg table.
+export async function setSourceRetentionDays(code: string, days: number | null): Promise<void> {
+  await query(
+    `UPDATE currencies SET "sourceRetentionDays" = $2, "updatedAt" = NOW() WHERE "code" = $1`,
+    [code, days]
   );
 }
 

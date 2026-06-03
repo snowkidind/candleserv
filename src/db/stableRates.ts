@@ -73,14 +73,21 @@ export async function getStableRatesAt(ts: Date): Promise<Map<string, number>> {
 }
 
 /**
- * Drop rows older than 180 days. Matches pruneSourceCandles retention.
- * This is now the SOLE prune path: the FK to candles_1m_sources (and its
- * ON DELETE CASCADE) was dropped under multi-currency D-STABLE-FK, so nothing
- * removes stale rate rows implicitly anymore — this must run in the daily
- * maintenance loop or rates accumulate unbounded.
+ * Drop stale peg rows. The peg table is SHARED (no currency column — one row per
+ * minute+venue), so it SNAPS TO THE OLDEST retention across currencies: a peg at
+ * minute X is needed by ANY currency holding a candle at X, so it must survive as
+ * long as the most-retained currency (Stage 7, decision D5). Floored at the
+ * global 180 default via GREATEST.
+ *
+ * This is the SOLE prune path: the FK to candles_1m_sources (and its ON DELETE
+ * CASCADE) was dropped under multi-currency D-STABLE-FK, so nothing removes stale
+ * rate rows implicitly — this must run in the daily maintenance loop or rates
+ * accumulate unbounded.
  */
 export async function pruneOldStableRates(): Promise<void> {
   await query(
-    `DELETE FROM stable_rates_1m_sources WHERE "timestamp" < NOW() - INTERVAL '180 days'`,
+    `DELETE FROM stable_rates_1m_sources
+      WHERE "timestamp" < NOW() - make_interval(days =>
+        GREATEST((SELECT MAX(COALESCE("sourceRetentionDays", 180)) FROM currencies), 180))`,
   );
 }

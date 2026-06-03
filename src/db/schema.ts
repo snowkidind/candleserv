@@ -181,6 +181,7 @@ CREATE TABLE IF NOT EXISTS currencies (
   "flatFillEmpty"  boolean      NOT NULL DEFAULT false,  -- D-FLATFILL: empty minute → carry prev close (thin tokens); false → empty = failure/strike (BTC + liquid)
   "minSources"     smallint,                             -- nullable → fall back to app_settings.minSources
   "inceptionTs"    timestamptz,                          -- B3 temporal floor; NULL → consumers COALESCE to now-90d, never epoch
+  "sourceRetentionDays" smallint,                        -- Stage 7: per-currency source-archive retention; NULL → global default 180. The composite candles_1m is kept forever regardless.
   "createdAt"      timestamptz  NOT NULL DEFAULT NOW(),
   "updatedAt"      timestamptz  NOT NULL DEFAULT NOW()
 );

@@ -359,8 +359,14 @@ export async function get24hSourceStats(source: string): Promise<{
  * only between repairs by design — the archive does not grow unbounded.
  */
 export async function pruneSourceCandles(): Promise<void> {
+  // Per-currency retention (Stage 7): each currency prunes to its own
+  // sourceRetentionDays, COALESCE-ing to the global 180 default. One DELETE
+  // joined to currencies. The composite candles_1m is kept forever regardless.
   await query(
-    `DELETE FROM candles_1m_sources WHERE "timestamp" < NOW() - INTERVAL '180 days'`
+    `DELETE FROM candles_1m_sources cs
+       USING currencies c
+      WHERE cs."currency" = c."code"
+        AND cs."timestamp" < NOW() - make_interval(days => COALESCE(c."sourceRetentionDays", 180))`
   );
 }
 
