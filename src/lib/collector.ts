@@ -14,10 +14,16 @@ import { recordApiRequest, PEG_CURRENCY } from "./apiCounter.js";
 import {
   getCurrentFormula,
   getExchangeState,
-  getFailureCount,
-  insertFormulaChange,
-  recordFailure,
 } from "../db/formulaChanges.js";
+import {
+  recordSourceFailure,
+  getSourceFailureCount,
+  suspendSource,
+  unsuspendSource,
+  isSourceSuspended,
+  getSuspendedSources,
+} from "./redis.js";
+import { recordAdminAction } from "../db/adminActions.js";
 import { withTransaction } from "../db/pool.js";
 import { log, logError, logWarn } from "./log.js";
 import type { SourceResult } from "../types/index.js";
@@ -69,17 +75,18 @@ export function lastCloseMapSize(): number {
 
 async function checkAutoSuspend(source: string): Promise<void> {
   const threshold = await getSettingInt("sourceAutoSuspendThreshold", 10);
-  const failures = getFailureCount(source);
+  const failures = await getSourceFailureCount(source);
   if (failures < threshold) return;
 
-  // Already excluded? insertFormulaChange short-circuits, but skip the snapshot
-  // work entirely so we don't hammer the DB on every retry.
-  const current = getExchangeState(source);
-  if (current?.setOrUnset === "set") return;
+  // Already suspended? Skip the snapshot work so we don't hammer the DB on retry.
+  // Auto-ban live state lives in the Redis overlay now, NOT formula_changes — it
+  // is ephemeral, global, live-collector-only liveness state and must never bleed
+  // into history or block repair/heal.
+  if (await isSourceSuspended(source)) return;
 
   // Snapshot stats before flipping. If the snapshot query fails the helper
-  // returns null fields — we still record the exclusion (per plan: degraded
-  // UI label rather than dropping the exclusion).
+  // returns null fields — we still record the suspension (degraded UI label
+  // rather than dropping it).
   const stats = await get24hSourceStats(source);
   const statsAtExclusion = {
     failures24h: failures,
@@ -88,12 +95,26 @@ async function checkAutoSuspend(source: string): Promise<void> {
   };
 
   const reason = `${failures} failures in 24h`;
-  await insertFormulaChange(source, "set", "auto-suspend", reason, statsAtExclusion);
+  await suspendSource(source, { reason, since: Date.now(), by: "auto-suspend", stats: statsAtExclusion });
+  // Durable audit stays in the DB (service_errors + admin_actions); only the
+  // live-state storage relocated to Redis.
   await recordError("collector", "checkAutoSuspend", `Auto-suspended ${source}: ${reason}`);
-  logWarn(`[collector] auto-suspended ${source} via formula: ${reason}`);
-  // insertFormulaChange handles SSE + stream_events for the formula transition.
-  // We also emit the legacy "paused" stream event so existing UI's still see
-  // a state change — Phase 6 frontend rework replaces this with formula state.
+  void recordAdminAction({
+    actor: "auto-suspend",
+    action: "source.autosuspend",
+    target: source,
+    detail: { reason, statsAtExclusion },
+  });
+  logWarn(`[collector] auto-suspended ${source} (Redis overlay): ${reason}`);
+  // SSE + legacy "paused" stream event so existing UIs still see a state change.
+  candleEmitter.emit("source_state", {
+    source,
+    state: "paused",
+    previousState: "on",
+    by: "auto-suspend",
+    reason,
+    timestamp: Date.now(),
+  });
   try {
     await insertStreamEvent(source, "paused");
   } catch (err) {
@@ -130,7 +151,11 @@ export function isSourcePaused(source: string): boolean {
  * it doesn't immediately re-trip auto-suspend.
  */
 export async function resumeSource(source: string): Promise<void> {
-  await insertFormulaChange(source, "unset", "manual:legacy-resume", "manual resume via /sources/:source/resume");
+  // Auto-ban recovery: clear the Redis suspend + its 24h failure window so the
+  // source resumes live polling and doesn't immediately re-trip. A deliberate
+  // GLOBAL kill-switch (formula_changes) is untouched here — that's PUT /formula.
+  await unsuspendSource(source);
+  log(`[collector] manual resume — cleared auto-ban overlay for ${source}`);
 }
 
 /**
@@ -161,33 +186,38 @@ export interface SourceStatus {
   } | null;
 }
 
-export function getSourceStatus(): Record<string, SourceStatus> {
-  const excludedNames = new Set(getCurrentFormula().excludedSources);
+export async function getSourceStatus(): Promise<Record<string, SourceStatus>> {
+  // Two independent exclusion sources now: the GLOBAL operator kill-switch
+  // (formula_changes mirror) and the AUTO-BAN overlay (Redis suspended set).
+  // Auto-suspend takes precedence for the label since it's the live cause.
+  const globalExcluded = new Set(getCurrentFormula().excludedSources);
+  const suspended = await getSuspendedSources();
   const result: Record<string, SourceStatus> = {};
   for (const s of SOURCE_NAMES) {
-    const excluded = excludedNames.has(s);
-    const change = getExchangeState(s);
-    const excludedRow = excluded && change?.setOrUnset === "set" ? change : null;
-    const excludedReason: SourceStatus["excludedReason"] = excludedRow
-      ? excludedRow.by === "auto-suspend"
-        ? "auto-suspend"
-        : excludedRow.by.startsWith("manual")
-          ? "manual"
-          : null
-      : null;
+    const susp = suspended[s];
+    const manualExcluded = globalExcluded.has(s);
+    const excluded = manualExcluded || !!susp;
+    const change = manualExcluded ? getExchangeState(s) : null;
+    const excludedReason: SourceStatus["excludedReason"] = susp
+      ? "auto-suspend"
+      : manualExcluded
+        ? "manual"
+        : null;
     result[s] = {
       fetching: !excluded,
-      failures24h: getFailureCount(s),
+      failures24h: await getSourceFailureCount(s),
       lastFetch: lastFetchAt[s]?.toISOString() ?? null,
       state: liveFetchStates[s] ?? "unknown",
 
       excluded,
       paused: excluded,
       excludedReason,
-      excludedBy: excludedRow?.by ?? null,
-      excludedAt: excludedRow?.createdAt.toISOString() ?? null,
-      reason: excludedRow?.reason ?? null,
-      lastKnownAtExclusion: excludedRow?.statsAtExclusion ?? null,
+      excludedBy: susp ? susp.by : (change?.by ?? null),
+      excludedAt: susp ? new Date(susp.since).toISOString() : (change?.createdAt.toISOString() ?? null),
+      reason: susp ? susp.reason : (change?.reason ?? null),
+      lastKnownAtExclusion: susp
+        ? (susp.stats as SourceStatus["lastKnownAtExclusion"])
+        : (change?.statsAtExclusion ?? null),
     };
   }
   return result;
@@ -221,9 +251,11 @@ export async function collect(minuteTs: Date): Promise<boolean> {
     }
 
     // Each currency's effective fetch set: probed-available AND enabled feeds,
-    // minus the global formula kill-switch. Collect the union of peg-capable
-    // venues for the shared peg wave.
-    const excluded = new Set(getCurrentFormula().excludedSources);
+    // minus the global formula kill-switch AND the Redis auto-ban overlay. This
+    // is the ONLY place the auto-ban overlay is subtracted — recompose/heal/repair
+    // ignore it. Collect the union of peg-capable venues for the shared peg wave.
+    const suspended = await getSuspendedSources();
+    const excluded = new Set([...getCurrentFormula().excludedSources, ...Object.keys(suspended)]);
     const activeByCurrency = new Map<string, { source: string; symbol: string }[]>();
     const metaByCurrency = new Map<string, CurrencyRow>();
     const pegVenues = new Set<string>();
@@ -466,7 +498,7 @@ export async function collect(minuteTs: Date): Promise<boolean> {
           recordLiveFetchState(source, "on");
         } else {
           // Nothing succeeded → venue down → strike toward global auto-suspend.
-          recordFailure(source);
+          await recordSourceFailure(source);
           await checkAutoSuspend(source);
           recordLiveFetchState(source, "error");
         }

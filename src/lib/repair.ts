@@ -28,6 +28,10 @@ import {
   getTrailingVolumeLeader,
 } from "../db/candles.js";
 import { getCurrentFormula } from "../db/formulaChanges.js";
+import {
+  ensureSeededTimeline, resolveFormulaAt, toExcludedSources,
+  type FormulaVersion,
+} from "../db/formulaVersions.js";
 import { getSettingInt } from "../db/appSettings.js";
 import { getRepairHorizonMs } from "./retention.js";
 import { query } from "../db/pool.js";
@@ -294,7 +298,28 @@ export async function recomposeRange(
     from = retentionHorizon;
   }
 
-  const formula = opts?.formula ?? getCurrentFormula();
+  // Formula resolution. An explicit per-op override (scripts/recompose.ts, the
+  // repair UI's allow-list) wins for EVERY minute. Otherwise resolve the
+  // per-currency timeline AS-OF each minute — never getCurrentFormula() for a
+  // historical minute (the live head / auto-ban overlay must not rewrite
+  // history). A window straddling a breakpoint composes each segment with its
+  // own as-of formula.
+  const overrideFormula = opts?.formula ?? null;
+  let timeline: FormulaVersion[] = [];
+  if (!overrideFormula) {
+    timeline = await ensureSeededTimeline(currency);
+    if (timeline.length === 0) {
+      log(`[repair] recomposeRange: ${currency} has no formula timeline and no live effective feeds — nothing to recompose`);
+      const empty: RecomposeRangeResult = {
+        recomposed: 0,
+        skippedNoSources: Math.max(0, Math.floor((to.getTime() - from.getTime()) / 60000)),
+        failed: 0,
+      };
+      if (clamped.from || clamped.to) empty.clamped = clamped;
+      return empty;
+    }
+  }
+
   const meta           = await getCurrency(currency);
   const minSources     = meta?.minSources ?? await getSettingInt("minSources", 3);
   const baseline       = await getSourceCountBaseline(currency);
@@ -311,6 +336,18 @@ export async function recomposeRange(
       break;
     }
     const minuteTs = new Date(minuteMs);
+    let formula: Formula;
+    if (overrideFormula) {
+      formula = overrideFormula;
+    } else {
+      const sources = resolveFormulaAt(timeline, minuteTs);
+      if (!sources) {
+        // Post-seed this can't happen (epoch baseline covers all history); fail
+        // loud rather than silently composing from the wrong set.
+        throw new Error(`[repair] recomposeRange: no formula version covers ${minuteTs.toISOString()} for ${currency}`);
+      }
+      formula = toExcludedSources(sources);
+    }
     try {
       const result = await composeMinute(currency, minuteTs, formula, {
         baseline, minSources, volumeLeader: volumeLeader ?? undefined, premiumEnabled,

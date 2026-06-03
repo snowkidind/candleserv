@@ -161,7 +161,7 @@ router.get("/stats", ...view, async (_req, res) => {
 
 /** GET /monitor/sources/status */
 router.get("/sources/status", ...view, async (req, res) => {
-  const status = getSourceStatus();
+  const status = await getSourceStatus();
   if (req.demoRead) {
     for (const s of Object.values(status)) s.excludedBy = redactActor(s.excludedBy);
   }

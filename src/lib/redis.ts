@@ -72,6 +72,74 @@ export async function redisDelByPrefix(prefix: string): Promise<number> {
   }
 }
 
+// ── Auto-ban overlay (Stage 3) ──────────────────────────────────────────────
+// Ephemeral, GLOBAL (cross-currency), live-collector-only liveness state. The
+// rolling-24h per-source failure record + the suspended set live here, NOT in
+// formula_changes (which is durable operator intent) and NOT in the per-currency
+// formula timeline (which is history). Same threshold-10 / 24h policy as before
+// — only the storage relocated. The durable "auto-banned at T" audit stays in
+// the DB (recordError / admin_actions). ONLY the live collector subtracts this
+// overlay; recompose / heal / repair ignore it (they fix the gap a ban caused).
+const AUTOBAN_FAIL_PREFIX = "candleserv:autoban:fail:";   // sorted set per source (score = failure ts)
+const AUTOBAN_SUSPEND_KEY = "candleserv:autoban:suspended"; // hash: field=source → JSON SuspendInfo
+const AUTOBAN_WINDOW_MS   = 24 * 60 * 60 * 1000;
+let failSeq = 0; // disambiguates same-ms failures as unique sorted-set members
+
+export interface SuspendInfo {
+  reason: string;
+  since: number;          // epoch ms
+  by: string;
+  stats: unknown;         // statsAtExclusion snapshot
+}
+
+/** Record one failure for a source into its rolling-24h window. */
+export async function recordSourceFailure(source: string): Promise<void> {
+  if (!client || !available) return;
+  const now = Date.now();
+  const key = AUTOBAN_FAIL_PREFIX + source;
+  await client.zAdd(key, [{ score: now, value: `${now}:${failSeq++}` }]);
+  await client.zRemRangeByScore(key, 0, now - AUTOBAN_WINDOW_MS);
+  await client.expire(key, Math.ceil(AUTOBAN_WINDOW_MS / 1000) + 3600);
+}
+
+/** Failures for a source within the last 24h (evicts stale entries first). */
+export async function getSourceFailureCount(source: string): Promise<number> {
+  if (!client || !available) return 0;
+  const now = Date.now();
+  const key = AUTOBAN_FAIL_PREFIX + source;
+  await client.zRemRangeByScore(key, 0, now - AUTOBAN_WINDOW_MS);
+  return client.zCard(key);
+}
+
+/** Mark a source auto-suspended (live-collector liveness gate). */
+export async function suspendSource(source: string, info: SuspendInfo): Promise<void> {
+  if (!client || !available) return;
+  await client.hSet(AUTOBAN_SUSPEND_KEY, source, JSON.stringify(info));
+}
+
+/** Clear a source's auto-suspend AND its failure window (recovery / manual resume). */
+export async function unsuspendSource(source: string): Promise<void> {
+  if (!client || !available) return;
+  await client.hDel(AUTOBAN_SUSPEND_KEY, source);
+  await client.del(AUTOBAN_FAIL_PREFIX + source);
+}
+
+export async function isSourceSuspended(source: string): Promise<boolean> {
+  if (!client || !available) return false;
+  return (await client.hExists(AUTOBAN_SUSPEND_KEY, source)) === true;
+}
+
+/** The whole suspended set: source → SuspendInfo. */
+export async function getSuspendedSources(): Promise<Record<string, SuspendInfo>> {
+  if (!client || !available) return {};
+  const raw = await client.hGetAll(AUTOBAN_SUSPEND_KEY);
+  const out: Record<string, SuspendInfo> = {};
+  for (const [src, json] of Object.entries(raw)) {
+    try { out[src] = JSON.parse(json) as SuspendInfo; } catch { /* skip malformed */ }
+  }
+  return out;
+}
+
 /**
  * Compute TTL (seconds) until the next boundary for a given TF.
  * Historical queries that cannot overlap with the current open candle

@@ -38,27 +38,10 @@ export interface FormulaChange {
 const mirror = new Map<string, FormulaChange>();
 let lastChange: FormulaChange | null = null;
 
-// Per-source 24h failure counters. Lives here (not in collector) because the
-// failure-counter reset is bundled into insertFormulaChange for 'unset'
-// transitions — that's the only way to guarantee a re-included source doesn't
-// carry stale failures and immediately re-trip auto-suspend.
-const failureCounters: Record<string, number[]> = {};
-
-export function recordFailure(source: string): void {
-  const now = Date.now();
-  const list = failureCounters[source] ?? [];
-  // Drop failures older than 24h, then append.
-  failureCounters[source] = list.filter((t) => now - t < 24 * 60 * 60 * 1000);
-  failureCounters[source].push(now);
-}
-
-export function getFailureCount(source: string): number {
-  const now = Date.now();
-  const list = failureCounters[source] ?? [];
-  // Recompute the 24h window on read so callers don't need to call recordFailure
-  // first; this also keeps getSourceStatus consistent.
-  return list.filter((t) => now - t < 24 * 60 * 60 * 1000).length;
-}
+// The per-source 24h failure record and the auto-ban suspended set moved to the
+// Redis overlay (lib/redis.ts) in Stage 3 — they are ephemeral, global,
+// live-collector-only liveness state, not durable formula intent. formula_changes
+// now holds ONLY the operator's GLOBAL kill-switch; auto-bans never land here.
 
 /**
  * Hydrate the in-memory mirror from formula_changes on boot. Reads the latest
@@ -125,11 +108,8 @@ export function getExchangeState(exchange: string): FormulaChange | null {
 /**
  * Append a single formula_changes row and update the mirror. Idempotent: if
  * the target state already matches what the mirror says, no INSERT happens.
- *
- * On 'unset' transitions the failure counter for the exchange is cleared so a
- * just-re-included source doesn't carry stale 24h failures and re-trip
- * auto-suspend on the next hiccup. The reset is here (not in callers) so it
- * can't be forgotten.
+ * This is the GLOBAL operator kill-switch only — auto-bans live in the Redis
+ * overlay (lib/redis.ts) and are cleared there, not here.
  *
  * Emits source_state on actual transitions: 'formula-excluded' on set,
  * 'formula-included' on unset. No emission on idempotent no-ops.
@@ -170,12 +150,6 @@ export async function insertFormulaChange(
 
   mirror.set(exchange, row);
   lastChange = row;
-
-  if (setOrUnset === "unset") {
-    // Re-include: wipe the 24h failure counter so old failures can't immediately
-    // re-trip auto-suspend.
-    failureCounters[exchange] = [];
-  }
 
   const sseState = setOrUnset === "set" ? "formula-excluded" : "formula-included";
   candleEmitter.emit("source_state", {

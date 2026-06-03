@@ -2,10 +2,14 @@ import { ADAPTER_BY_NAME } from "../adapters/registry.js";
 import { recordApiRequest, PEG_CURRENCY } from "./apiCounter.js";
 import { upsertStableRate } from "../db/stableRates.js";
 import { getActiveFeeds } from "../db/currencyFeeds.js";
-import { getInceptionTs } from "../db/currencies.js";
+import { getInceptionTs, getCurrency } from "../db/currencies.js";
 import { applyGuards, buildComposite } from "./composite.js";
 import { composeMinute } from "./compose.js";
 import { getCurrentFormula } from "../db/formulaChanges.js";
+import {
+  ensureSeededTimeline, resolveFormulaAt, resolveFormulaUnion, toExcludedSources,
+  type FormulaVersion,
+} from "../db/formulaVersions.js";
 import {
   upsertSourceCandle, insertCandleIfMissing,
   countCandlesInDay, getSourceCountBaseline, getRecentCloseStddev,
@@ -145,13 +149,23 @@ export async function healRange(currency: string, from: Date, to: Date, overwrit
   const sigma        = await getRecentCloseStddev(currency);
   const volumeLeader = await getTrailingVolumeLeader(currency, 10);
   const minSources   = await getSettingInt("minSources", 3);
+  const meta         = await getCurrency(currency);
+  const premiumEnabled = meta?.premiumEnabled ?? true;
 
-  // Effective fetch set for this currency: probed-available AND enabled feeds,
-  // minus the global formula kill-switch.
-  const excluded = new Set(getCurrentFormula().excludedSources);
-  const feeds = (await getActiveFeeds(currency)).filter((f) => !excluded.has(f.source));
+  // Fetch/compose set comes from the per-currency formula TIMELINE, not the live
+  // head or the auto-ban overlay (heal is the remediation that fixes the gap a
+  // ban caused). The FETCH set is the union of every venue any minute in the
+  // window could compose with (the window may straddle a breakpoint); each minute
+  // then COMPOSES with its own as-of formula in the overwrite branch below.
+  const timeline = await ensureSeededTimeline(currency);
+  if (timeline.length === 0) {
+    log(`[healer] healRange: no formula timeline (and no live effective feeds) for ${currency} — nothing to heal`);
+    return written;
+  }
+  const unionSources = new Set(resolveFormulaUnion(timeline, from, to));
+  const feeds = (await getActiveFeeds(currency)).filter((f) => unionSources.has(f.source));
   if (!feeds.length) {
-    log(`[healer] healRange: no active feeds for ${currency} — nothing to heal`);
+    log(`[healer] healRange: no available feeds in the timeline window for ${currency} — nothing to heal`);
     return written;
   }
   const feedSources = feeds.map((f) => f.source);
@@ -306,11 +320,15 @@ export async function healRange(currency: string, from: Date, to: Date, overwrit
     }
 
     if (overwrite) {
+      const sources = resolveFormulaAt(timeline, minuteTs);
+      if (!sources) {
+        throw new Error(`[healer] healRange: no formula version covers ${minuteTs.toISOString()} for ${currency}`);
+      }
       const result = await composeMinute(
         currency,
         minuteTs,
-        getCurrentFormula(),
-        { baseline, minSources, volumeLeader: volumeLeader ?? undefined },
+        toExcludedSources(sources),
+        { baseline, minSources, volumeLeader: volumeLeader ?? undefined, premiumEnabled },
       );
       if (result.composed) written.add(tsMs);
     } else {
@@ -336,9 +354,11 @@ export async function healRange(currency: string, from: Date, to: Date, overwrit
  * throws. Excluded/unavailable sources aren't fetched — gap-filling for them
  * goes through ensureSourceCoverage (repair), not the heal path.
  */
-async function fetchAllSources(currency: string, minuteTs: Date): Promise<SourceResult[]> {
-  const excluded = new Set(getCurrentFormula().excludedSources);
-  const feeds = (await getActiveFeeds(currency)).filter((f) => !excluded.has(f.source));
+async function fetchAllSources(currency: string, minuteTs: Date, allowed: Set<string>): Promise<SourceResult[]> {
+  // Fetch the timeline's venues as-of this minute (resolved by the caller) — not
+  // the live head or the auto-ban overlay. Heal is the remediation that pulls a
+  // banned-but-in-formula venue.
+  const feeds = (await getActiveFeeds(currency)).filter((f) => allowed.has(f.source));
   return Promise.all(
     feeds.map((f) => {
       recordApiRequest(currency, f.source, "heal1m");
@@ -356,7 +376,18 @@ async function fetchAllSources(currency: string, minuteTs: Date): Promise<Source
  */
 export async function healMinute(currency: string, minuteTs: Date): Promise<boolean> {
   try {
-    const results      = await fetchAllSources(currency, minuteTs);
+    // Resolve the per-currency timeline AS-OF this minute (the source of truth),
+    // not getCurrentFormula(). Empty/unresolved → cannot heal this minute.
+    const timeline = await ensureSeededTimeline(currency);
+    const sources  = timeline.length ? resolveFormulaAt(timeline, minuteTs) : null;
+    if (!sources) {
+      log(`[healer] healMinute: no formula version covers ${minuteTs.toISOString()} for ${currency} — cannot heal`);
+      return false;
+    }
+    const allowed        = new Set(sources);
+    const meta           = await getCurrency(currency);
+    const premiumEnabled = meta?.premiumEnabled ?? true;
+    const results      = await fetchAllSources(currency, minuteTs, allowed);
     const minSources   = await getSettingInt("minSources", 3);
     const baseline     = await getSourceCountBaseline(currency);
     const sigma        = await getRecentCloseStddev(currency);
@@ -407,8 +438,8 @@ export async function healMinute(currency: string, minuteTs: Date): Promise<bool
     const result = await composeMinute(
       currency,
       minuteTs,
-      getCurrentFormula(),
-      { baseline, minSources, volumeLeader: volumeLeader ?? undefined },
+      toExcludedSources(sources),
+      { baseline, minSources, volumeLeader: volumeLeader ?? undefined, premiumEnabled },
     );
     if (!result.composed) {
       await recordError("healer", "healMinute:noComposite",

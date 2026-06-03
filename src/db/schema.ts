@@ -224,6 +224,24 @@ CREATE TABLE IF NOT EXISTS formula_changes (
 );
 CREATE INDEX IF NOT EXISTS formula_changes_exchange_ts ON formula_changes ("exchange", "createdAt" DESC);
 
+-- Per-currency formula TIMELINE (effective-dated). Repair / heal / recompose
+-- resolve which venues compose a currency AS-OF each minute from here: the row
+-- with the greatest "effectiveFrom" <= minute. Changes-only — one row per
+-- breakpoint per currency, each self-contained (the actual inclusive venue set,
+-- no delta replay). This is the historical/repair source of truth, distinct from
+-- formula_changes (the GLOBAL live kill-switch) and currency_sources (the LIVE
+-- poll set). Auto-bans NEVER land here — those are ephemeral live-collector state
+-- in Redis (see lib/redis.ts).
+CREATE TABLE IF NOT EXISTS currency_formula_versions (
+  "currency"      varchar      NOT NULL,
+  "effectiveFrom" timestamptz  NOT NULL,
+  "formula"       jsonb        NOT NULL,   -- { "sources": [...] } — inclusive allow-list
+  "by"            varchar      NOT NULL,
+  "reason"        text,
+  "createdAt"     timestamptz  NOT NULL DEFAULT NOW(),
+  PRIMARY KEY ("currency", "effectiveFrom")
+);
+
 -- General operator/system audit log. Unlike formula_changes (which is the live
 -- source of truth for the global formula), this is purely append-only history:
 -- every admin mutation (feed toggle, currency enable, formula change, repair,
