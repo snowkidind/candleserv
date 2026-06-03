@@ -33,17 +33,29 @@ import {
 } from "../db/formulaVersions.js";
 import { getSettingInt } from "../db/appSettings.js";
 import { getRepairHorizonMs } from "./retention.js";
+import { getExchangeTuning } from "./exchangeConfig.js";
 import { query } from "../db/pool.js";
 import { log, logError } from "./log.js";
 
-// Tile size for ensureSourceCoverage fetchRange calls. 300 is the Coinbase
-// hard limit; smaller tiles mean more HTTP requests but more progress
-// granularity. Matches the BACKFILL_TILE in healer.ts.
-const ENSURE_TILE = 300;
+// Tile size / throttle / timeout are now PER VENUE, read from exchange_config.json
+// (getExchangeTuning) — a 1000-row venue no longer crawls at a 300-cap venue's
+// pace. See Stage 5 of plans/candleserv-repair-rework.md.
 
-// Throttle between tiles to keep us under exchange rate limits — same value
-// healRange uses.
-const TILE_THROTTLE_MS = 5000;
+/**
+ * Bound a single adapter fetch to the venue's timeout_ms. A timeout rejects so
+ * the per-venue walk treats it as a reachability failure (fail loud, skip venue
+ * for the run). Pure wall-clock on an HTTP fetch — behaves identically in sim
+ * and prod (no candle-time dependence).
+ */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((res, rej) => {
+    const timer = setTimeout(() => rej(new Error(`fetch timeout after ${ms}ms: ${label}`)), ms);
+    p.then(
+      (v) => { clearTimeout(timer); res(v); },
+      (e) => { clearTimeout(timer); rej(e); },
+    );
+  });
+}
 
 export interface EnsureSourceCoverageResult {
   rowsFetched: number;
@@ -130,107 +142,105 @@ export async function ensureSourceCoverage(
     log(`[repair] ensureSourceCoverage: cleared ${del.rowCount ?? 0} 'no_data' sentinels`);
   }
 
-  // Walk backward through [from, to) in ENSURE_TILE-minute chunks. Throttle
-  // before each ACTUAL fetch (not each tile): fully-covered tiles are skipped
-  // below with no fetch and must not burn the 5s pace, or the resume speedup is
-  // lost. Mirrors the shipped backfillStableRates coverage-skip.
-  let firstFetch = true;
-  for (let tileEnd = to; tileEnd > from;) {
-    if (opts?.signal?.aborted) {
-      log("[repair] ensureSourceCoverage: cancelled");
-      break;
+  // Per-venue independent walks. Each venue uses its OWN tile_size / throttle_ms
+  // / timeout_ms (exchange_config.json) and is clamped to its OWN probed candle
+  // depth, so a 1000-row venue isn't paced at a 300-cap venue's cadence and no
+  // venue is blindly polled past the history it serves. Walks run concurrently
+  // across venues (the per-venue rate gate in the registry serializes same-venue
+  // calls); shared counters are mutated synchronously on the single event loop.
+  const nowMs = Date.now();
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  async function walkVenue(source: string, symbol: string): Promise<void> {
+    let cfg;
+    try {
+      cfg = getExchangeTuning(source);
+    } catch (err) {
+      failedPerSource[source] = (failedPerSource[source] ?? 0) + 1;
+      logError(`[repair] ensureSourceCoverage: ${currency}/${source} has no exchange_config tuning — skipping venue`, err);
+      return;
     }
+    const tile = cfg.tile_size;
 
-    const tileStartMs = Math.max(from.getTime(), tileEnd.getTime() - ENSURE_TILE * 60000);
-    const tileStart   = new Date(tileStartMs);
-    const limit       = Math.round((tileEnd.getTime() - tileStartMs) / 60000);
-
-    // Coverage skip. A (currency, source) is fully covered for this tile when it
-    // already has a row (real OR sentinel) for every one of the tile's `limit`
-    // minutes — PK (currency,timestamp,source) means one row per minute, so
-    // COUNT == limit ⟺ no holes. Fetch only sources with at least one hole; if
-    // every fetch source is covered, skip the whole tile (no fetch, no throttle)
-    // → a killed repair RESUMES instead of restarting at `to`. Rides the
-    // (currency, timestamp) index.
-    //   - retryEmpty bypasses the skip → fetch every source (the deleted
-    //     'no_data' sentinels above are holes, so they get re-fetched).
-    //   - on a coverage-query error, fall back to fetching all (fail toward
-    //     doing the work, loudly) rather than silently skipping.
-    let feedsToFetch = feeds;
-    if (!opts?.retryEmpty) {
-      try {
-        const cov = await query(
-          `SELECT source, COUNT(*)::int AS n
-             FROM candles_1m_sources
-            WHERE "currency" = $1
-              AND "timestamp" >= $2 AND "timestamp" < $3
-              AND source = ANY($4::text[])
-            GROUP BY source`,
-          [currency, tileStart, tileEnd, feeds.map((f) => f.source)],
-        );
-        const have: Record<string, number> = {};
-        for (const r of cov.rows as { source: string; n: number }[]) have[r.source] = r.n;
-        feedsToFetch = feeds.filter((f) => (have[f.source] ?? 0) < limit);
-      } catch (err) {
-        logError(`[repair] ensureSourceCoverage: coverage check failed for tile [${tileStart.toISOString()}, ${tileEnd.toISOString()}) — fetching all sources`, err);
-        feedsToFetch = feeds;
+    // Depth pre-flight (candle): clamp this venue's fetch start to the history it
+    // actually serves, so we never blindly request a window it can't (blind 400s).
+    let venueFrom = from;
+    const depthMin = cfg.candle_depth_minutes?.[currency];
+    if (depthMin != null) {
+      const depthFloor = new Date(nowMs - depthMin * 60000);
+      if (venueFrom < depthFloor) {
+        log(`[repair] ensureSourceCoverage: ${currency}/${source} window starts before its ${depthMin}m candle depth — clamping fetch start to ${depthFloor.toISOString().slice(0, 16)} (out-of-depth segment skipped)`);
+        venueFrom = depthFloor;
       }
     }
-
-    if (feedsToFetch.length === 0) {
-      tilesSkipped++;
-      tileEnd = tileStart;
-      continue;
+    if (venueFrom >= to) {
+      log(`[repair] ensureSourceCoverage: ${currency}/${source} entire window is deeper than its candle depth — skipping venue`);
+      return;
     }
 
-    if (!firstFetch) {
-      await new Promise((r) => setTimeout(r, TILE_THROTTLE_MS));
-    }
-    firstFetch = false;
+    let firstFetch = true;
+    for (let tileEnd = to; tileEnd > venueFrom;) {
+      if (opts?.signal?.aborted) { log(`[repair] ensureSourceCoverage: ${source} cancelled`); return; }
 
-    // Fan out per-source fetchRange for the sources that still have holes.
-    const settled = await Promise.allSettled(
-      feedsToFetch.map((f) => {
-        recordApiRequest(currency, f.source, "repair");
-        return ADAPTER_BY_NAME[f.source].fetchRange(f.symbol, tileEnd, limit);
-      }),
-    );
+      const tileStartMs = Math.max(venueFrom.getTime(), tileEnd.getTime() - tile * 60000);
+      const tileStart   = new Date(tileStartMs);
+      const limit       = Math.round((tileEnd.getTime() - tileStartMs) / 60000);
 
-    // Per source, build the tile's rows (fetched candle or 'no_data' sentinel
-    // per minute) and insert them in ONE batched statement instead of one
-    // awaited round-trip per minute. ON CONFLICT DO NOTHING preserves existing
-    // rows (live tick, prior heal, prior sentinel) exactly as the per-row loop
-    // did; RETURNING "rejected" gives the precise fetched/sentinel/skipped split.
-    for (let i = 0; i < feedsToFetch.length; i++) {
-      const source = feedsToFetch[i].source;
-      const res = settled[i];
+      // Coverage skip for THIS source: a tile already holding `limit` rows (real
+      // or sentinel) has no holes → skip (no fetch, no throttle), so a killed
+      // repair resumes. PK (currency,timestamp,source) ⇒ COUNT == limit ⟺ full.
+      //   - retryEmpty bypasses (sentinels were deleted above → holes refetched).
+      //   - a coverage-query error fetches anyway (fail toward doing the work).
+      if (!opts?.retryEmpty) {
+        try {
+          const cov = await query(
+            `SELECT COUNT(*)::int AS n FROM candles_1m_sources
+              WHERE "currency"=$1 AND "timestamp">=$2 AND "timestamp"<$3 AND source=$4`,
+            [currency, tileStart, tileEnd, source],
+          );
+          if (Number(cov.rows[0]?.n ?? 0) >= limit) { tilesSkipped++; tileEnd = tileStart; continue; }
+        } catch (err) {
+          logError(`[repair] ensureSourceCoverage: ${currency}/${source} coverage check failed for tile [${tileStart.toISOString()}, ${tileEnd.toISOString()}) — fetching`, err);
+        }
+      }
 
-      if (res.status === "rejected") {
-        // Adapter-declared out-of-history (e.g. gate caps at ~6.9 days) is
-        // expected, not a fault. Aggregate quietly; one summary line at end.
-        if (isOutOfHistory(res.reason)) {
+      if (!firstFetch) await sleep(cfg.throttle_ms);
+      firstFetch = false;
+
+      let rows: { timestamp: Date; candle: { open: number; high: number; low: number; close: number; volume: number } }[];
+      try {
+        recordApiRequest(currency, source, "repair");
+        rows = await withTimeout(
+          ADAPTER_BY_NAME[source].fetchRange(symbol, tileEnd, limit),
+          cfg.timeout_ms,
+          `${currency}/${source} tile ${tileStart.toISOString().slice(0, 16)}`,
+        );
+      } catch (err) {
+        if (isOutOfHistory(err)) {
+          // Reached the venue's history floor — everything deeper is also out of
+          // history, so stop this venue's walk. (Depth pre-flight usually clamps
+          // before this; it's the backstop when a depth is unknown/stale.)
           const prev = outOfHistoryEarliest[source];
           if (!prev || tileStart < prev) outOfHistoryEarliest[source] = tileStart;
-          continue;
+          return;
         }
+        // Reachability / timeout / other — fail LOUD, per-venue: skip this venue
+        // for the run (runtime reachability is region-dependent, NOT a venue
+        // property; never a silent drop). The coverage-skip resumes on re-run.
         failedPerSource[source] = (failedPerSource[source] ?? 0) + 1;
-        logError(`[repair] ensureSourceCoverage: ${currency}/${source} tile [${tileStart.toISOString()}, ${tileEnd.toISOString()}) failed`, res.reason);
-        // Don't write sentinels for whole-tile failures — that'd mark every
-        // minute in the tile as 'no_data', losing the distinction between
-        // "exchange returned empty" and "network/auth failure." The next
-        // ensureSourceCoverage call will retry the tile.
-        continue;
+        logError(`[repair] ensureSourceCoverage: ${currency}/${source} tile [${tileStart.toISOString()}, ${tileEnd.toISOString()}) failed — skipping ${source} for this run (re-run resumes)`, err);
+        return;
       }
 
-      // Map fetched minutes for fast lookup.
+      // Build the tile's rows (fetched candle or 'no_data' sentinel per minute)
+      // and insert in ONE batched statement. ON CONFLICT DO NOTHING preserves
+      // existing rows; RETURNING "rejected" gives the fetched/sentinel/skipped split.
       const fetched = new Map<number, { open: number; high: number; low: number; close: number; volume: number }>();
-      for (const { timestamp, candle } of res.value) {
+      for (const { timestamp, candle } of rows) {
         const ts = timestamp.getTime();
         if (ts < tileStartMs || ts >= tileEnd.getTime()) continue;
         fetched.set(ts, candle);
       }
-
-      // Build column-arrays for the whole tile: a fetched candle, or a sentinel.
       const tsArr: Date[] = [];
       const oArr: number[] = [], hArr: number[] = [], lArr: number[] = [], cArr: number[] = [], vArr: number[] = [];
       const rejArr: boolean[] = [];
@@ -246,31 +256,32 @@ export async function ensureSourceCoverage(
           rejArr.push(true); reasonArr.push("no_data");
         }
       }
-      if (tsArr.length === 0) continue;
-
-      const ins = await query(
-        `INSERT INTO candles_1m_sources
-           ("currency","timestamp","source","open","high","low","close","volume",
-            "rejected","rejectedReason","usedInFormula")
-         SELECT $1, u.ts, $2, u.open, u.high, u.low, u.close, u.volume, u.rejected, u.reason, NULL
-           FROM UNNEST($3::timestamptz[], $4::numeric[], $5::numeric[], $6::numeric[],
-                       $7::numeric[], $8::numeric[], $9::boolean[], $10::text[])
-                AS u(ts, open, high, low, close, volume, rejected, reason)
-         ON CONFLICT ("currency","timestamp","source") DO NOTHING
-         RETURNING "rejected"`,
-        [currency, source, tsArr, oArr, hArr, lArr, cArr, vArr, rejArr, reasonArr],
-      );
-
-      const insertedRows = ins.rows as { rejected: boolean }[];
-      for (const r of insertedRows) {
-        if (r.rejected) sentinelsWritten++;
-        else rowsFetched++;
+      if (tsArr.length > 0) {
+        const ins = await query(
+          `INSERT INTO candles_1m_sources
+             ("currency","timestamp","source","open","high","low","close","volume",
+              "rejected","rejectedReason","usedInFormula")
+           SELECT $1, u.ts, $2, u.open, u.high, u.low, u.close, u.volume, u.rejected, u.reason, NULL
+             FROM UNNEST($3::timestamptz[], $4::numeric[], $5::numeric[], $6::numeric[],
+                         $7::numeric[], $8::numeric[], $9::boolean[], $10::text[])
+                  AS u(ts, open, high, low, close, volume, rejected, reason)
+           ON CONFLICT ("currency","timestamp","source") DO NOTHING
+           RETURNING "rejected"`,
+          [currency, source, tsArr, oArr, hArr, lArr, cArr, vArr, rejArr, reasonArr],
+        );
+        const insertedRows = ins.rows as { rejected: boolean }[];
+        for (const r of insertedRows) {
+          if (r.rejected) sentinelsWritten++;
+          else rowsFetched++;
+        }
+        skipped += tsArr.length - insertedRows.length;   // already present (ON CONFLICT DO NOTHING)
       }
-      skipped += tsArr.length - insertedRows.length;   // already present (ON CONFLICT DO NOTHING)
-    }
 
-    tileEnd = tileStart;
+      tileEnd = tileStart;
+    }
   }
+
+  await Promise.all(feeds.map((f) => walkVenue(f.source, f.symbol)));
 
   // One tidy summary line per source for the venues that ran out of history.
   for (const [source, earliest] of Object.entries(outOfHistoryEarliest)) {

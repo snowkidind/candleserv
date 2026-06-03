@@ -23,12 +23,24 @@
 import { ADAPTER_BY_NAME, SOURCE_NAMES } from "../adapters/registry.js";
 import { isOutOfHistory } from "../adapters/errors.js";
 import { resolveRepairSources } from "../db/formulaVersions.js";
+import { getExchangeTuning } from "./exchangeConfig.js";
 import { getRepairHorizonMs } from "./retention.js";
 import { query } from "../db/pool.js";
-import { log, logError } from "./log.js";
+import { log, logError, logWarn } from "./log.js";
 
-const BACKFILL_TILE = 300;
-const TILE_THROTTLE_MS = 5000;
+// Tile size / throttle / timeout are PER VENUE, from exchange_config.json
+// (getExchangeTuning) — Stage 5. Peg depth is a separate gate (below).
+
+/** Bound a single peg fetch to the venue's timeout_ms (see repair.ts withTimeout). */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((res, rej) => {
+    const timer = setTimeout(() => rej(new Error(`peg fetch timeout after ${ms}ms: ${label}`)), ms);
+    p.then(
+      (v) => { clearTimeout(timer); res(v); },
+      (e) => { clearTimeout(timer); rej(e); },
+    );
+  });
+}
 
 export interface BackfillStableRatesResult {
   rowsInserted: number;
@@ -82,105 +94,97 @@ export async function backfillStableRates(
   const outOfHistoryEarliest: Record<string, Date> = {};
 
   const retryEmpty = opts?.retryEmpty ?? false;
+  const nowMs = Date.now();
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-  // Throttle before each ACTUAL fetch, not each tile — fully-covered tiles are
-  // skipped below and must not burn the 5s pace or we lose the speedup.
-  let firstFetch = true;
-  for (let tileEnd = to; tileEnd > from; ) {
-    if (opts?.signal?.aborted) {
-      log("[stableRateBackfill] cancelled");
-      break;
+  // Per-venue independent peg walks (own tile_size / throttle_ms / timeout_ms),
+  // each clamped to its own probed PEG depth. Peg depth is a SEPARATE gate from
+  // candle depth: a USDT venue can have deep candles but a shallow peg, so beyond
+  // peg depth it can't be USD-normalized (missing_paired_rate). The pre-flight
+  // FLAGS that segment so the operator omits the venue from the formula there,
+  // rather than discovering missing_paired_rate mid-run.
+  async function walkPegVenue(source: string): Promise<void> {
+    let cfg;
+    try {
+      cfg = getExchangeTuning(source);
+    } catch (err) {
+      failedPerSource[source] = (failedPerSource[source] ?? 0) + 1;
+      logError(`[stableRateBackfill] ${source} has no exchange_config tuning — skipping venue`, err);
+      return;
     }
+    const tile = cfg.tile_size;
+    const fetchPeg = ADAPTER_BY_NAME[source].normalize.pegFetcherRange!;
+    const pegSourcePair = ADAPTER_BY_NAME[source].normalize.pegSourcePair;
+    if (!pegSourcePair) return; // shouldn't happen given the USDT filter, but defensive
 
-    const tileStartMs = Math.max(from.getTime(), tileEnd.getTime() - BACKFILL_TILE * 60000);
-    const tileStart   = new Date(tileStartMs);
-    const limit       = Math.round((tileEnd.getTime() - tileStartMs) / 60000);
-
-    // Coverage skip. Stable rates are SHARED per (minute, source), so a prior
-    // repair (or BTC's live fill) may already hold this tile. Fetch a venue ONLY
-    // where a minute the REPAIR'S CURRENCY has a candle for still lacks a rate
-    // row — a real hole the FK-guarded insert could fill. The rate table is
-    // shared, so a rate another currency already filled counts as covered; the
-    // currency scope just limits which candle minutes we ask about (the ones
-    // this repair needs) AND lets the query ride the (currency, timestamp DESC)
-    // index instead of seq-scanning per tile. Converges: once a hole is filled
-    // it stops being selected. Fully-covered tile → skipped (no fetch, no
-    // throttle).
-    //   - retryEmpty, or no currency supplied (can't use the index), disables
-    //     the skip → fetch every venue (current behavior).
-    //   - on a coverage-query error, fall back to fetching all venues (fail
-    //     toward doing the work, loudly) rather than silently skipping.
-    let sourcesToFetch: string[];
-    if (retryEmpty || !opts?.currency) {
-      sourcesToFetch = usdtSources;
-    } else {
-      try {
-        const cov = await query(
-          `SELECT DISTINCT cs.source
-             FROM candles_1m_sources cs
-            WHERE cs.currency = $4
-              AND cs."timestamp" >= $1 AND cs."timestamp" < $2
-              AND cs.source = ANY($3::text[])
-              AND NOT EXISTS (
-                SELECT 1 FROM stable_rates_1m_sources sr
-                 WHERE sr."timestamp" = cs."timestamp" AND sr.source = cs.source
-              )`,
-          [tileStart, tileEnd, usdtSources, opts.currency],
-        );
-        sourcesToFetch = cov.rows.map((r: { source: string }) => r.source);
-      } catch (err) {
-        logError(`[stableRateBackfill] coverage check failed for tile [${tileStart.toISOString()}, ${tileEnd.toISOString()}) — fetching all USDT venues`, err);
-        sourcesToFetch = usdtSources;
+    // Peg-depth pre-flight.
+    let venueFrom = from;
+    const pegDepth = cfg.peg_depth_minutes;
+    if (pegDepth != null) {
+      const depthFloor = new Date(nowMs - pegDepth * 60000);
+      if (venueFrom < depthFloor) {
+        logWarn(`[stableRateBackfill] ${source} peg depth ${pegDepth}m is shallower than the window — clamping peg fetch to ${depthFloor.toISOString().slice(0, 16)}. Minutes before that can't be USD-normalized for ${source} (missing_paired_rate); omit ${source} from the formula for that segment.`);
+        venueFrom = depthFloor;
       }
     }
-
-    if (sourcesToFetch.length === 0) {
-      tilesSkipped++;
-      tileEnd = tileStart;
-      continue;
+    if (venueFrom >= to) {
+      logWarn(`[stableRateBackfill] ${source} entire window is deeper than its ${pegDepth}m peg depth — skipping venue (omit it from the formula for this window)`);
+      return;
     }
 
-    if (!firstFetch) {
-      await new Promise((r) => setTimeout(r, TILE_THROTTLE_MS));
-    }
-    firstFetch = false;
+    let firstFetch = true;
+    for (let tileEnd = to; tileEnd > venueFrom;) {
+      if (opts?.signal?.aborted) { log(`[stableRateBackfill] ${source} cancelled`); return; }
 
-    // Fan out per-venue pegFetcherRange for this tile. Fetch one extra minute
-    // (limit+1): binance/bybit/bitget include the endTime minute and drop the
-    // bottom of the window, so without the +1 every 300-min tile boundary loses
-    // its first minute (the recurring :47 stable-rate hole). The [tileStartMs,
-    // tileEnd) filter below trims the overlap; the upsert makes it idempotent.
-    const settled = await Promise.allSettled(
-      sourcesToFetch.map((name) => {
-        const a = ADAPTER_BY_NAME[name];
-        return a.normalize.pegFetcherRange!(tileEnd, limit + 1);
-      }),
-    );
+      const tileStartMs = Math.max(venueFrom.getTime(), tileEnd.getTime() - tile * 60000);
+      const tileStart   = new Date(tileStartMs);
+      const limit       = Math.round((tileEnd.getTime() - tileStartMs) / 60000);
 
-    for (let i = 0; i < sourcesToFetch.length; i++) {
-      const source = sourcesToFetch[i];
-      const res = settled[i];
+      // Coverage skip (per source): fetch only if a candle minute this repair's
+      // currency holds still lacks a rate row. Needs opts.currency to ride the
+      // (currency, timestamp) index; retryEmpty / no-currency disables the skip.
+      if (!retryEmpty && opts?.currency) {
+        try {
+          const cov = await query(
+            `SELECT 1 FROM candles_1m_sources cs
+              WHERE cs.currency = $1 AND cs."timestamp" >= $2 AND cs."timestamp" < $3 AND cs.source = $4
+                AND NOT EXISTS (
+                  SELECT 1 FROM stable_rates_1m_sources sr
+                   WHERE sr."timestamp" = cs."timestamp" AND sr.source = cs.source)
+              LIMIT 1`,
+            [opts.currency, tileStart, tileEnd, source],
+          );
+          if (cov.rows.length === 0) { tilesSkipped++; tileEnd = tileStart; continue; }
+        } catch (err) {
+          logError(`[stableRateBackfill] ${source} coverage check failed for tile [${tileStart.toISOString()}, ${tileEnd.toISOString()}) — fetching`, err);
+        }
+      }
 
-      if (res.status === "rejected") {
-        if (isOutOfHistory(res.reason)) {
+      if (!firstFetch) await sleep(cfg.throttle_ms);
+      firstFetch = false;
+
+      // Fetch one extra minute (limit+1): binance/bybit/bitget include the endTime
+      // minute and drop the bottom of the window; without +1 every tile boundary
+      // loses its first minute (the recurring :47 hole). The [tileStartMs, tileEnd)
+      // filter trims the overlap; the upsert makes it idempotent.
+      let rows: { timestamp: Date; rate: number }[];
+      try {
+        rows = await withTimeout(fetchPeg(tileEnd, limit + 1), cfg.timeout_ms, `${source} peg tile ${tileStart.toISOString().slice(0, 16)}`);
+      } catch (err) {
+        if (isOutOfHistory(err)) {
           const prev = outOfHistoryEarliest[source];
           if (!prev || tileStart < prev) outOfHistoryEarliest[source] = tileStart;
-          continue;
+          return; // history floor — everything deeper is also out of history
         }
         failedPerSource[source] = (failedPerSource[source] ?? 0) + 1;
-        logError(`[stableRateBackfill] ${source} tile [${tileStart.toISOString()}, ${tileEnd.toISOString()}) failed`, res.reason);
-        continue;
+        logError(`[stableRateBackfill] ${source} peg tile [${tileStart.toISOString()}, ${tileEnd.toISOString()}) failed — skipping ${source} for this run (re-run resumes)`, err);
+        return;
       }
 
-      const pegSourcePair = ADAPTER_BY_NAME[source]?.normalize.pegSourcePair;
-      if (!pegSourcePair) continue;     // shouldn't happen given the USDT filter, but defensive
-
-      for (const { timestamp, rate } of res.value) {
+      for (const { timestamp, rate } of rows) {
         const ts = timestamp.getTime();
         if (ts < tileStartMs || ts >= tileEnd.getTime()) continue;
-
-        // Single statement: insert only if the FK target (BTC row) exists.
-        // ON CONFLICT updates the rate on existing rows (later re-runs win).
+        // Insert only if the FK target (BTC row) exists; ON CONFLICT updates.
         const ins = await query(
           `INSERT INTO stable_rates_1m_sources ("timestamp", "source", "rate", "pegSourcePair")
            SELECT $1::timestamptz, $2::varchar, $3::numeric, $4::varchar
@@ -197,10 +201,12 @@ export async function backfillStableRates(
         if (ins.rowCount === 1) rowsInserted++;
         else rowsSkippedNoBtc++;
       }
-    }
 
-    tileEnd = tileStart;
+      tileEnd = tileStart;
+    }
   }
+
+  await Promise.all(usdtSources.map(walkPegVenue));
 
   for (const [source, earliest] of Object.entries(outOfHistoryEarliest)) {
     log(`[stableRateBackfill] ${source} has no rate data before ${earliest.toISOString().slice(0, 16)} (skipped)`);
