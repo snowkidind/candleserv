@@ -30,10 +30,27 @@ export interface Formula {
   excludedSources: string[];
 }
 
-export type RepairJobPhase =
+/**
+ * Step SELECTION — which of the three independently-runnable units a repair job
+ * runs (any non-empty subset). Distinct axis from the progress state below:
+ *   fetch     → ensureSourceCoverage (token archive)
+ *   stables   → backfillStableRates  (shared USDT→USD pegs)
+ *   recompose → recomposeRange       (re-derive the composite; no fetches)
+ * Recompose-only = ["recompose"].
+ */
+export type RepairStep = "fetch" | "stables" | "recompose";
+export const ALL_REPAIR_STEPS: RepairStep[] = ["fetch", "stables", "recompose"];
+
+/**
+ * Progress STATE — where the job is right now. The in-flight states read in the
+ * step vocabulary the UI shows (fetching / stables / recomposing). Different
+ * concern from the step SELECTION above (RepairStep): a job that only runs
+ * ["recompose"] transitions queued → recomposing → done.
+ */
+export type RepairJobStep =
   | "queued"
-  | "ensuring"
-  | "backfilling"
+  | "fetching"
+  | "stables"
   | "recomposing"
   | "done"
   | "failed"
@@ -41,7 +58,7 @@ export type RepairJobPhase =
 
 export interface RepairJobState {
   jobId: string;
-  state: RepairJobPhase;
+  state: RepairJobStep;
   startedAt: string;          // ISO
   finishedAt: string | null;  // ISO when terminal, null otherwise
 
@@ -52,8 +69,9 @@ export interface RepairJobState {
   sources?: string[];
   formula?: Formula;
   retryEmpty?: boolean;
+  steps: RepairStep[];        // which units this job runs (subset of ALL_REPAIR_STEPS)
 
-  // Per-phase results — populated as phases complete.
+  // Per-step results — populated as steps complete (null if the step wasn't run).
   ensure: EnsureSourceCoverageResult | null;
   backfill: BackfillStableRatesResult | null;
   recompose: RecomposeRangeResult | null;
@@ -116,6 +134,7 @@ export interface StartRepairJobRequest {
   sources?: string[];
   formula?: Formula;
   retryEmpty?: boolean;
+  steps?: RepairStep[];   // default: all three (today's full ensure→backfill→recompose chain)
 }
 
 export function startRepairJob(req: StartRepairJobRequest): { jobId: string } {
@@ -124,6 +143,7 @@ export function startRepairJob(req: StartRepairJobRequest): { jobId: string } {
   }
   const jobId = crypto.randomUUID();
   const controller = new AbortController();
+  const steps = req.steps ?? ALL_REPAIR_STEPS;
   const state: RepairJobState = {
     jobId,
     state: "queued",
@@ -135,6 +155,7 @@ export function startRepairJob(req: StartRepairJobRequest): { jobId: string } {
     sources:    req.sources,
     formula:    req.formula,
     retryEmpty: req.retryEmpty,
+    steps,
     ensure:    null,
     backfill:  null,
     recompose: null,
@@ -153,7 +174,7 @@ export function startRepairJob(req: StartRepairJobRequest): { jobId: string } {
     logError(`[repair-job] ${jobId} fatal uncaught:`, err);
   });
 
-  log(`[repair-job] ${jobId} started: ${state.currency} ${state.from} → ${state.to}${req.formula ? ` formula-override=${JSON.stringify(req.formula.excludedSources)}` : ""}`);
+  log(`[repair-job] ${jobId} started: ${state.currency} ${state.from} → ${state.to} steps=[${steps.join(",")}]${req.formula ? ` formula-override=${JSON.stringify(req.formula.excludedSources)}` : ""}`);
   return { jobId };
 }
 
@@ -161,79 +182,78 @@ async function runRepairJob(jobId: string, controller: AbortController): Promise
   const entry = jobs.get(jobId);
   if (!entry) return;
   const { state } = entry;
+  const { steps } = state;
+
+  // Each step is independently selectable (any subset of fetch/stables/recompose).
+  // The stables and recompose steps act on whatever archive is already present —
+  // a stables-only or recompose-only run is valid and must NOT assume the fetch
+  // step ran first. backfillStableRates' WHERE-EXISTS guard keeps a stables run
+  // without a preceding fetch FK-safe.
+  const cancelledAfter = (stepLabel: string): boolean => {
+    if (!controller.signal.aborted) return false;
+    state.state = "cancelled";
+    state.finishedAt = new Date().toISOString();
+    log(`[repair-job] ${jobId} cancelled after ${stepLabel} step`);
+    return true;
+  };
 
   try {
-    // Phase 1: ensureSourceCoverage.
-    state.state = "ensuring";
-    const ensure = await ensureSourceCoverage(
-      state.currency,
-      new Date(state.from),
-      new Date(state.to),
-      {
-        sources: state.sources,
-        retryEmpty: state.retryEmpty,
-        signal: controller.signal,
-      },
-    );
-    state.ensure = ensure;
-
-    if (controller.signal.aborted) {
-      state.state = "cancelled";
-      state.finishedAt = new Date().toISOString();
-      log(`[repair-job] ${jobId} cancelled after ensure phase`);
-      return;
+    // Step: fetch — ensureSourceCoverage (token archive).
+    if (steps.includes("fetch")) {
+      state.state = "fetching";
+      state.ensure = await ensureSourceCoverage(
+        state.currency,
+        new Date(state.from),
+        new Date(state.to),
+        {
+          sources: state.sources,
+          retryEmpty: state.retryEmpty,
+          signal: controller.signal,
+        },
+      );
+      if (cancelledAfter("fetch")) return;
     }
 
-    // Phase 2: backfillStableRates. FK-safe — only inserts rate rows where
-    // the BTC row exists, which the ensure phase has just guaranteed.
-    state.state = "backfilling";
-    const backfill = await backfillStableRates(
-      new Date(state.from),
-      new Date(state.to),
-      {
-        sources: state.sources,
-        currency: state.currency,
-        retryEmpty: state.retryEmpty,
-        signal: controller.signal,
-      },
-    );
-    state.backfill = backfill;
-
-    if (controller.signal.aborted) {
-      state.state = "cancelled";
-      state.finishedAt = new Date().toISOString();
-      log(`[repair-job] ${jobId} cancelled after backfill phase`);
-      return;
+    // Step: stables — backfillStableRates (shared USDT→USD pegs). FK-safe via its
+    // own WHERE-EXISTS guard, so it's valid even without a preceding fetch step.
+    if (steps.includes("stables")) {
+      state.state = "stables";
+      state.backfill = await backfillStableRates(
+        new Date(state.from),
+        new Date(state.to),
+        {
+          sources: state.sources,
+          currency: state.currency,
+          retryEmpty: state.retryEmpty,
+          signal: controller.signal,
+        },
+      );
+      if (cancelledAfter("stables")) return;
     }
 
-    // Phase 3: recomposeRange.
-    state.state = "recomposing";
-    const recompose = await recomposeRange(
-      state.currency,
-      new Date(state.from),
-      new Date(state.to),
-      {
-        formula: state.formula,
-        signal: controller.signal,
-      },
-    );
-    state.recompose = recompose;
-
-    if (controller.signal.aborted) {
-      state.state = "cancelled";
-      state.finishedAt = new Date().toISOString();
-      log(`[repair-job] ${jobId} cancelled after recompose phase`);
-      return;
+    // Step: recompose — recomposeRange (re-derive the composite; pure DB, no fetch).
+    if (steps.includes("recompose")) {
+      state.state = "recomposing";
+      state.recompose = await recomposeRange(
+        state.currency,
+        new Date(state.from),
+        new Date(state.to),
+        {
+          formula: state.formula,
+          signal: controller.signal,
+        },
+      );
+      if (cancelledAfter("recompose")) return;
     }
 
     // Done.
     state.state = "done";
     state.result = {
-      rowsWritten: recompose.recomposed,
-      archiveRowsFetched: ensure.rowsFetched,
+      rowsWritten: state.recompose?.recomposed ?? 0,
+      archiveRowsFetched: state.ensure?.rowsFetched ?? 0,
     };
     state.finishedAt = new Date().toISOString();
-    log(`[repair-job] ${jobId} done: ${recompose.recomposed} rows recomposed, ${ensure.rowsFetched} archive rows fetched, ${backfill.rowsInserted} stable rates filled`);
+    log(`[repair-job] ${jobId} done [${steps.join(",")}]: ${state.recompose?.recomposed ?? 0} rows recomposed, ${state.ensure?.rowsFetched ?? 0} archive rows fetched, ${state.backfill?.rowsInserted ?? 0} stable rates filled`);
   } catch (err) {
     state.state = "failed";
     state.error = String(err);
@@ -268,6 +288,7 @@ export interface RepairPreview {
  */
 export async function previewRepair(req: StartRepairJobRequest): Promise<RepairPreview> {
   const { currency, from, to, sources, formula, retryEmpty } = req;
+  const steps = req.steps ?? ALL_REPAIR_STEPS;
 
   // Every count is scoped to the requested currency so the preview matches what
   // the ensure/recompose phases (which only touch that currency) will do.
@@ -338,9 +359,11 @@ export async function previewRepair(req: StartRepairJobRequest): Promise<RepairP
   // = ceil(totalMinutes / 300), and ensure-phase ≈ tileCount * (5s + per-tile
   // HTTP time ≈ 2s) for the fastest-resolving source. Recompose-phase is
   // ~1ms per minute (pure DB), so totalMinutes * 1ms.
+  // Only count the steps this run will actually perform — a recompose-only run
+  // pays no ensure-phase throttle.
   const tileCount = Math.ceil(totalMinutes / 300);
-  const ensureMs = tileCount * 7000;
-  const recomposeMs = totalMinutes * 1;
+  const ensureMs = steps.includes("fetch") ? tileCount * 7000 : 0;
+  const recomposeMs = steps.includes("recompose") ? totalMinutes * 1 : 0;
   const estimatedWallMs = ensureMs + recomposeMs;
 
   // 5. Live-formula-unchanged is always true — repair never writes to

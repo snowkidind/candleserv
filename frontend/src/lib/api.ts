@@ -166,7 +166,7 @@ export interface RepairPreview {
 }
 export interface RepairJobState {
   jobId: string;
-  state: "queued" | "ensuring" | "backfilling" | "recomposing" | "done" | "failed" | "cancelled";
+  state: "queued" | "fetching" | "stables" | "recomposing" | "done" | "failed" | "cancelled";
   startedAt: string;
   finishedAt: string | null;
   currency: string;
@@ -175,6 +175,7 @@ export interface RepairJobState {
   sources?: string[];
   formula?: Formula;
   retryEmpty?: boolean;
+  steps: ("fetch" | "stables" | "recompose")[];
   ensure: {
     rowsFetched: number;
     sentinelsWritten: number;

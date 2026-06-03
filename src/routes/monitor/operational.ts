@@ -31,8 +31,9 @@ import { findUserById } from "../../db/users.js";
 import { getAllServiceEvents } from "../../db/serviceEvents.js";
 import {
   startRepairJob, previewRepair, getRepairJob, getActiveRepairJob, cancelRepairJob,
-  isRepairInProgress, validateRepairWindow,
+  isRepairInProgress, validateRepairWindow, ALL_REPAIR_STEPS,
 } from "../../lib/repairJobs.js";
+import type { RepairStep } from "../../lib/repairJobs.js";
 import { getHealerActivities } from "../../lib/healerStatus.js";
 import { isDemoMode, readCap } from "../../lib/demoMode.js";
 import { redisGet, redisSet, boundaryTtl } from "../../lib/redis.js";
@@ -288,7 +289,12 @@ router.put("/formula", ...modify, async (req, res) => {
 
 /**
  * POST /monitor/repair?dry=<true|false>
- *   body: { from: ISO, to: ISO, sources?: string[], formula?: { excludedSources: string[] }, retryEmpty?: boolean }
+ *   body: { from: ISO, to: ISO, sources?: string[], formula?: { excludedSources: string[] },
+ *           retryEmpty?: boolean, steps?: ("fetch"|"stables"|"recompose")[] }
+ *
+ * steps selects which units run (any non-empty subset); absent = all three (the
+ * full ensure→backfill→recompose chain). Recompose-only = { steps: ["recompose"] }
+ * — re-derives the composite from the existing archive with no exchange fetches.
  *
  * dry=true returns { preview }. dry=false starts a job and returns { jobId }.
  * Single-flight: rejects with 409 if a job is already running.
@@ -305,6 +311,7 @@ router.post("/repair", ...modify, async (req, res) => {
     sources?: unknown;
     formula?: { excludedSources?: unknown };
     retryEmpty?: unknown;
+    steps?: unknown;
   };
   if (typeof body?.from !== "string" || typeof body?.to !== "string") {
     return res.status(400).json({ error: "Body must include from + to (ISO strings)" });
@@ -343,12 +350,28 @@ router.post("/repair", ...modify, async (req, res) => {
     if (unknown.length) return res.status(400).json({ error: `Unknown source(s) in formula override: ${unknown.join(", ")}` });
   }
 
+  // Optional step selection — any non-empty subset of fetch/stables/recompose.
+  // Default (absent) = all three = today's full ensure→backfill→recompose chain.
+  // Recompose-only = { steps: ["recompose"] } (no exchange fetches).
+  let steps: RepairStep[] | undefined;
+  if (body.steps !== undefined) {
+    if (!Array.isArray(body.steps) || !body.steps.every((s) => typeof s === "string")) {
+      return res.status(400).json({ error: "steps must be string[]" });
+    }
+    const valid = new Set<string>(ALL_REPAIR_STEPS);
+    const bad = (body.steps as string[]).filter((s) => !valid.has(s));
+    if (bad.length) return res.status(400).json({ error: `Unknown step(s): ${bad.join(", ")} (valid: ${ALL_REPAIR_STEPS.join(", ")})` });
+    const dedup = [...new Set(body.steps as RepairStep[])];
+    if (dedup.length === 0) return res.status(400).json({ error: "steps must be a non-empty subset of fetch, stables, recompose" });
+    steps = dedup;
+  }
+
   const retryEmpty = Boolean(body.retryEmpty);
   const dry = req.query.dry === "true";
 
   if (dry) {
     try {
-      const preview = await previewRepair({ currency, from, to, sources, formula, retryEmpty });
+      const preview = await previewRepair({ currency, from, to, sources, formula, retryEmpty, steps });
       return res.json({ preview });
     } catch (err) {
       logError("[monitor] POST /repair?dry=true failed:", err);
@@ -361,12 +384,12 @@ router.post("/repair", ...modify, async (req, res) => {
     return res.status(409).json({ error: "a repair job is already in progress" });
   }
   try {
-    const { jobId } = startRepairJob({ currency, from, to, sources, formula, retryEmpty });
+    const { jobId } = startRepairJob({ currency, from, to, sources, formula, retryEmpty, steps });
     void recordAdminAction({
       actor: await actorOf(req),
       action: "repair.start",
       target: currency,
-      detail: { jobId, from: from.toISOString(), to: to.toISOString(), retryEmpty, formula: formula?.excludedSources },
+      detail: { jobId, from: from.toISOString(), to: to.toISOString(), retryEmpty, steps, formula: formula?.excludedSources },
     });
     return res.json({ jobId });
   } catch (err) {

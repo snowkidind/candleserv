@@ -177,7 +177,7 @@ function RepairProgressPanel({
           1. ensureSourceCoverage
           {data.ensure ? <span className="text-gray-500 ml-2 text-xs">
             ({data.ensure.rowsFetched.toLocaleString()} fetched, {data.ensure.sentinelsWritten.toLocaleString()} sentinels, {data.ensure.skipped.toLocaleString()} skipped)
-          </span> : data.state === "ensuring" ? <span className="text-blue-400 ml-2 text-xs">running…</span> : null}
+          </span> : data.state === "fetching" ? <span className="text-blue-400 ml-2 text-xs">running…</span> : null}
         </div>
         {data.ensure && Object.keys(data.ensure.failedPerSource).length > 0 && (
           <div className="text-xs text-red-400 mt-1">
@@ -192,7 +192,7 @@ function RepairProgressPanel({
           2. backfillStableRates
           {data.backfill ? <span className="text-gray-500 ml-2 text-xs">
             ({data.backfill.rowsInserted.toLocaleString()} inserted, {data.backfill.rowsSkippedNoBtc.toLocaleString()} skipped no-btc)
-          </span> : data.state === "backfilling" ? <span className="text-blue-400 ml-2 text-xs">running…</span> : null}
+          </span> : data.state === "stables" ? <span className="text-blue-400 ml-2 text-xs">running…</span> : null}
         </div>
         {data.backfill && Object.keys(data.backfill.failedPerSource).length > 0 && (
           <div className="text-xs text-red-400 mt-1">
