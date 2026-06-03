@@ -180,6 +180,7 @@ export interface RepairJobState {
     rowsFetched: number;
     sentinelsWritten: number;
     skipped: number;
+    tilesSkipped: number;
     failedPerSource: Record<string, number>;
   } | null;
   backfill: {

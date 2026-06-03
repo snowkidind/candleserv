@@ -46,6 +46,7 @@ export interface EnsureSourceCoverageResult {
   rowsFetched: number;
   sentinelsWritten: number;
   skipped: number;
+  tilesSkipped: number;       // tiles already fully covered for every fetch source → no fetch/throttle
   failedPerSource: Record<string, number>;
   clamped?: { from?: string; to?: string }; // ISO timestamps after clamping
 }
@@ -91,6 +92,7 @@ export async function ensureSourceCoverage(
   let rowsFetched = 0;
   let sentinelsWritten = 0;
   let skipped = 0;
+  let tilesSkipped = 0;
   const failedPerSource: Record<string, number> = {};
   // Out-of-history failures get aggregated, not logged per tile. Earliest tile
   // (start time) tracks where each source's accessible history begins.
@@ -109,35 +111,79 @@ export async function ensureSourceCoverage(
     log(`[repair] ensureSourceCoverage: cleared ${del.rowCount ?? 0} 'no_data' sentinels`);
   }
 
-  // Walk backward through [from, to) in ENSURE_TILE-minute chunks.
-  let firstTile = true;
+  // Walk backward through [from, to) in ENSURE_TILE-minute chunks. Throttle
+  // before each ACTUAL fetch (not each tile): fully-covered tiles are skipped
+  // below with no fetch and must not burn the 5s pace, or the resume speedup is
+  // lost. Mirrors the shipped backfillStableRates coverage-skip.
+  let firstFetch = true;
   for (let tileEnd = to; tileEnd > from;) {
     if (opts?.signal?.aborted) {
       log("[repair] ensureSourceCoverage: cancelled");
       break;
     }
-    if (!firstTile) {
-      await new Promise((r) => setTimeout(r, TILE_THROTTLE_MS));
-    }
-    firstTile = false;
 
     const tileStartMs = Math.max(from.getTime(), tileEnd.getTime() - ENSURE_TILE * 60000);
     const tileStart   = new Date(tileStartMs);
     const limit       = Math.round((tileEnd.getTime() - tileStartMs) / 60000);
 
-    // Fan out per-source fetchRange for this tile.
+    // Coverage skip. A (currency, source) is fully covered for this tile when it
+    // already has a row (real OR sentinel) for every one of the tile's `limit`
+    // minutes — PK (currency,timestamp,source) means one row per minute, so
+    // COUNT == limit ⟺ no holes. Fetch only sources with at least one hole; if
+    // every fetch source is covered, skip the whole tile (no fetch, no throttle)
+    // → a killed repair RESUMES instead of restarting at `to`. Rides the
+    // (currency, timestamp) index.
+    //   - retryEmpty bypasses the skip → fetch every source (the deleted
+    //     'no_data' sentinels above are holes, so they get re-fetched).
+    //   - on a coverage-query error, fall back to fetching all (fail toward
+    //     doing the work, loudly) rather than silently skipping.
+    let feedsToFetch = feeds;
+    if (!opts?.retryEmpty) {
+      try {
+        const cov = await query(
+          `SELECT source, COUNT(*)::int AS n
+             FROM candles_1m_sources
+            WHERE "currency" = $1
+              AND "timestamp" >= $2 AND "timestamp" < $3
+              AND source = ANY($4::text[])
+            GROUP BY source`,
+          [currency, tileStart, tileEnd, feeds.map((f) => f.source)],
+        );
+        const have: Record<string, number> = {};
+        for (const r of cov.rows as { source: string; n: number }[]) have[r.source] = r.n;
+        feedsToFetch = feeds.filter((f) => (have[f.source] ?? 0) < limit);
+      } catch (err) {
+        logError(`[repair] ensureSourceCoverage: coverage check failed for tile [${tileStart.toISOString()}, ${tileEnd.toISOString()}) — fetching all sources`, err);
+        feedsToFetch = feeds;
+      }
+    }
+
+    if (feedsToFetch.length === 0) {
+      tilesSkipped++;
+      tileEnd = tileStart;
+      continue;
+    }
+
+    if (!firstFetch) {
+      await new Promise((r) => setTimeout(r, TILE_THROTTLE_MS));
+    }
+    firstFetch = false;
+
+    // Fan out per-source fetchRange for the sources that still have holes.
     const settled = await Promise.allSettled(
-      feeds.map((f) => {
+      feedsToFetch.map((f) => {
         recordApiRequest(currency, f.source, "repair");
         return ADAPTER_BY_NAME[f.source].fetchRange(f.symbol, tileEnd, limit);
       }),
     );
 
-    // Per (minute, source), either insert fetched candle or sentinel.
-    // ON CONFLICT DO NOTHING preserves existing rows (live tick, prior heal,
-    // prior sentinel that wasn't retryEmpty-cleared).
-    for (let i = 0; i < feeds.length; i++) {
-      const source = feeds[i].source;
+    // Per source, build the tile's rows (fetched candle or 'no_data' sentinel
+    // per minute) and insert them in ONE batched statement instead of one
+    // awaited round-trip per minute. ON CONFLICT DO NOTHING preserves existing
+    // rows (live tick, prior heal, prior sentinel) exactly as the per-row loop
+    // did; RETURNING "rejected" gives the precise fetched/sentinel/skipped split.
+    for (let i = 0; i < feedsToFetch.length; i++) {
+      const source = feedsToFetch[i].source;
       const res = settled[i];
 
       if (res.status === "rejected") {
@@ -165,33 +211,43 @@ export async function ensureSourceCoverage(
         fetched.set(ts, candle);
       }
 
-      // For each minute in [tileStart, tileEnd): insert candle or sentinel.
+      // Build column-arrays for the whole tile: a fetched candle, or a sentinel.
+      const tsArr: Date[] = [];
+      const oArr: number[] = [], hArr: number[] = [], lArr: number[] = [], cArr: number[] = [], vArr: number[] = [];
+      const rejArr: boolean[] = [];
+      const reasonArr: (string | null)[] = [];
       for (let minuteMs = tileStartMs; minuteMs < tileEnd.getTime(); minuteMs += 60000) {
         const candle = fetched.get(minuteMs);
+        tsArr.push(new Date(minuteMs));
         if (candle) {
-          const ins = await query(
-            `INSERT INTO candles_1m_sources
-               ("currency","timestamp","source","open","high","low","close","volume",
-                "rejected","rejectedReason","usedInFormula")
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,false,NULL,NULL)
-             ON CONFLICT ("currency","timestamp","source") DO NOTHING`,
-            [currency, new Date(minuteMs), source, candle.open, candle.high, candle.low, candle.close, candle.volume],
-          );
-          if (ins.rowCount === 1) rowsFetched++;
-          else skipped++;
+          oArr.push(candle.open); hArr.push(candle.high); lArr.push(candle.low); cArr.push(candle.close); vArr.push(candle.volume);
+          rejArr.push(false); reasonArr.push(null);
         } else {
-          const ins = await query(
-            `INSERT INTO candles_1m_sources
-               ("currency","timestamp","source","open","high","low","close","volume",
-                "rejected","rejectedReason","usedInFormula")
-             VALUES ($1,$2,$3,0,0,0,0,0,true,'no_data',NULL)
-             ON CONFLICT ("currency","timestamp","source") DO NOTHING`,
-            [currency, new Date(minuteMs), source],
-          );
-          if (ins.rowCount === 1) sentinelsWritten++;
-          else skipped++;
+          oArr.push(0); hArr.push(0); lArr.push(0); cArr.push(0); vArr.push(0);
+          rejArr.push(true); reasonArr.push("no_data");
         }
       }
+      if (tsArr.length === 0) continue;
+
+      const ins = await query(
+        `INSERT INTO candles_1m_sources
+           ("currency","timestamp","source","open","high","low","close","volume",
+            "rejected","rejectedReason","usedInFormula")
+         SELECT $1, u.ts, $2, u.open, u.high, u.low, u.close, u.volume, u.rejected, u.reason, NULL
+           FROM UNNEST($3::timestamptz[], $4::numeric[], $5::numeric[], $6::numeric[],
+                       $7::numeric[], $8::numeric[], $9::boolean[], $10::text[])
+                AS u(ts, open, high, low, close, volume, rejected, reason)
+         ON CONFLICT ("currency","timestamp","source") DO NOTHING
+         RETURNING "rejected"`,
+        [currency, source, tsArr, oArr, hArr, lArr, cArr, vArr, rejArr, reasonArr],
+      );
+
+      const insertedRows = ins.rows as { rejected: boolean }[];
+      for (const r of insertedRows) {
+        if (r.rejected) sentinelsWritten++;
+        else rowsFetched++;
+      }
+      skipped += tsArr.length - insertedRows.length;   // already present (ON CONFLICT DO NOTHING)
     }
 
     tileEnd = tileStart;
@@ -202,9 +258,9 @@ export async function ensureSourceCoverage(
     log(`[repair] ensureSourceCoverage: ${currency}/${source} has no data before ${earliest.toISOString().slice(0, 16)} (skipped)`);
   }
 
-  const result: EnsureSourceCoverageResult = { rowsFetched, sentinelsWritten, skipped, failedPerSource };
+  const result: EnsureSourceCoverageResult = { rowsFetched, sentinelsWritten, skipped, tilesSkipped, failedPerSource };
   if (clamped.from || clamped.to) result.clamped = clamped;
-  log(`[repair] ensureSourceCoverage: rowsFetched=${rowsFetched} sentinels=${sentinelsWritten} skipped=${skipped} failures=${JSON.stringify(failedPerSource)}`);
+  log(`[repair] ensureSourceCoverage: rowsFetched=${rowsFetched} sentinels=${sentinelsWritten} skipped=${skipped} tilesSkipped=${tilesSkipped} failures=${JSON.stringify(failedPerSource)}`);
   return result;
 }
 
