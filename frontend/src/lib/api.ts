@@ -154,6 +154,10 @@ export interface RepairRequest {
   sources?: string[];
   formula?: Formula;
   retryEmpty?: boolean;
+  steps?: ("fetch" | "stables" | "recompose")[];   // default all 3; recompose-only = ["recompose"]
+  repairExistingTokenMinutes?: boolean;
+  repairExistingStableMinutes?: boolean;
+  suspendGlobal?: boolean;
 }
 export interface RepairPreview {
   compositeRowsInWindow: number;
@@ -206,6 +210,37 @@ export const getRepairJob = (jobId: string) =>
   req<RepairJobState>(`/monitor/repair/jobs/${jobId}`);
 export const getActiveRepairJob = () =>
   req<RepairJobState | null>("/monitor/repair/current");
+
+// Per-currency formula TIMELINE (Stage 3/8): effective-dated venue allow-list
+// resolved by repair/heal/recompose as-of each minute.
+export interface FormulaVersion {
+  effectiveFrom: string;   // ISO
+  sources: string[];       // inclusive allow-list
+  by: string;
+  reason: string | null;
+  createdAt: string;
+}
+export const getFormulaVersions = (code: string) =>
+  req<{ versions: FormulaVersion[] }>(`/monitor/currencies/${code}/formula-versions`);
+export const addFormulaVersion = (code: string, effectiveFrom: string, sources: string[], reason?: string) =>
+  req<{ ok: boolean }>(`/monitor/currencies/${code}/formula-versions`, {
+    method: "POST", body: JSON.stringify({ effectiveFrom, sources, reason }),
+  });
+export const deleteFormulaVersion = (code: string, effectiveFrom: string) =>
+  req<{ ok: boolean }>(`/monitor/currencies/${code}/formula-versions?effectiveFrom=${encodeURIComponent(effectiveFrom)}`, {
+    method: "DELETE",
+  });
+
+// Per-venue repair tuning + probed depths (read-only display for Repair Range).
+export interface ExchangeTuning {
+  tile_size: number;
+  throttle_ms: number;
+  timeout_ms: number;
+  candle_depth_minutes: Record<string, number>;
+  peg_depth_minutes: number | null;
+}
+export const getExchangeConfig = () =>
+  req<{ config: Record<string, ExchangeTuning | null> }>("/monitor/exchange-config");
 
 // Healer activity (boot backfill, gap scan, low-confidence reheal).
 export interface HealerActivity {
@@ -338,6 +373,8 @@ export interface CurrencyInfo {
   premiumEnabled: boolean;
   minSources: number | null;
   inceptionTs: string | null;
+  sourceRetentionDays: number | null;   // null → global default 180 (Stage 7)
+  sourceDaysStored: number;              // days of source archive currently stored (now − oldest minute)
   createdAt: string;
   updatedAt: string;
   feeds: Record<string, CurrencyFeed>;
@@ -352,6 +389,7 @@ export interface CurrencyPatch {
   premiumEnabled?: boolean;
   minSources?: number | null;
   inceptionTs?: string | null;
+  sourceRetentionDays?: number | null;
 }
 export const updateCurrency = (code: string, patch: CurrencyPatch) =>
   req<{ ok: boolean; currency: CurrencyInfo; backfill?: "started" | "deferred" }>(

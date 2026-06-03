@@ -5,6 +5,7 @@ import {
 } from "@/lib/api";
 import type { CurrencyInfo, AdminActionRow } from "@/lib/api";
 import { useCanModify } from "@/lib/access";
+import InfoTip from "@/components/InfoTip";
 
 // Stable venue order for the feed table.
 const SOURCES = ["binance", "bybit", "kraken", "coinbase", "bitfinex", "okx", "gate", "bitget"];
@@ -122,6 +123,12 @@ export default function FeedsTab() {
     await withBusy(async () => { await updateCurrency(code, { minSources: n }); await reload(); });
   }
 
+  async function changeSourceRetention(code: string, value: string) {
+    const n = value.trim() === "" ? null : parseInt(value, 10);
+    if (n !== null && (!Number.isInteger(n) || n < 1)) { flash("retention must be a positive integer (days)"); return; }
+    await withBusy(async () => { await updateCurrency(code, { sourceRetentionDays: n }); await reload(); });
+  }
+
   async function toggleFeed(code: string, source: string, enabled: boolean) {
     await withBusy(async () => { await setCurrencyFeed(code, source, enabled); await reload(); await loadHistory(code); });
   }
@@ -183,7 +190,7 @@ export default function FeedsTab() {
               disabled={ro || busy || cur.code === "BTC"}
               onChange={e => toggleEnabled(cur.code, e.target.checked)}
             />
-            <span className="text-gray-200">Chain enabled</span>
+            <span className="text-gray-200 flex items-center gap-1">Chain enabled <InfoTip id="feeds.chainEnabled" /></span>
             {cur.code === "BTC" && <span className="text-gray-600 text-xs">(BTC is always on)</span>}
           </label>
 
@@ -195,7 +202,7 @@ export default function FeedsTab() {
                 disabled={ro || busy}
                 onChange={e => togglePremium(cur.code, e.target.checked)}
               />
-              <span className="text-gray-200">Premium-offset correction</span>
+              <span className="text-gray-200 flex items-center gap-1">Premium-offset correction <InfoTip id="feeds.premiumOffset" /></span>
             </label>
             <p className="text-gray-600 text-xs mt-1 ml-7">
               Inert until the token has ≥3 accepted venues — below that the plain pegged medians are used.
@@ -203,7 +210,7 @@ export default function FeedsTab() {
           </div>
 
           <label className="flex items-center gap-3">
-            <span className="text-gray-200">Min sources override</span>
+            <span className="text-gray-200 flex items-center gap-1">Min sources override <InfoTip id="feeds.minSources" /></span>
             <input
               type="number"
               min={1}
@@ -216,8 +223,34 @@ export default function FeedsTab() {
             />
           </label>
 
-          <div className="text-xs text-gray-500">
-            Inception:{" "}
+          {/* Source retention (Stage 7/8): per-currency archive depth + days-stored preview */}
+          <div>
+            <label className="flex items-center gap-3">
+              <span className="text-gray-200 flex items-center gap-1">Source retention (days) <InfoTip id="feeds.sourceRetention" /></span>
+              <input
+                type="number"
+                min={1}
+                defaultValue={cur.sourceRetentionDays ?? ""}
+                placeholder="(global default 180)"
+                disabled={ro || busy}
+                key={`${cur.code}:ret:${cur.sourceRetentionDays}`}
+                onBlur={e => changeSourceRetention(cur.code, e.target.value)}
+                className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-gray-200 w-40 text-xs"
+              />
+            </label>
+            <p className="text-gray-600 text-xs mt-1 ml-0 flex items-center gap-1">
+              <InfoTip id="feeds.daysStored" />
+              {(() => {
+                const stored = cur.sourceDaysStored;
+                const keep = cur.sourceRetentionDays ?? 180;
+                const drop = Math.max(0, stored - keep);
+                return `${stored} day(s) of source stored; keeping ${keep} → next prune drops ${drop} day(s). Composite index kept forever.`;
+              })()}
+            </p>
+          </div>
+
+          <div className="text-xs text-gray-500 flex items-center gap-1">
+            <InfoTip id="feeds.inception" /> Inception:{" "}
             {cur.inceptionTs
               ? new Date(cur.inceptionTs).toISOString().slice(0, 10)
               : "not probed (gap/backfill floor = now − 90d)"}
@@ -242,13 +275,13 @@ export default function FeedsTab() {
 
           <div>
             <div className="flex items-center justify-between mb-2">
-              <h3 className="text-gray-300">Exchange feeds</h3>
+              <h3 className="text-gray-300 flex items-center gap-1">Exchange feeds <span className="text-gray-600 text-xs">(LIVE collection)</span></h3>
               <button
                 onClick={() => probe(cur.code)}
                 disabled={ro || busy}
-                className="px-2 py-1 text-xs rounded bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 disabled:opacity-50"
+                className="px-2 py-1 text-xs rounded bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 disabled:opacity-50 inline-flex items-center gap-1"
               >
-                Re-probe availability
+                Re-probe availability <InfoTip id="feeds.reprobe" />
               </button>
             </div>
             <table className="w-full text-xs">
@@ -256,8 +289,8 @@ export default function FeedsTab() {
                 <tr className="text-gray-500 text-left">
                   <th className="py-1 font-normal">Venue</th>
                   <th className="font-normal">Symbol</th>
-                  <th className="font-normal">Availability</th>
-                  <th className="font-normal">Sync</th>
+                  <th className="font-normal"><span className="inline-flex items-center gap-1">Availability <InfoTip id="feeds.col.availability" /></span></th>
+                  <th className="font-normal"><span className="inline-flex items-center gap-1">Sync <InfoTip id="feeds.col.sync" /></span></th>
                   <th className="font-normal">Last change</th>
                 </tr>
               </thead>

@@ -10,8 +10,12 @@ import { get24hSourceStats, getCandles, getCollectionLatencyStats, getSourceCand
 import { runGapScan } from "../../lib/gapDetector.js";
 import {
   getEnabledCurrencies, listCurrencies, getCurrency,
-  setCurrencyEnabled, setPremiumEnabled, setMinSources, setInceptionTs,
+  setCurrencyEnabled, setPremiumEnabled, setMinSources, setInceptionTs, setSourceRetentionDays,
 } from "../../db/currencies.js";
+import {
+  getFormulaTimeline, insertFormulaVersion, deleteFormulaVersion,
+} from "../../db/formulaVersions.js";
+import { getExchangeTuning } from "../../lib/exchangeConfig.js";
 import { getFeedMap, setFeedEnabled, setAvailability, getActiveFeeds } from "../../db/currencyFeeds.js";
 import { onboardCurrency } from "../../lib/healer.js";
 import { ADAPTER_BY_NAME } from "../../adapters/registry.js";
@@ -758,6 +762,15 @@ function serializeCurrency(c: Awaited<ReturnType<typeof getCurrency>>) {
 router.get("/currencies", ...view, async (_req, res) => {
   try {
     const currencies = await listCurrencies();
+    // Days of source archive currently stored per currency (now − oldest minute),
+    // for the retention preview (Stage 8). One grouped query.
+    const daysRes = await query(
+      `SELECT "currency", FLOOR(EXTRACT(EPOCH FROM (NOW() - MIN("timestamp"))) / 86400)::int AS days
+         FROM candles_1m_sources GROUP BY "currency"`,
+    );
+    const daysByCurrency: Record<string, number> = {};
+    for (const r of daysRes.rows as { currency: string; days: number }[]) daysByCurrency[r.currency] = Number(r.days);
+
     const withFeeds = await Promise.all(
       currencies.map(async (c) => {
         // Per-currency backfill latch (app_settings backfillComplete:<code>) +
@@ -766,6 +779,7 @@ router.get("/currencies", ...view, async (_req, res) => {
         return {
           ...serializeCurrency(c)!,
           feeds: await getFeedMap(c.code),
+          sourceDaysStored: daysByCurrency[c.code] ?? 0,
           backfill: {
             complete: latch?.value === "true",
             updatedAt: latch?.updatedAt ? latch.updatedAt.toISOString() : null,
@@ -796,9 +810,17 @@ router.put("/currencies/:code", ...modify, async (req, res) => {
     const body = req.body as {
       enabled?: boolean; premiumEnabled?: boolean;
       minSources?: number | null; inceptionTs?: string | null;
+      sourceRetentionDays?: number | null;
     };
 
     if (typeof body.premiumEnabled === "boolean") await setPremiumEnabled(code, body.premiumEnabled);
+
+    if (body.sourceRetentionDays !== undefined) {
+      if (body.sourceRetentionDays !== null && (!Number.isInteger(body.sourceRetentionDays) || body.sourceRetentionDays < 1)) {
+        return res.status(400).json({ error: "sourceRetentionDays must be a positive integer or null" });
+      }
+      await setSourceRetentionDays(code, body.sourceRetentionDays);
+    }
 
     if (body.minSources !== undefined) {
       if (body.minSources !== null && (!Number.isInteger(body.minSources) || body.minSources < 1)) {
@@ -920,6 +942,106 @@ router.post("/currencies/:code/probe", ...modify, async (req, res) => {
     logError(`[monitor] POST /currencies/${code}/probe failed:`, err);
     return res.status(500).json({ error: String(err) });
   }
+});
+
+/**
+ * Per-currency formula TIMELINE (Stage 3/8). The effective-dated record of which
+ * venues compose this currency over time; repair/heal/recompose resolve it
+ * as-of each minute. Distinct from the LIVE feeds (currency_sources) and the
+ * GLOBAL kill-switch (formula_changes).
+ */
+router.get("/currencies/:code/formula-versions", ...view, async (req, res) => {
+  const code = req.params.code.toUpperCase();
+  try {
+    const versions = await getFormulaTimeline(code);
+    return res.json({
+      versions: versions.map((v) => ({
+        effectiveFrom: v.effectiveFrom.toISOString(),
+        sources: v.sources,
+        by: v.by,
+        reason: v.reason,
+        createdAt: v.createdAt.toISOString(),
+      })),
+    });
+  } catch (err) {
+    logError(`[monitor] GET /currencies/${code}/formula-versions failed:`, err);
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+/** POST /monitor/currencies/:code/formula-versions — add/replace a timeline version. */
+router.post("/currencies/:code/formula-versions", ...modify, async (req, res) => {
+  const code = req.params.code.toUpperCase();
+  const body = req.body as { effectiveFrom?: string; sources?: unknown; reason?: string };
+  if (typeof body.effectiveFrom !== "string") {
+    return res.status(400).json({ error: "effectiveFrom (ISO string) is required" });
+  }
+  const effectiveFrom = new Date(body.effectiveFrom);
+  if (isNaN(effectiveFrom.getTime())) return res.status(400).json({ error: "effectiveFrom is not a valid timestamp" });
+  if (!Array.isArray(body.sources) || !body.sources.every((s) => typeof s === "string")) {
+    return res.status(400).json({ error: "sources must be string[]" });
+  }
+  const sources = body.sources as string[];
+  if (sources.length === 0) return res.status(400).json({ error: "sources must be a non-empty venue allow-list" });
+  const unknown = sources.filter((s) => !SOURCE_NAMES.includes(s));
+  if (unknown.length) return res.status(400).json({ error: `Unknown source(s): ${unknown.join(", ")}` });
+  try {
+    const existing = await getCurrency(code);
+    if (!existing) return res.status(404).json({ error: `Unknown currency '${code}'` });
+    await insertFormulaVersion(code, effectiveFrom, [...new Set(sources)], await actorOf(req), body.reason ?? null);
+    void recordAdminAction({
+      actor: await actorOf(req),
+      action: "formula.version.set",
+      target: code,
+      detail: { effectiveFrom: effectiveFrom.toISOString(), sources, reason: body.reason ?? null },
+    });
+    return res.json({ ok: true });
+  } catch (err) {
+    logError(`[monitor] POST /currencies/${code}/formula-versions failed:`, err);
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+/** DELETE /monitor/currencies/:code/formula-versions?effectiveFrom=ISO — remove a version. */
+router.delete("/currencies/:code/formula-versions", ...modify, async (req, res) => {
+  const code = req.params.code.toUpperCase();
+  const raw = req.query.effectiveFrom;
+  if (typeof raw !== "string") return res.status(400).json({ error: "effectiveFrom query param (ISO) is required" });
+  const effectiveFrom = new Date(raw);
+  if (isNaN(effectiveFrom.getTime())) return res.status(400).json({ error: "effectiveFrom is not a valid timestamp" });
+  try {
+    const deleted = await deleteFormulaVersion(code, effectiveFrom);
+    if (!deleted) return res.status(404).json({ error: "no version at that effectiveFrom" });
+    void recordAdminAction({ actor: await actorOf(req), action: "formula.version.delete", target: code, detail: { effectiveFrom: effectiveFrom.toISOString() } });
+    return res.json({ ok: true });
+  } catch (err) {
+    logError(`[monitor] DELETE /currencies/${code}/formula-versions failed:`, err);
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+/**
+ * GET /monitor/exchange-config — per-venue repair tuning + probed depths, read
+ * from exchange_config.json (read-only display for the Repair Range panel's
+ * advanced section; the file/CLI is the edit path).
+ */
+router.get("/exchange-config", ...view, (_req, res) => {
+  const config: Record<string, unknown> = {};
+  for (const source of SOURCE_NAMES) {
+    try {
+      const t = getExchangeTuning(source);
+      config[source] = {
+        tile_size: t.tile_size,
+        throttle_ms: t.throttle_ms,
+        timeout_ms: t.timeout_ms,
+        candle_depth_minutes: t.candle_depth_minutes,
+        peg_depth_minutes: t.peg_depth_minutes,
+      };
+    } catch {
+      config[source] = null; // not in the config file
+    }
+  }
+  return res.json({ config });
 });
 
 export default router;

@@ -95,6 +95,17 @@ export async function insertFormulaVersion(
   log(`[formulaVersions] ${currency} version effectiveFrom=${effectiveFrom.toISOString()} sources=[${sources.join(",")}] by=${by}${reason ? ` (${reason})` : ""}`);
 }
 
+/** Delete a single timeline version (operator editing the timeline). */
+export async function deleteFormulaVersion(currency: string, effectiveFrom: Date): Promise<boolean> {
+  const res = await query(
+    `DELETE FROM currency_formula_versions WHERE "currency" = $1 AND "effectiveFrom" = $2`,
+    [currency, effectiveFrom],
+  );
+  const n = res.rowCount ?? 0;
+  if (n > 0) log(`[formulaVersions] ${currency} deleted version effectiveFrom=${effectiveFrom.toISOString()}`);
+  return n > 0;
+}
+
 /**
  * Resolve the inclusive source set as-of `minute` from a PRE-LOADED ascending
  * timeline (greatest effectiveFrom <= minute). Returns null when no version

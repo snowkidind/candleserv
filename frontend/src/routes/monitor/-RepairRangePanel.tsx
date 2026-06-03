@@ -1,34 +1,26 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  getFormula, previewRepair, runRepair, getRepairJob, getActiveRepairJob, cancelRepairJob,
-  getCurrencies,
-  type RepairPreview, type RepairJobState, type Formula,
+  previewRepair, runRepair, getRepairJob, getActiveRepairJob, cancelRepairJob,
+  getCurrencies, getFormulaVersions, addFormulaVersion, deleteFormulaVersion, getExchangeConfig,
+  type RepairPreview, type RepairJobState,
 } from "@/lib/api";
+import InfoTip from "@/components/InfoTip";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-// Format a Date into a UTC value for an <input type="datetime-local">. The
-// HTML input has no timezone mode of its own — we populate it with the UTC
-// components, label the field "(UTC)", and parse the returned string as UTC.
-// Backend stores everything in UTC (server.ts sets TZ=UTC at boot), so the
-// picker now matches what's actually queried.
+// datetime-local has no timezone; we populate/parse it as UTC (backend is UTC).
 function toUtcInputValue(d: Date): string {
   const pad = (n: number) => n.toString().padStart(2, "0");
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
-// Parse a datetime-local input value as UTC (append :00Z and let Date parse it).
 function fromUtcInputValue(s: string): Date | null {
   if (!s) return null;
   const d = new Date(`${s}:00Z`);
-  if (isNaN(d.getTime())) return null;
-  return d;
+  return isNaN(d.getTime()) ? null : d;
 }
-// Display helper for UTC times in the confirm modal.
 function fmtUtc(d: Date): string {
   return d.toISOString().replace("T", " ").slice(0, 16) + " UTC";
 }
-
 function formatDuration(ms: number): string {
   if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
   const minutes = Math.floor(ms / 60_000);
@@ -36,62 +28,49 @@ function formatDuration(ms: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-function setEqual(a: string[], b: string[]): boolean {
-  if (a.length !== b.length) return false;
-  const sa = new Set(a);
-  for (const x of b) if (!sa.has(x)) return false;
-  return true;
-}
+type RunMode = "full" | "recompose";
 
 // ── confirm modal ────────────────────────────────────────────────────────────
-
 function RepairConfirmModal({
-  preview, from, to, formulaOverride, onConfirm, onCancel, running,
+  preview, from, to, mode, suspendGlobal, onConfirm, onCancel, running,
 }: {
-  preview: RepairPreview;
-  from: Date;
-  to: Date;
-  formulaOverride: string[];
-  onConfirm: () => void;
-  onCancel: () => void;
-  running: boolean;
+  preview: RepairPreview; from: Date; to: Date; mode: RunMode; suspendGlobal: boolean;
+  onConfirm: () => void; onCancel: () => void; running: boolean;
 }) {
   const [typed, setTyped] = useState("");
   const days = Math.round((to.getTime() - from.getTime()) / (24 * 60 * 60 * 1000));
   return (
     <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
       <div className="bg-gray-900 border border-gray-700 rounded-lg max-w-lg w-full p-5">
-        <h3 className="text-lg font-medium text-gray-100 mb-3">Confirm repair operation</h3>
+        <h3 className="text-lg font-medium text-gray-100 mb-3">
+          {mode === "recompose" ? "Confirm recompose-only" : "Confirm repair operation"}
+        </h3>
         <div className="text-sm text-gray-300 space-y-1.5">
           <div>Window: <span className="font-mono">{fmtUtc(from)} → {fmtUtc(to)}</span> ({days} days, {preview.willBeRecomposed.toLocaleString()} minutes)</div>
-          <div>Formula override: <span className="font-mono">{formulaOverride.length ? `exclude ${formulaOverride.join(", ")}` : "(matches live)"}</span></div>
-          <div>Archive holes to fill: <span className="font-mono">{preview.archiveHoles.toLocaleString()}</span></div>
+          <div>Mode: <span className="font-mono">{mode === "recompose" ? "recompose-only (no exchange fetches)" : "fetch → stables → recompose"}</span></div>
+          {mode === "full" && <div>Archive holes to fill: <span className="font-mono">{preview.archiveHoles.toLocaleString()}</span></div>}
         </div>
         <div className="mt-4 text-xs text-yellow-400/80 leading-relaxed">
-          ⚠ This will overwrite {preview.willBeRecomposed.toLocaleString()} rows in candles_1m and update usedInFormula across the per-source archive.
-          The previous composite values will be lost. Live formula will not be modified;
-          the rows in this window will reflect the override formula until reconciled.
-          REST candle-poll endpoints will return 503 for the duration (~{formatDuration(preview.estimatedWallMs)}).
+          ⚠ This rewrites up to {preview.willBeRecomposed.toLocaleString()} rows in candles_1m using the formula in
+          effect at each minute (this token's formula timeline). The previous composite values will be lost.
+          {suspendGlobal
+            ? " Candle-read REST returns 503 for ALL currencies during the run (shared pegs)."
+            : ` Candle-read REST for this currency returns 503 for the duration (~${formatDuration(preview.estimatedWallMs)}).`}
         </div>
         <div className="mt-4">
           <label className="text-xs text-gray-400 block mb-1">Type <code className="font-mono text-gray-200">repair</code> to confirm:</label>
           <input
-            value={typed}
-            onChange={(e) => setTyped(e.target.value)}
-            autoFocus
+            value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus
             className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 outline-none focus:border-blue-500"
           />
         </div>
         <div className="flex justify-end gap-2 mt-4">
-          <button onClick={onCancel} disabled={running} className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200">
-            Cancel
-          </button>
+          <button onClick={onCancel} disabled={running} className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200">Cancel</button>
           <button
-            onClick={onConfirm}
-            disabled={running || typed !== "repair"}
+            onClick={onConfirm} disabled={running || typed !== "repair"}
             className="px-4 py-2 text-sm bg-red-700 hover:bg-red-600 disabled:bg-gray-800 disabled:text-gray-600 text-white rounded transition-colors"
           >
-            {running ? "Starting…" : "Run repair"}
+            {running ? "Starting…" : mode === "recompose" ? "Recompose" : "Run repair"}
           </button>
         </div>
       </div>
@@ -100,21 +79,7 @@ function RepairConfirmModal({
 }
 
 // ── progress panel ───────────────────────────────────────────────────────────
-
-function RepairProgressPanel({
-  jobId, sourceNames, onDismiss, onReconcile, liveFormula,
-}: {
-  jobId: string;
-  sourceNames: string[];
-  onDismiss: () => void;
-  // Called with the original from/to from the completed job — the parent
-  // re-runs runRepair with no formula override to bring the window back to
-  // live-formula composites. One-click loop closure for the divergence case.
-  onReconcile: (from: string, to: string, currency: string) => void;
-  liveFormula: Formula | null;
-}) {
-  // Poll every 2s while not in a terminal state. React Query handles this via
-  // the refetchInterval callback shape (returns false to stop).
+function RepairProgressPanel({ jobId, onDismiss }: { jobId: string; onDismiss: () => void }) {
   const { data } = useQuery({
     queryKey: ["repair", "jobs", jobId],
     queryFn: () => getRepairJob(jobId),
@@ -124,151 +89,81 @@ function RepairProgressPanel({
       return s === "done" || s === "failed" || s === "cancelled" ? false : 2000;
     },
   });
-
   const [cancelling, setCancelling] = useState(false);
-  const cancel = async () => {
-    setCancelling(true);
-    try { await cancelRepairJob(jobId); } finally { setCancelling(false); }
-  };
+  const cancel = async () => { setCancelling(true); try { await cancelRepairJob(jobId); } finally { setCancelling(false); } };
 
-  // Hooks must run on every render to preserve order — keep useMemo above the
-  // early return below. The memo body guards on `data` being undefined.
-  const diverged = useMemo(() => {
-    if (!data || data.state !== "done") return false;
-    if (!liveFormula) return false;
-    const jobExcluded = data.formula?.excludedSources ?? liveFormula.excludedSources;
-    return !setEqual(jobExcluded, liveFormula.excludedSources);
-  }, [data, liveFormula]);
-
-  if (!data) {
-    return (
-      <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 text-sm text-gray-500">
-        Starting repair job…
-      </div>
-    );
-  }
+  if (!data) return <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 text-sm text-gray-500">Starting repair job…</div>;
 
   const terminal = data.state === "done" || data.state === "failed" || data.state === "cancelled";
+  const runs = (step: "fetch" | "stables" | "recompose") => data.steps?.includes(step) ?? true;
   const startedAt = new Date(data.startedAt);
-  const elapsed = data.finishedAt
-    ? new Date(data.finishedAt).getTime() - startedAt.getTime()
-    : Date.now() - startedAt.getTime();
+  const elapsed = (data.finishedAt ? new Date(data.finishedAt).getTime() : Date.now()) - startedAt.getTime();
 
   return (
     <div className="bg-gray-900 border border-gray-700 rounded-lg p-4">
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-sm font-medium text-gray-200">
-          {data.state === "done"      ? "Repair complete"
-          : data.state === "failed"    ? "Repair failed"
-          : data.state === "cancelled" ? "Repair cancelled"
-          : "Repair in progress"}
+          {data.state === "done" ? "Repair complete"
+          : data.state === "failed" ? "Repair failed"
+          : data.state === "cancelled" ? "Repair cancelled" : "Repair in progress"}
         </h3>
-        <span className="text-xs text-gray-500 font-mono">job {data.jobId.slice(0, 8)}…</span>
+        <span className="text-xs text-gray-500 font-mono">{data.currency} · job {data.jobId.slice(0, 8)}… · steps [{(data.steps ?? []).join(",")}]</span>
       </div>
+      <div className="text-xs text-gray-500 mb-3">State: <span className="text-gray-200 font-mono">{data.state}</span>{" · "}elapsed {formatDuration(elapsed)}</div>
 
-      <div className="text-xs text-gray-500 mb-3">
-        State: <span className="text-gray-200 font-mono">{data.state}</span>
-        {" · "}elapsed {formatDuration(elapsed)}
-      </div>
-
-      {/* Phase 1: ensure */}
-      <div className="mb-3 text-sm">
-        <div className="text-gray-300 mb-1">
-          1. ensureSourceCoverage
-          {data.ensure ? <span className="text-gray-500 ml-2 text-xs">
-            ({data.ensure.rowsFetched.toLocaleString()} fetched, {data.ensure.sentinelsWritten.toLocaleString()} sentinels, {data.ensure.skipped.toLocaleString()} skipped)
-          </span> : data.state === "fetching" ? <span className="text-blue-400 ml-2 text-xs">running…</span> : null}
-        </div>
-        {data.ensure && Object.keys(data.ensure.failedPerSource).length > 0 && (
-          <div className="text-xs text-red-400 mt-1">
-            Failed tiles by source: {Object.entries(data.ensure.failedPerSource).map(([k, v]) => `${k}: ${v}`).join(", ")}
+      {runs("fetch") && (
+        <div className="mb-3 text-sm">
+          <div className="text-gray-300 mb-1 flex items-center gap-1">
+            Step 1 — fetch <InfoTip id="step.fetch" />
+            {data.ensure ? <span className="text-gray-500 ml-2 text-xs">
+              ({data.ensure.rowsFetched.toLocaleString()} fetched, {data.ensure.sentinelsWritten.toLocaleString()} sentinels, {data.ensure.skipped.toLocaleString()} skipped, {data.ensure.tilesSkipped.toLocaleString()} tiles skipped)
+            </span> : data.state === "fetching" ? <span className="text-blue-400 ml-2 text-xs">running…</span> : null}
           </div>
-        )}
-      </div>
-
-      {/* Phase 2: backfill stable rates */}
-      <div className="mb-3 text-sm">
-        <div className="text-gray-300 mb-1">
-          2. backfillStableRates
-          {data.backfill ? <span className="text-gray-500 ml-2 text-xs">
-            ({data.backfill.rowsInserted.toLocaleString()} inserted, {data.backfill.rowsSkippedNoBtc.toLocaleString()} skipped no-btc)
-          </span> : data.state === "stables" ? <span className="text-blue-400 ml-2 text-xs">running…</span> : null}
-        </div>
-        {data.backfill && Object.keys(data.backfill.failedPerSource).length > 0 && (
-          <div className="text-xs text-red-400 mt-1">
-            Failed tiles by source: {Object.entries(data.backfill.failedPerSource).map(([k, v]) => `${k}: ${v}`).join(", ")}
-          </div>
-        )}
-      </div>
-
-      {/* Phase 3: recompose */}
-      <div className="mb-4 text-sm">
-        <div className="text-gray-300 mb-1">
-          3. recomposeRange
-          {data.recompose ? <span className="text-gray-500 ml-2 text-xs">
-            ({data.recompose.recomposed.toLocaleString()} recomposed, {data.recompose.skippedNoSources.toLocaleString()} skipped no-sources)
-          </span> : data.state === "recomposing" ? <span className="text-blue-400 ml-2 text-xs">running…</span> : null}
-        </div>
-      </div>
-
-      {/* Terminal outcomes */}
-      {data.state === "done" && data.result && (
-        <>
-          <div className="text-sm text-green-400">
-            ✓ {data.result.rowsWritten.toLocaleString()} composite rows recomposed
-          </div>
-          <div className="text-sm text-green-400">
-            ✓ {data.result.archiveRowsFetched.toLocaleString()} archive rows fetched
-          </div>
-          {diverged && (
-            <div className="mt-3 p-3 bg-yellow-900/30 border border-yellow-800 rounded text-xs">
-              <div className="text-yellow-300 font-medium mb-1">⚠ Composite diverges from live formula</div>
-              <div className="text-yellow-400/80">
-                These {data.result.rowsWritten.toLocaleString()} rows were composed with{" "}
-                <span className="font-mono">excludedSources=[{(data.formula?.excludedSources ?? []).join(", ")}]</span>.
-                Live formula currently:{" "}
-                <span className="font-mono">excludedSources=[{liveFormula?.excludedSources.join(", ") ?? ""}]</span>.
-                candles_1m for this window stays off-live until reconciled.
-              </div>
-              <div className="mt-3">
-                <button
-                  onClick={() => onReconcile(data.from, data.to, data.currency)}
-                  className="px-3 py-1.5 text-xs bg-yellow-700 hover:bg-yellow-600 text-yellow-100 rounded transition-colors"
-                >
-                  Reconcile: rerun with live formula
-                </button>
-              </div>
-            </div>
+          {data.ensure && Object.keys(data.ensure.failedPerSource).length > 0 && (
+            <div className="text-xs text-red-400 mt-1">Failed by source: {Object.entries(data.ensure.failedPerSource).map(([k, v]) => `${k}: ${v}`).join(", ")}</div>
           )}
-        </>
+        </div>
+      )}
+      {runs("stables") && (
+        <div className="mb-3 text-sm">
+          <div className="text-gray-300 mb-1 flex items-center gap-1">
+            Step 2 — stables <InfoTip id="step.stables" />
+            {data.backfill ? <span className="text-gray-500 ml-2 text-xs">
+              ({data.backfill.rowsInserted.toLocaleString()} inserted, {data.backfill.rowsSkippedNoBtc.toLocaleString()} skipped no-btc)
+            </span> : data.state === "stables" ? <span className="text-blue-400 ml-2 text-xs">running…</span> : null}
+          </div>
+          {data.backfill && Object.keys(data.backfill.failedPerSource).length > 0 && (
+            <div className="text-xs text-red-400 mt-1">Failed by source: {Object.entries(data.backfill.failedPerSource).map(([k, v]) => `${k}: ${v}`).join(", ")}</div>
+          )}
+        </div>
+      )}
+      {runs("recompose") && (
+        <div className="mb-4 text-sm">
+          <div className="text-gray-300 mb-1 flex items-center gap-1">
+            Step 3 — recompose <InfoTip id="step.recompose" />
+            {data.recompose ? <span className="text-gray-500 ml-2 text-xs">
+              ({data.recompose.recomposed.toLocaleString()} recomposed, {data.recompose.skippedNoSources.toLocaleString()} skipped no-sources)
+            </span> : data.state === "recomposing" ? <span className="text-blue-400 ml-2 text-xs">running…</span> : null}
+          </div>
+        </div>
       )}
 
+      {data.state === "done" && data.result && (
+        <div className="text-sm text-green-400">✓ {data.result.rowsWritten.toLocaleString()} composite rows recomposed · {data.result.archiveRowsFetched.toLocaleString()} archive rows fetched</div>
+      )}
       {data.state === "failed" && data.error && (
         <div className="text-sm text-red-400 bg-red-900/20 border border-red-800 rounded p-2 mt-2">{data.error}</div>
       )}
 
       <div className="flex justify-end gap-2 mt-4">
         {!terminal && (
-          <button
-            onClick={cancel}
-            disabled={cancelling}
-            className="px-3 py-1.5 text-xs bg-yellow-700 hover:bg-yellow-600 text-white rounded transition-colors"
-          >
-            {cancelling ? "Cancelling…" : "Cancel"}
+          <button onClick={cancel} disabled={cancelling} className="px-3 py-1.5 text-xs bg-yellow-700 hover:bg-yellow-600 text-white rounded transition-colors flex items-center gap-1">
+            {cancelling ? "Cancelling…" : "Cancel"} <InfoTip id="repair.cancel" />
           </button>
         )}
         {terminal && (
           <button
-            onClick={() => {
-              if (data.state === "done") {
-                // Recompose rewrote candles_1m for this window; the chart holds
-                // its own imperative candle map (CandlesTab.tsx), so a page
-                // reload is the simplest universal refresh.
-                window.location.reload();
-              } else {
-                onDismiss();
-              }
-            }}
+            onClick={() => { if (data.state === "done") window.location.reload(); else onDismiss(); }}
             className="px-3 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 text-gray-200 rounded transition-colors"
           >
             {data.state === "done" ? "Dismiss & refresh" : "Dismiss"}
@@ -280,15 +175,8 @@ function RepairProgressPanel({
 }
 
 // ── main panel ───────────────────────────────────────────────────────────────
-
 export default function RepairRangePanel({ sourceNames }: { sourceNames: string[] }) {
   const qc = useQueryClient();
-  const { data: liveFormulaResp } = useQuery({ queryKey: ["formula"], queryFn: getFormula });
-  const liveFormula: Formula | null = liveFormulaResp
-    ? { excludedSources: liveFormulaResp.excludedSources }
-    : null;
-
-  // Which currency to repair. Enabled currencies only; defaults to BTC.
   const { data: currenciesResp } = useQuery({ queryKey: ["currencies"], queryFn: getCurrencies });
   const currencyOptions = useMemo(
     () => (currenciesResp?.currencies ?? []).filter((c) => c.enabled).map((c) => c.code),
@@ -296,121 +184,107 @@ export default function RepairRangePanel({ sourceNames }: { sourceNames: string[
   );
   const [currency, setCurrency] = useState("BTC");
 
-  // Defaults: last 7 days, ending one minute ago.
-  const [from, setFrom] = useState<string>(() => {
-    const d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    return toUtcInputValue(d);
-  });
-  const [to, setTo] = useState<string>(() => {
-    const d = new Date(Math.floor(Date.now() / 60000) * 60000 - 60000);
-    return toUtcInputValue(d);
-  });
-
-  // Bounds for the datetime-local inputs. Computed per-render so a long-lived
-  // page picks up the moving upper edge as minutes tick by. Server validates
-  // independently; these are purely a UX guardrail against typing a date
-  // outside the 180-day archive horizon or into the in-progress minute.
+  const [from, setFrom] = useState<string>(() => toUtcInputValue(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)));
+  const [to, setTo] = useState<string>(() => toUtcInputValue(new Date(Math.floor(Date.now() / 60000) * 60000 - 60000)));
   const dpMin = toUtcInputValue(new Date(Date.now() - 180 * 24 * 60 * 60 * 1000));
   const dpMax = toUtcInputValue(new Date(Math.floor(Date.now() / 60000) * 60000 - 60000));
 
-  const [formulaOverride, setFormulaOverride] = useState<string[]>([]);
-  const [retryEmpty, setRetryEmpty] = useState(false);
+  // Repair feed selection → formula timeline.
+  const { data: versionsResp } = useQuery({ queryKey: ["formula-versions", currency], queryFn: () => getFormulaVersions(currency) });
+  const { data: exConfigResp } = useQuery({ queryKey: ["exchange-config"], queryFn: getExchangeConfig });
+  const [venueSel, setVenueSel] = useState<string[]>(sourceNames);
+  const [versionReason, setVersionReason] = useState("");
+  const [savingVersion, setSavingVersion] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  // Existing-minute toggles + suspend-global.
+  const [repairExistingTokenMinutes, setRepairExistingTokenMinutes] = useState(false);
+  const [repairExistingStableMinutes, setRepairExistingStableMinutes] = useState(false);
+  const [suspendGlobal, setSuspendGlobal] = useState(false);
+
   const [preview, setPreview] = useState<RepairPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  const [showConfirm, setShowConfirm] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmMode, setConfirmMode] = useState<RunMode | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
 
-  // Pick up an in-flight repair if the user navigated away mid-job and came
-  // back. The server's single-flight flag is authoritative; we just need the
-  // jobId to resume polling. Re-run on mount and whenever activeJobId clears
-  // (so dismissing a terminal job doesn't immediately re-pick-up itself).
+  // Resume an in-flight job after navigating away/back.
   useQuery({
     queryKey: ["repair", "current"],
-    queryFn: async () => {
-      const job = await getActiveRepairJob();
-      if (job && !activeJobId) setActiveJobId(job.jobId);
-      return job ?? null;
-    },
-    enabled: !activeJobId,
-    staleTime: 0,
+    queryFn: async () => { const job = await getActiveRepairJob(); if (job && !activeJobId) setActiveJobId(job.jobId); return job ?? null; },
+    enabled: !activeJobId, staleTime: 0,
   });
 
-  // Initialize formulaOverride from live formula on first load.
-  useEffect(() => {
-    if (liveFormula && formulaOverride.length === 0) {
-      setFormulaOverride(liveFormula.excludedSources);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveFormula?.excludedSources.join(",")]);
-
-  // Any window/override edit invalidates the preview.
-  const invalidatePreview = () => { setPreview(null); setPreviewError(null); };
-
-  const refreshPreview = async () => {
-    setPreviewLoading(true);
-    setPreviewError(null);
-    try {
-      const fromDate = fromUtcInputValue(from);
-      const toDate   = fromUtcInputValue(to);
-      if (!fromDate || !toDate) throw new Error("Invalid window");
-      const resp = await previewRepair({
-        currency,
-        from: fromDate.toISOString(),
-        to: toDate.toISOString(),
-        formula: { excludedSources: formulaOverride },
-        retryEmpty,
-      });
-      setPreview(resp.preview);
-    } catch (err) {
-      setPreviewError(String((err as Error).message ?? err));
-    } finally {
-      setPreviewLoading(false);
-    }
-  };
-
-  const onRunRepair = async () => {
-    setStarting(true);
-    try {
-      const fromDate = fromUtcInputValue(from);
-      const toDate   = fromUtcInputValue(to);
-      if (!fromDate || !toDate) return;
-      const { jobId } = await runRepair({
-        currency,
-        from: fromDate.toISOString(),
-        to: toDate.toISOString(),
-        formula: { excludedSources: formulaOverride },
-        retryEmpty,
-      });
-      setActiveJobId(jobId);
-      setShowConfirm(false);
-      // After job completes, refresh dependent queries.
-      qc.invalidateQueries({ queryKey: ["sources", "status"] });
-    } catch (err) {
-      setPreviewError(String((err as Error).message ?? err));
-    } finally {
-      setStarting(false);
-    }
-  };
-
+  const invalidatePreview = () => { setPreview(null); setError(null); };
   const fromDate = fromUtcInputValue(from);
   const toDate = fromUtcInputValue(to);
-  const windowValid = fromDate && toDate && fromDate.getTime() < toDate.getTime();
+  const windowValid = !!(fromDate && toDate && fromDate.getTime() < toDate.getTime());
+
+  const toggleVenue = (s: string) =>
+    setVenueSel((arr) => arr.includes(s) ? arr.filter((x) => x !== s) : [...arr, s]);
+
+  const saveVersion = async () => {
+    if (!fromDate) { setError("set a valid From date first"); return; }
+    if (venueSel.length === 0) { setError("select at least one venue"); return; }
+    setSavingVersion(true); setError(null);
+    try {
+      await addFormulaVersion(currency, fromDate.toISOString(), venueSel, versionReason || undefined);
+      setVersionReason("");
+      qc.invalidateQueries({ queryKey: ["formula-versions", currency] });
+    } catch (e) { setError(String((e as Error).message ?? e)); }
+    finally { setSavingVersion(false); }
+  };
+
+  const removeVersion = async (effectiveFrom: string) => {
+    try { await deleteFormulaVersion(currency, effectiveFrom); qc.invalidateQueries({ queryKey: ["formula-versions", currency] }); }
+    catch (e) { setError(String((e as Error).message ?? e)); }
+  };
+
+  const refreshPreview = async () => {
+    if (!fromDate || !toDate) { setError("Invalid window"); return; }
+    setPreviewLoading(true); setError(null);
+    try {
+      const resp = await previewRepair({
+        currency, from: fromDate.toISOString(), to: toDate.toISOString(),
+        repairExistingTokenMinutes, repairExistingStableMinutes,
+      });
+      setPreview(resp.preview);
+    } catch (e) { setError(String((e as Error).message ?? e)); }
+    finally { setPreviewLoading(false); }
+  };
+
+  const onRun = async () => {
+    if (!fromDate || !toDate || !confirmMode) return;
+    setStarting(true);
+    try {
+      const { jobId } = await runRepair({
+        currency, from: fromDate.toISOString(), to: toDate.toISOString(),
+        steps: confirmMode === "recompose" ? ["recompose"] : undefined,
+        repairExistingTokenMinutes, repairExistingStableMinutes,
+        suspendGlobal: repairExistingStableMinutes && suspendGlobal,
+      });
+      setActiveJobId(jobId);
+      setConfirmMode(null);
+      qc.invalidateQueries({ queryKey: ["sources", "status"] });
+    } catch (e) { setError(String((e as Error).message ?? e)); }
+    finally { setStarting(false); }
+  };
+
+  const versions = versionsResp?.versions ?? [];
 
   return (
     <div className="space-y-3">
       <h2 className="text-sm font-medium text-gray-300">Repair Range</h2>
       <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 space-y-4">
         <p className="text-xs text-gray-500 leading-relaxed">
-          Recompose composite candles over a historical window using a custom source formula.
-          Live formula is not modified. Window is bounded by the 180-day archive retention and
-          cannot extend into the current in-progress minute.
+          Repair fills/overwrites a historical window and re-derives the composite using this token's formula
+          timeline as of each minute. The live formula and live feeds are not affected.
         </p>
 
         {/* Currency */}
         <div>
-          <label className="text-xs text-gray-400 block mb-1">Currency</label>
+          <label className="text-xs text-gray-400 mb-1 flex items-center gap-1">Currency <InfoTip id="repair.currency" /></label>
           <select
             value={currency}
             onChange={(e) => { setCurrency(e.target.value); invalidatePreview(); }}
@@ -420,106 +294,131 @@ export default function RepairRangePanel({ sourceNames }: { sourceNames: string[
           </select>
         </div>
 
-        {/* Window picker */}
+        {/* Window */}
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-xs text-gray-400 block mb-1">From <span className="text-gray-500">(UTC)</span></label>
-            <input
-              type="datetime-local"
-              value={from}
-              min={dpMin}
-              max={dpMax}
+            <label className="text-xs text-gray-400 mb-1 flex items-center gap-1">From <span className="text-gray-500">(UTC)</span> <InfoTip id="repair.window" /></label>
+            <input type="datetime-local" value={from} min={dpMin} max={dpMax}
               onChange={(e) => { setFrom(e.target.value); invalidatePreview(); }}
-              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 outline-none focus:border-blue-500"
-            />
+              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 outline-none focus:border-blue-500" />
           </div>
           <div>
-            <label className="text-xs text-gray-400 block mb-1">To <span className="text-gray-500">(UTC)</span></label>
-            <input
-              type="datetime-local"
-              value={to}
-              min={dpMin}
-              max={dpMax}
+            <label className="text-xs text-gray-400 mb-1 flex items-center gap-1">To <span className="text-gray-500">(UTC)</span></label>
+            <input type="datetime-local" value={to} min={dpMin} max={dpMax}
               onChange={(e) => { setTo(e.target.value); invalidatePreview(); }}
-              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 outline-none focus:border-blue-500"
-            />
+              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 outline-none focus:border-blue-500" />
           </div>
         </div>
 
-        {/* Formula override */}
-        <div>
+        {/* Repair feed selection → formula timeline */}
+        <div className="border-t border-gray-800 pt-3">
           <div className="flex items-center justify-between mb-2">
-            <label className="text-xs text-gray-400">Formula (for this operation only)</label>
+            <label className="text-xs text-gray-400 flex items-center gap-1">Repair feed selection <InfoTip id="repair.feedEnable" /></label>
             <div className="flex gap-2">
-              <button
-                onClick={() => {
-                  if (liveFormula) setFormulaOverride(liveFormula.excludedSources);
-                  invalidatePreview();
-                }}
-                className="text-xs text-gray-500 hover:text-gray-300"
-              >
-                Copy live formula
-              </button>
-              <button
-                onClick={() => { setFormulaOverride([]); invalidatePreview(); }}
-                className="text-xs text-gray-500 hover:text-gray-300"
-              >
-                Include all
-              </button>
+              <button onClick={() => setVenueSel(sourceNames)} className="text-xs text-gray-500 hover:text-gray-300">All</button>
+              <button onClick={() => setVenueSel([])} className="text-xs text-gray-500 hover:text-gray-300">None</button>
             </div>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-            {sourceNames.map((s) => {
-              const liveExcluded = liveFormula?.excludedSources.includes(s) ?? false;
-              const overrideExcluded = formulaOverride.includes(s);
-              return (
-                <label key={s} className="flex items-center gap-2 text-sm cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={!overrideExcluded}
-                    onChange={() => {
-                      setFormulaOverride((arr) =>
-                        arr.includes(s) ? arr.filter((x) => x !== s) : [...arr, s],
-                      );
-                      invalidatePreview();
-                    }}
-                    className="accent-blue-600"
-                  />
-                  <span className={overrideExcluded ? "text-gray-500 capitalize line-through" : "text-gray-200 capitalize"}>
-                    {s}
-                  </span>
-                  {liveExcluded && !overrideExcluded && (
-                    <span className="text-xs text-yellow-400/70" title="Live formula excludes this">⚠</span>
-                  )}
-                </label>
-              );
-            })}
+            {sourceNames.map((s) => (
+              <label key={s} className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" checked={venueSel.includes(s)} onChange={() => toggleVenue(s)} className="accent-blue-600" />
+                <span className={venueSel.includes(s) ? "text-gray-200 capitalize" : "text-gray-500 capitalize line-through"}>{s}</span>
+              </label>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 mt-3">
+            <input
+              value={versionReason} onChange={(e) => setVersionReason(e.target.value)} placeholder="reason (optional)"
+              className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 outline-none focus:border-blue-500"
+            />
+            <button
+              onClick={saveVersion} disabled={savingVersion || !windowValid || venueSel.length === 0}
+              className="px-3 py-1 text-xs bg-blue-700 hover:bg-blue-600 disabled:bg-gray-800 disabled:text-gray-600 text-white rounded transition-colors"
+            >
+              {savingVersion ? "Saving…" : "Save as timeline version (effective from From)"}
+            </button>
+          </div>
+          {/* Current timeline */}
+          <div className="mt-3 text-xs">
+            <div className="text-gray-500 mb-1">Formula timeline ({currency}) — what each minute composes from:</div>
+            {versions.length === 0 ? (
+              <div className="text-gray-600">No versions yet — repair lazily seeds an epoch baseline from the current live feeds on first run.</div>
+            ) : (
+              <div className="space-y-1 font-mono">
+                {versions.map((v) => (
+                  <div key={v.effectiveFrom} className="flex items-center gap-2 text-gray-400">
+                    <span className="text-gray-300">{v.effectiveFrom.replace("T", " ").slice(0, 16)}Z</span>
+                    <span className="text-gray-500">→ [{v.sources.join(", ")}]</span>
+                    {v.by && <span className="text-gray-600">· {v.by}{v.reason ? ` (${v.reason})` : ""}</span>}
+                    <button onClick={() => removeVersion(v.effectiveFrom)} className="text-red-500/70 hover:text-red-400 ml-1">✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
-        {/* retryEmpty */}
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={retryEmpty}
-            onChange={(e) => { setRetryEmpty(e.target.checked); invalidatePreview(); }}
-            className="accent-blue-600"
-          />
-          <span className="text-gray-300">
-            Retry previously-empty minutes
-            <span className="text-xs text-gray-500 ml-2">(deletes 'no_data' sentinels and refetches)</span>
-          </span>
-        </label>
+        {/* Advanced: per-venue tuning (read-only) */}
+        <div className="border-t border-gray-800 pt-3">
+          <button onClick={() => setShowAdvanced((v) => !v)} className="text-xs text-gray-400 hover:text-gray-200">
+            {showAdvanced ? "▾" : "▸"} Per-venue tuning &amp; depth (read-only)
+          </button>
+          {showAdvanced && exConfigResp && (
+            <table className="w-full text-xs mt-2 font-mono">
+              <thead><tr className="text-gray-500 text-left">
+                <th className="font-normal py-1">Venue</th>
+                <th className="font-normal flex items-center gap-1">tile <InfoTip id="repair.tileSize" /></th>
+                <th className="font-normal">throttle <InfoTip id="repair.throttle" /></th>
+                <th className="font-normal">timeout <InfoTip id="repair.timeout" /></th>
+                <th className="font-normal">candle depth (d)</th>
+                <th className="font-normal">peg depth (d)</th>
+              </tr></thead>
+              <tbody>
+                {sourceNames.map((s) => {
+                  const t = exConfigResp.config[s];
+                  if (!t) return null;
+                  const cd = t.candle_depth_minutes?.[currency];
+                  return (
+                    <tr key={s} className="border-t border-gray-900 text-gray-400">
+                      <td className="py-1 text-gray-300">{s}</td>
+                      <td>{t.tile_size}</td>
+                      <td>{(t.throttle_ms / 1000).toFixed(0)}s</td>
+                      <td>{(t.timeout_ms / 1000).toFixed(0)}s</td>
+                      <td>{cd != null ? Math.floor(cd / 1440) : "—"}</td>
+                      <td>{t.peg_depth_minutes != null ? Math.floor(t.peg_depth_minutes / 1440) : "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Existing-minute toggles */}
+        <div className="border-t border-gray-800 pt-3 space-y-2">
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={repairExistingTokenMinutes} onChange={(e) => { setRepairExistingTokenMinutes(e.target.checked); invalidatePreview(); }} className="accent-blue-600" />
+            <span className="text-gray-300 flex items-center gap-1">Repair Existing Token Minutes <InfoTip id="repair.existingToken" /></span>
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={repairExistingStableMinutes} onChange={(e) => { setRepairExistingStableMinutes(e.target.checked); if (!e.target.checked) setSuspendGlobal(false); invalidatePreview(); }} className="accent-blue-600" />
+            <span className="text-gray-300 flex items-center gap-1">Repair Existing Stable Minutes <InfoTip id="repair.existingStable" /></span>
+          </label>
+          {repairExistingStableMinutes && (
+            <label className="flex items-center gap-2 text-sm ml-7">
+              <input type="checkbox" checked={suspendGlobal} onChange={(e) => setSuspendGlobal(e.target.checked)} className="accent-blue-600" />
+              <span className="text-amber-300/90 flex items-center gap-1">Suspend REST globally <InfoTip id="repair.suspendGlobal" /></span>
+            </label>
+          )}
+        </div>
 
         {/* Preview */}
         <div className="border-t border-gray-800 pt-3">
           <div className="flex items-center justify-between mb-2">
-            <label className="text-xs text-gray-400">Preview</label>
-            <button
-              onClick={refreshPreview}
-              disabled={previewLoading || !windowValid}
-              className="px-3 py-1 text-xs bg-gray-800 hover:bg-gray-700 disabled:bg-gray-900 disabled:text-gray-600 text-gray-200 rounded transition-colors"
-            >
+            <label className="text-xs text-gray-400 flex items-center gap-1">Preview <InfoTip id="repair.preview" /></label>
+            <button onClick={refreshPreview} disabled={previewLoading || !windowValid}
+              className="px-3 py-1 text-xs bg-gray-800 hover:bg-gray-700 disabled:bg-gray-900 disabled:text-gray-600 text-gray-200 rounded transition-colors">
               {previewLoading ? "Loading…" : "Refresh preview"}
             </button>
           </div>
@@ -531,24 +430,23 @@ export default function RepairRangePanel({ sourceNames }: { sourceNames: string[
               {Object.entries(preview.missingBySource).filter(([, n]) => n > 0).map(([k, n]) => (
                 <div key={k} className="ml-4 text-gray-500">↳ {k}: {n.toLocaleString()}</div>
               ))}
-              <div>Sentinels to retry: {preview.sentinelsToRetry.toLocaleString()}</div>
               <div>Estimated wall time: {formatDuration(preview.estimatedWallMs)}</div>
-              <div>Live formula: <span className="text-green-400">unchanged</span></div>
             </div>
-          ) : previewError ? (
-            <div className="text-xs text-red-400">{previewError}</div>
-          ) : (
-            <div className="text-xs text-gray-600">No preview yet. Click Refresh preview to compute.</div>
-          )}
+          ) : error ? <div className="text-xs text-red-400">{error}</div>
+          : <div className="text-xs text-gray-600">No preview yet. Click Refresh preview to compute.</div>}
         </div>
 
         {/* Run */}
-        <div className="border-t border-gray-800 pt-3 flex items-center justify-between">
-          <span className="text-xs text-gray-500">
-            {preview && "Refresh preview after editing the window or formula"}
-          </span>
+        <div className="border-t border-gray-800 pt-3 flex items-center justify-end gap-2">
           <button
-            onClick={() => setShowConfirm(true)}
+            onClick={() => setConfirmMode("recompose")}
+            disabled={!windowValid || !!activeJobId}
+            className="px-4 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 text-gray-100 rounded transition-colors flex items-center gap-1"
+          >
+            Recompose only <InfoTip id="repair.recomposeOnly" />
+          </button>
+          <button
+            onClick={() => setConfirmMode("full")}
             disabled={!preview || !windowValid || !!activeJobId}
             className="px-4 py-1.5 text-sm bg-red-700 hover:bg-red-600 disabled:bg-gray-800 disabled:text-gray-600 text-white rounded transition-colors"
           >
@@ -557,45 +455,22 @@ export default function RepairRangePanel({ sourceNames }: { sourceNames: string[
         </div>
       </div>
 
-      {/* Progress panel — appears once a job starts */}
       {activeJobId && (
-        <RepairProgressPanel
-          jobId={activeJobId}
-          sourceNames={sourceNames}
-          liveFormula={liveFormula}
-          onDismiss={() => {
-            setActiveJobId(null);
-            qc.invalidateQueries({ queryKey: ["sources", "status"] });
-          }}
-          onReconcile={async (origFrom, origTo, origCurrency) => {
-            // One-click "rerun with live formula" — same window + currency, no
-            // override. Replaces the active job; the previous progress panel
-            // unmounts and a fresh one mounts against the new jobId.
-            try {
-              const { jobId } = await runRepair({
-                currency: origCurrency,
-                from: origFrom,
-                to: origTo,
-                // No formula override → server defaults to getCurrentFormula().
-              });
-              setActiveJobId(jobId);
-            } catch (err) {
-              setPreviewError(String((err as Error).message ?? err));
-            }
-          }}
-        />
+        <RepairProgressPanel jobId={activeJobId} onDismiss={() => { setActiveJobId(null); qc.invalidateQueries({ queryKey: ["sources", "status"] }); }} />
       )}
 
-      {/* Confirm modal */}
-      {showConfirm && preview && fromDate && toDate && (
+      {confirmMode && preview && fromDate && toDate && (
         <RepairConfirmModal
-          preview={preview}
-          from={fromDate}
-          to={toDate}
-          formulaOverride={formulaOverride}
-          onConfirm={onRunRepair}
-          onCancel={() => setShowConfirm(false)}
-          running={starting}
+          preview={preview} from={fromDate} to={toDate} mode={confirmMode}
+          suspendGlobal={repairExistingStableMinutes && suspendGlobal}
+          onConfirm={onRun} onCancel={() => setConfirmMode(null)} running={starting}
+        />
+      )}
+      {confirmMode === "recompose" && !preview && fromDate && toDate && (
+        <RepairConfirmModal
+          preview={{ compositeRowsInWindow: 0, willBeRecomposed: Math.max(0, Math.floor((toDate.getTime() - fromDate.getTime()) / 60000)), archiveHoles: 0, missingBySource: {}, sentinelsToRetry: 0, estimatedWallMs: 0, liveFormulaUnchanged: true }}
+          from={fromDate} to={toDate} mode="recompose" suspendGlobal={false}
+          onConfirm={onRun} onCancel={() => setConfirmMode(null)} running={starting}
         />
       )}
     </div>

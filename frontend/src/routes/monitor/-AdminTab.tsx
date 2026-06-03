@@ -3,61 +3,45 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   getApiKeys, createApiKey, revokeApiKey, toggleApiKey, repairApiKeyNonce,
   getConfig, saveConfig, getSourcesStatus,
-  getHealerStatus, getAdminActions, getRateLimits,
+  getAdminActions, getRateLimits,
   getRuntime, getApiStats, flushCache, flushSessions,
   type ApiKey,
 } from "@/lib/api";
 import RepairRangePanel from "./-RepairRangePanel";
+import InfoTip from "@/components/InfoTip";
 import { isDemo } from "@/lib/demo";
 import { useCanModify } from "@/lib/access";
 
-// ── healer activity card ─────────────────────────────────────────────────────
-
-function formatHealerElapsed(ms: number): string {
-  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
-  const m = Math.floor(ms / 60_000);
-  if (m < 60) return `${m}m ${Math.floor((ms % 60_000) / 1000)}s`;
-  return `${Math.floor(m / 60)}h ${m % 60}m`;
-}
-
-function HealerStatusCard() {
-  // Poll every 10s. Short healer activities (gapScan, often <1s) will be
-  // missed at this cadence — that's acceptable since the card's purpose is
-  // to surface the long-running cases (boot backfill, low-confidence reheal).
-  const { data } = useQuery({
-    queryKey: ["healer", "status"],
-    queryFn: getHealerStatus,
-    refetchInterval: 10_000,
+// ── source-prune pause (D6: the healer panel is removed; this global pruning
+// kill-switch lives here instead) ─────────────────────────────────────────────
+function SourcePrunePauseCard({ readOnly }: { readOnly: boolean }) {
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ["config"], queryFn: getConfig });
+  const paused = data?.settings?.sourcePrunePaused === "true";
+  const save = useMutation({
+    mutationFn: (next: boolean) => saveConfig({ sourcePrunePaused: next ? "true" : "false" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["config"] }),
   });
-  const activities = data?.activities ?? [];
-  const now = Date.now();
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="text-sm font-medium text-gray-200">Healer</h3>
-        <span className={`text-xs font-mono ${activities.length ? "text-blue-400" : "text-gray-500"}`}>
-          {activities.length ? `${activities.length} active` : "idle"}
+      <h3 className="text-sm font-medium text-gray-200 mb-2 flex items-center gap-1">
+        Pause source pruning <InfoTip id="admin.sourcePrunePaused" />
+      </h3>
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={paused}
+          disabled={readOnly || save.isPending}
+          onChange={(e) => save.mutate(e.target.checked)}
+          className="accent-blue-600"
+        />
+        <span className="text-gray-300">
+          {paused ? "Pruning PAUSED — raw source + pegs kept" : "Pruning active (daily, per-currency retention)"}
         </span>
-      </div>
-      {activities.length === 0 ? (
-        <div className="text-xs text-gray-500">
-          No heal activity. Runs automatically: ~30s after boot, hourly gap scan, on &gt;100 detected gaps.
-        </div>
-      ) : (
-        <ul className="space-y-1.5">
-          {activities.map((a) => (
-            <li key={a.name} className="text-sm text-gray-300 flex items-baseline justify-between">
-              <span className="font-mono">{a.name}</span>
-              <span className="text-xs text-gray-500">
-                {a.meta && Object.keys(a.meta).length > 0
-                  ? Object.entries(a.meta).map(([k, v]) => `${k}=${String(v)}`).join(" ") + " · "
-                  : null}
-                running {formatHealerElapsed(now - new Date(a.startedAt).getTime())}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
+      </label>
+      <p className="text-gray-600 text-xs mt-1">
+        Global override above per-currency retention. The composite index is kept forever regardless.
+      </p>
     </div>
   );
 }
@@ -583,7 +567,7 @@ function RuntimeSection() {
 
 // ── tab shell ────────────────────────────────────────────────────────────────
 
-const SUBTABS = ["API Keys", "Healer / Repair", "Config", "Runtime", "Audit"] as const;
+const SUBTABS = ["API Keys", "Repair", "Config", "Runtime", "Audit"] as const;
 type SubTab = typeof SUBTABS[number];
 
 // Placeholder for panels the current viewer can't read. Two reasons, two
@@ -635,10 +619,10 @@ export default function AdminTab() {
 
       <div className="max-w-3xl">
         {sub === "API Keys" && (noModify ? <LockedCard title="API Keys" /> : <ApiKeysSection />)}
-        {sub === "Healer / Repair" && (
+        {sub === "Repair" && (
           <div className="space-y-6">
-            <HealerStatusCard />
             {noModify ? <LockedCard title="Repair Range" /> : <RepairRangePanel sourceNames={sourceNames} />}
+            {!noModify && <SourcePrunePauseCard readOnly={demo} />}
           </div>
         )}
         {sub === "Config" && (demo ? <LockedCard title="Configuration" /> : (
