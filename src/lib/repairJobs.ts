@@ -68,6 +68,8 @@ export interface RepairJobState {
   sources?: string[];
   formula?: Formula;
   retryEmpty?: boolean;
+  repairExistingTokenMinutes?: boolean;  // Stage 6: ON → re-fetch + overwrite token archive (else fill holes only)
+  repairExistingStableMinutes?: boolean; // Stage 6: ON → re-fetch + overwrite pegs (else fill holes only)
   steps: RepairStep[];        // which units this job runs (subset of ALL_REPAIR_STEPS)
   suspendGlobal?: boolean;    // true → blocked ALL candle reads during the repair (shared pegs)
 
@@ -151,6 +153,8 @@ export interface StartRepairJobRequest {
   sources?: string[];
   formula?: Formula;
   retryEmpty?: boolean;
+  repairExistingTokenMinutes?: boolean; // Stage 6 token toggle
+  repairExistingStableMinutes?: boolean; // Stage 6 stable toggle
   steps?: RepairStep[];   // default: all three (today's full ensure→backfill→recompose chain)
   suspendGlobal?: boolean; // block ALL candle reads during the repair (stable-rate repairs — pegs are shared)
 }
@@ -177,6 +181,8 @@ export function startRepairJob(req: StartRepairJobRequest): { jobId: string } {
     sources:    req.sources,
     formula:    req.formula,
     retryEmpty: req.retryEmpty,
+    repairExistingTokenMinutes:  req.repairExistingTokenMinutes,
+    repairExistingStableMinutes: req.repairExistingStableMinutes,
     steps,
     suspendGlobal,
     ensure:    null,
@@ -232,6 +238,8 @@ async function runRepairJob(jobId: string, controller: AbortController): Promise
         {
           sources: state.sources,
           retryEmpty: state.retryEmpty,
+          // Stage 6: token toggle ON (or legacy retryEmpty) → re-fetch + overwrite.
+          overwriteExisting: state.repairExistingTokenMinutes || state.retryEmpty,
           signal: controller.signal,
         },
       );
@@ -248,7 +256,8 @@ async function runRepairJob(jobId: string, controller: AbortController): Promise
         {
           sources: state.sources,
           currency: state.currency,
-          retryEmpty: state.retryEmpty,
+          // Stage 6: stable toggle ON (or legacy retryEmpty) → re-fetch + overwrite pegs.
+          retryEmpty: state.repairExistingStableMinutes || state.retryEmpty,
           signal: controller.signal,
         },
       );

@@ -311,6 +311,8 @@ router.post("/repair", ...modify, async (req, res) => {
     sources?: unknown;
     formula?: { excludedSources?: unknown };
     retryEmpty?: unknown;
+    repairExistingTokenMinutes?: unknown;
+    repairExistingStableMinutes?: unknown;
     steps?: unknown;
     suspendGlobal?: unknown;
   };
@@ -368,15 +370,18 @@ router.post("/repair", ...modify, async (req, res) => {
   }
 
   const retryEmpty = Boolean(body.retryEmpty);
-  // Block ALL candle reads during the repair (not just this currency). Set for
-  // stable-rate repairs since pegs are shared across currencies (Stage 4; the UI
-  // surfaces it in Stage 6).
+  // Stage 6 existing-minute toggles. OFF (default) → fill only holes (coverage-
+  // skip, fast/resumable). ON → re-fetch + overwrite that domain.
+  const repairExistingTokenMinutes = Boolean(body.repairExistingTokenMinutes);
+  const repairExistingStableMinutes = Boolean(body.repairExistingStableMinutes);
+  // Block ALL candle reads during the repair (not just this currency). Surfaced
+  // by the UI when the stable toggle is on, since pegs are shared (Stage 4/6).
   const suspendGlobal = Boolean(body.suspendGlobal);
   const dry = req.query.dry === "true";
 
   if (dry) {
     try {
-      const preview = await previewRepair({ currency, from, to, sources, formula, retryEmpty, steps, suspendGlobal });
+      const preview = await previewRepair({ currency, from, to, sources, formula, retryEmpty, repairExistingTokenMinutes, repairExistingStableMinutes, steps, suspendGlobal });
       return res.json({ preview });
     } catch (err) {
       logError("[monitor] POST /repair?dry=true failed:", err);
@@ -389,12 +394,12 @@ router.post("/repair", ...modify, async (req, res) => {
     return res.status(409).json({ error: `a repair job is already in progress for ${currency}` });
   }
   try {
-    const { jobId } = startRepairJob({ currency, from, to, sources, formula, retryEmpty, steps, suspendGlobal });
+    const { jobId } = startRepairJob({ currency, from, to, sources, formula, retryEmpty, repairExistingTokenMinutes, repairExistingStableMinutes, steps, suspendGlobal });
     void recordAdminAction({
       actor: await actorOf(req),
       action: "repair.start",
       target: currency,
-      detail: { jobId, from: from.toISOString(), to: to.toISOString(), retryEmpty, steps, suspendGlobal, formula: formula?.excludedSources },
+      detail: { jobId, from: from.toISOString(), to: to.toISOString(), retryEmpty, repairExistingTokenMinutes, repairExistingStableMinutes, steps, suspendGlobal, formula: formula?.excludedSources },
     });
     return res.json({ jobId });
   } catch (err) {

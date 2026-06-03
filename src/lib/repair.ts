@@ -67,9 +67,10 @@ export interface EnsureSourceCoverageResult {
 }
 
 export interface EnsureSourceCoverageOpts {
-  sources?: string[];     // default: all formula-included adapters
-  retryEmpty?: boolean;   // default: false; if true, delete 'no_data' sentinels in the window first
-  signal?: AbortSignal;   // honored at tile boundaries for cancellation
+  sources?: string[];        // default: all formula-included adapters
+  retryEmpty?: boolean;      // default: false; if true, delete 'no_data' sentinels in the window first
+  overwriteExisting?: boolean; // Stage 6 (repairExistingTokenMinutes): bypass coverage-skip + ON CONFLICT DO UPDATE — re-fetch and overwrite existing rows. OFF (default) = coverage-skip + DO NOTHING (fast, resumable, fills only holes).
+  signal?: AbortSignal;      // honored at tile boundaries for cancellation
 }
 
 /**
@@ -150,6 +151,7 @@ export async function ensureSourceCoverage(
   // calls); shared counters are mutated synchronously on the single event loop.
   const nowMs = Date.now();
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const overwriteExisting = opts?.overwriteExisting ?? false;
 
   async function walkVenue(source: string, symbol: string): Promise<void> {
     let cfg;
@@ -189,9 +191,9 @@ export async function ensureSourceCoverage(
       // Coverage skip for THIS source: a tile already holding `limit` rows (real
       // or sentinel) has no holes → skip (no fetch, no throttle), so a killed
       // repair resumes. PK (currency,timestamp,source) ⇒ COUNT == limit ⟺ full.
-      //   - retryEmpty bypasses (sentinels were deleted above → holes refetched).
+      //   - retryEmpty / overwriteExisting bypass it (force a re-fetch).
       //   - a coverage-query error fetches anyway (fail toward doing the work).
-      if (!opts?.retryEmpty) {
+      if (!opts?.retryEmpty && !overwriteExisting) {
         try {
           const cov = await query(
             `SELECT COUNT(*)::int AS n FROM candles_1m_sources
@@ -210,8 +212,14 @@ export async function ensureSourceCoverage(
       let rows: { timestamp: Date; candle: { open: number; high: number; low: number; close: number; volume: number } }[];
       try {
         recordApiRequest(currency, source, "repair");
+        // Fetch one extra minute (limit + 1): binance/bybit/bitget include the
+        // endTime minute and drop the BOTTOM of the window, so plain `limit` loses
+        // each tile's first minute (tileStart). DO-NOTHING masked this (the dropped
+        // minute kept its existing row); DO-UPDATE would clobber it to a sentinel.
+        // The [tileStartMs, tileEnd) filter below trims the overlap. Mirrors
+        // backfillStableRates' limit+1.
         rows = await withTimeout(
-          ADAPTER_BY_NAME[source].fetchRange(symbol, tileEnd, limit),
+          ADAPTER_BY_NAME[source].fetchRange(symbol, tileEnd, limit + 1),
           cfg.timeout_ms,
           `${currency}/${source} tile ${tileStart.toISOString().slice(0, 16)}`,
         );
@@ -257,6 +265,13 @@ export async function ensureSourceCoverage(
         }
       }
       if (tsArr.length > 0) {
+        // OFF: DO NOTHING (preserve existing rows; RETURNING yields only inserts,
+        // so the difference is `skipped`). ON (overwriteExisting): DO UPDATE
+        // overwrites the OHLCV/verdict and resets usedInFormula (recompose re-sets
+        // it), so every row is (re)written and skipped stays 0.
+        const conflict = overwriteExisting
+          ? `DO UPDATE SET "open"=EXCLUDED."open", "high"=EXCLUDED."high", "low"=EXCLUDED."low", "close"=EXCLUDED."close", "volume"=EXCLUDED."volume", "rejected"=EXCLUDED."rejected", "rejectedReason"=EXCLUDED."rejectedReason", "usedInFormula"=NULL`
+          : `DO NOTHING`;
         const ins = await query(
           `INSERT INTO candles_1m_sources
              ("currency","timestamp","source","open","high","low","close","volume",
@@ -265,7 +280,7 @@ export async function ensureSourceCoverage(
              FROM UNNEST($3::timestamptz[], $4::numeric[], $5::numeric[], $6::numeric[],
                          $7::numeric[], $8::numeric[], $9::boolean[], $10::text[])
                   AS u(ts, open, high, low, close, volume, rejected, reason)
-           ON CONFLICT ("currency","timestamp","source") DO NOTHING
+           ON CONFLICT ("currency","timestamp","source") ${conflict}
            RETURNING "rejected"`,
           [currency, source, tsArr, oArr, hArr, lArr, cArr, vArr, rejArr, reasonArr],
         );
@@ -274,7 +289,7 @@ export async function ensureSourceCoverage(
           if (r.rejected) sentinelsWritten++;
           else rowsFetched++;
         }
-        skipped += tsArr.length - insertedRows.length;   // already present (ON CONFLICT DO NOTHING)
+        skipped += tsArr.length - insertedRows.length;   // >0 only in DO NOTHING mode (rows already present)
       }
 
       tileEnd = tileStart;
