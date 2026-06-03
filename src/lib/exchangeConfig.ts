@@ -11,7 +11,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { log } from "./log.js";
 
 export interface ExchangeTuning {
   tile_size: number;
@@ -26,7 +25,6 @@ export interface ExchangeTuning {
 const CONFIG_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "exchange_config.json");
 
 let cache: Record<string, ExchangeTuning> | null = null;
-const runOverrides: Record<string, Partial<ExchangeTuning>> = {};
 
 function loadFile(): Record<string, ExchangeTuning> {
   if (cache) return cache;
@@ -41,26 +39,15 @@ function loadFile(): Record<string, ExchangeTuning> {
 }
 
 /**
- * Tuning for a source, with any ephemeral per-run override applied on top.
- * Throws loud if the source is absent from the config — a repair must not guess
- * a rate limit (no silent default that could burst a venue past its cap).
+ * Tuning for a source. Throws loud if the source is absent from the config — a
+ * repair must not guess a rate limit (no silent default that could burst a venue
+ * past its cap). (An ephemeral per-run override surface was specced but the UI is
+ * read-only for now, so it's not built — the file/CLI is the edit path.)
  */
 export function getExchangeTuning(source: string): ExchangeTuning {
   const base = loadFile()[source];
   if (!base) {
     throw new Error(`[exchangeConfig] no tuning for source '${source}' in exchange_config.json — add it (probe-earliest --write) before repairing`);
   }
-  const ovr = runOverrides[source];
-  return ovr ? { ...base, ...ovr } : base;
-}
-
-/** Ephemeral per-run tile/throttle/timeout override for one-offs (advanced repair UI). Not persisted. */
-export function setRunOverride(source: string, override: Partial<ExchangeTuning>): void {
-  runOverrides[source] = { ...runOverrides[source], ...override };
-  log(`[exchangeConfig] run-override ${source}: ${JSON.stringify(override)}`);
-}
-
-/** Drop all per-run overrides (call at the end of a repair run). */
-export function clearRunOverrides(): void {
-  for (const k of Object.keys(runOverrides)) delete runOverrides[k];
+  return base;
 }

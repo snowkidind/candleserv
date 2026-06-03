@@ -145,10 +145,10 @@ export function isSourcePaused(source: string): boolean {
 }
 
 /**
- * Backward-compat shim. The POST /monitor/sources/:source/resume endpoint
- * still exists during the transition; routes here to the formula mutation.
- * insertFormulaChange clears the source's 24h failure counter on 'unset' so
- * it doesn't immediately re-trip auto-suspend.
+ * POST /monitor/sources/:source/resume → manual auto-ban recovery. Clears the
+ * Redis suspend overlay + the source's 24h failure window so it resumes live
+ * polling without immediately re-tripping (auto-ban state is in Redis now, not
+ * formula_changes). A deliberate GLOBAL kill-switch is untouched here.
  */
 export async function resumeSource(source: string): Promise<void> {
   // Auto-ban recovery: clear the Redis suspend + its 24h failure window so the

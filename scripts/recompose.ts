@@ -2,8 +2,8 @@
  * Recompose-only — re-derive candles_1m composites from the data ALREADY in the
  * archive + stable_rates over a window, with a chosen venue set. NO exchange
  * fetches: pure DB (recomposeRange / composeMinute). Use to rebuild the index
- * after the source/pegs are already in place — e.g. after copying a borrowed
- * peg onto a venue that lacked its own (bybit ← binance).
+ * after the source/pegs are already in place — e.g. after a stables backfill, or
+ * to re-derive a window with a different venue set.
  *
  * Does NOT engage the repair lock (it's not a repair job) and does NOT fetch.
  * Honors the repairHorizonDays clamp (recomposeRange). Window is half-open

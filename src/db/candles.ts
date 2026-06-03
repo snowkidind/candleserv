@@ -360,13 +360,16 @@ export async function get24hSourceStats(source: string): Promise<{
  */
 export async function pruneSourceCandles(): Promise<void> {
   // Per-currency retention (Stage 7): each currency prunes to its own
-  // sourceRetentionDays, COALESCE-ing to the global 180 default. One DELETE
-  // joined to currencies. The composite candles_1m is kept forever regardless.
+  // sourceRetentionDays. A CORRELATED SUBQUERY (not a JOIN) is deliberate — a
+  // JOIN would silently drop any candles_1m_sources row whose currency has no
+  // currencies row (orphan) from the DELETE, so it would never prune → unbounded
+  // growth, the exact thing prune prevents. With the subquery, an orphan's
+  // lookup returns NULL → COALESCE → the global 180d floor, so NO row escapes
+  // pruning. The composite candles_1m is kept forever regardless.
   await query(
     `DELETE FROM candles_1m_sources cs
-       USING currencies c
-      WHERE cs."currency" = c."code"
-        AND cs."timestamp" < NOW() - make_interval(days => COALESCE(c."sourceRetentionDays", 180))`
+      WHERE cs."timestamp" < NOW() - make_interval(days =>
+        COALESCE((SELECT c."sourceRetentionDays" FROM currencies c WHERE c."code" = cs."currency"), 180))`
   );
 }
 

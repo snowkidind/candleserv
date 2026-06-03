@@ -109,7 +109,7 @@ export function isGlobalRepairSuspend(): boolean {
 }
 
 /**
- * Any repair in any non-terminal phase? Retained for status/recovery callers.
+ * Any repair in any non-terminal state? Retained for status/recovery callers.
  * The repair LOCK no longer uses this — it gates per-currency (see repairLock).
  */
 export function isRepairInProgress(): boolean {
@@ -121,7 +121,7 @@ export function getRepairJob(jobId: string): RepairJobState | null {
 }
 
 /**
- * Returns the currently-running job's state (any non-terminal phase), or null.
+ * Returns the currently-running job's state (any non-terminal state), or null.
  * Used by the frontend on mount to recover from a tab-navigation away/back —
  * the server's single-flight flag is authoritative, the client just needs the
  * jobId to resume polling.
@@ -325,7 +325,7 @@ export async function previewRepair(req: StartRepairJobRequest): Promise<RepairP
   const steps = req.steps ?? ALL_REPAIR_STEPS;
 
   // Every count is scoped to the requested currency so the preview matches what
-  // the ensure/recompose phases (which only touch that currency) will do.
+  // the fetch/recompose steps (which only touch that currency) will do.
   // 1. How many candles_1m rows live in the window?
   const compRes = await query(
     `SELECT COUNT(*) AS n FROM candles_1m WHERE currency = $3 AND timestamp >= $1 AND timestamp < $2`,
@@ -387,11 +387,11 @@ export async function previewRepair(req: StartRepairJobRequest): Promise<RepairP
 
   // 4. Rough wall-time estimate. ensureSourceCoverage walks tiles backward
   // with a 5s throttle between tiles. Tile size = 300 minutes. So tile count
-  // = ceil(totalMinutes / 300), and ensure-phase ≈ tileCount * (5s + per-tile
-  // HTTP time ≈ 2s) for the fastest-resolving source. Recompose-phase is
+  // = ceil(totalMinutes / 300), and the fetch step ≈ tileCount * (5s + per-tile
+  // HTTP time ≈ 2s) for the fastest-resolving source. The recompose step is
   // ~1ms per minute (pure DB), so totalMinutes * 1ms.
   // Only count the steps this run will actually perform — a recompose-only run
-  // pays no ensure-phase throttle.
+  // pays no fetch-step throttle.
   const tileCount = Math.ceil(totalMinutes / 300);
   const ensureMs = steps.includes("fetch") ? tileCount * 7000 : 0;
   const recomposeMs = steps.includes("recompose") ? totalMinutes * 1 : 0;
