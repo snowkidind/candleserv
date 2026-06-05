@@ -73,6 +73,15 @@ function RootLayout() {
           )}
         </div>
         <div className="flex items-center gap-3">
+          <a
+            href={`https://github.com/snowkidind/candleserv/commit/${__GIT_COMMIT__}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Commit this frontend was built from"
+            className="text-xs text-gray-600 hover:text-gray-300 font-mono transition-colors"
+          >
+            {__GIT_COMMIT__}
+          </a>
           <button
             onClick={toggleTheme}
             title={`Theme: ${theme} — click to switch to ${nextTheme(theme)}`}
