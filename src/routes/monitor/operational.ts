@@ -10,7 +10,7 @@ import { get24hSourceStats, getCandles, getCollectionLatencyStats, getSourceCand
 import { runGapScan } from "../../lib/gapDetector.js";
 import {
   getEnabledCurrencies, listCurrencies, getCurrency,
-  setCurrencyEnabled, setPremiumEnabled, setMinSources, setInceptionTs, setSourceRetentionDays,
+  setCurrencyEnabled, setPremiumEnabled, setFlatFillEmpty, setMinSources, setInceptionTs, setSourceRetentionDays,
 } from "../../db/currencies.js";
 import {
   getFormulaTimeline, insertFormulaVersion, deleteFormulaVersion,
@@ -795,8 +795,8 @@ router.get("/currencies", ...view, async (_req, res) => {
 });
 
 /**
- * PUT /monitor/currencies/:code — update enabled / premiumEnabled / minSources /
- * inceptionTs. A false→true `enabled` transition onboards the currency (clears
+ * PUT /monitor/currencies/:code — update enabled / premiumEnabled / flatFillEmpty /
+ * minSources / inceptionTs. A false→true `enabled` transition onboards the currency (clears
  * the per-currency latch + kicks runBackfill behind the global in-flight guard);
  * the response reports whether that backfill `started` or was `deferred` so the
  * UI can toast it without locking the toggle.
@@ -808,12 +808,14 @@ router.put("/currencies/:code", ...modify, async (req, res) => {
     if (!existing) return res.status(404).json({ error: `Unknown currency '${code}'` });
 
     const body = req.body as {
-      enabled?: boolean; premiumEnabled?: boolean;
+      enabled?: boolean; premiumEnabled?: boolean; flatFillEmpty?: boolean;
       minSources?: number | null; inceptionTs?: string | null;
       sourceRetentionDays?: number | null;
     };
 
     if (typeof body.premiumEnabled === "boolean") await setPremiumEnabled(code, body.premiumEnabled);
+
+    if (typeof body.flatFillEmpty === "boolean") await setFlatFillEmpty(code, body.flatFillEmpty);
 
     if (body.sourceRetentionDays !== undefined) {
       if (body.sourceRetentionDays !== null && (!Number.isInteger(body.sourceRetentionDays) || body.sourceRetentionDays < 1)) {

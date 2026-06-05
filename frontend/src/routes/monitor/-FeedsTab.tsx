@@ -152,6 +152,10 @@ export default function FeedsTab() {
     await withBusy(async () => { await updateCurrency(code, { premiumEnabled }); await reload(); });
   }
 
+  async function toggleFlatFill(code: string, flatFillEmpty: boolean) {
+    await withBusy(async () => { await updateCurrency(code, { flatFillEmpty }); await reload(); });
+  }
+
   async function changeMinSources(code: string, value: string) {
     const n = value.trim() === "" ? null : parseInt(value, 10);
     if (n !== null && (!Number.isInteger(n) || n < 1)) { flash("min sources must be a positive integer"); return; }
@@ -241,6 +245,21 @@ export default function FeedsTab() {
             </label>
             <p className="text-gray-600 text-xs mt-1 ml-7">
               Inert until the token has ≥3 accepted venues — below that the plain pegged medians are used.
+            </p>
+          </div>
+
+          <div>
+            <label className="flex items-center gap-3">
+              <input
+                type="checkbox"
+                checked={cur.flatFillEmpty}
+                disabled={ro || busy}
+                onChange={e => toggleFlatFill(cur.code, e.target.checked)}
+              />
+              <span className="text-gray-200 flex items-center gap-1">Flat-fill empty minutes <InfoTip id="feeds.flatFillEmpty" /></span>
+            </label>
+            <p className="text-gray-600 text-xs mt-1 ml-7">
+              On for thin tokens — a no-trade minute carries the previous close (volume 0) instead of striking the venue.
             </p>
           </div>
 

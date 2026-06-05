@@ -43,6 +43,8 @@ export const HELP_TEXT: Record<string, string> = {
     "Turn LIVE collection on/off for this token. Off stops new candles being written; existing data is untouched.",
   "feeds.premiumOffset":
     "Corrects each venue's price for its persistent premium/discount vs the cross-venue median. Inert until a minute has ≥3 accepted venues — below that, plain pegged medians are used.",
+  "feeds.flatFillEmpty":
+    "How an empty (no-trade) minute from a venue is treated. ON (thin tokens): carry the venue's previous close as a flat candle (volume 0) — no strike, no error. OFF (liquid assets like BTC): an empty minute is assumed to be a venue glitch — it strikes the venue and logs a service error.",
   "feeds.minSources":
     "Minimum venues that must agree before a composite minute is written. Per-currency; blank falls back to the global default (3). Lower it for thin tokens or their minutes won't compose; raise it to demand stronger consensus.",
   "feeds.sourceRetention":

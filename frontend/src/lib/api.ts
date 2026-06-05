@@ -371,6 +371,7 @@ export interface CurrencyInfo {
   displayName: string;
   enabled: boolean;
   premiumEnabled: boolean;
+  flatFillEmpty: boolean;
   minSources: number | null;
   inceptionTs: string | null;
   sourceRetentionDays: number | null;   // null → global default 180 (Stage 7)
@@ -387,6 +388,7 @@ export const getCurrencies = () =>
 export interface CurrencyPatch {
   enabled?: boolean;
   premiumEnabled?: boolean;
+  flatFillEmpty?: boolean;
   minSources?: number | null;
   inceptionTs?: string | null;
   sourceRetentionDays?: number | null;
