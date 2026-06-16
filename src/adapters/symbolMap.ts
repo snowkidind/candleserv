@@ -61,15 +61,19 @@ export const SYMBOL_MAP: Record<string, Partial<Record<SourceName, string>>> = {
     gate:     "TRX_USDT",
     bitget:   "TRXUSDT",
   },
-  TON: {
-    binance:  "TONUSDT",   // ⚠ verify — Binance TON listing history is checkered
-    bybit:    "TONUSDT",
-    kraken:   "TONUSD",    // ⚠ verify — thin/none
-    coinbase: "TON-USD",   // ⚠ verify — thin/none
-    bitfinex: "tTONUSD",   // ⚠ verify — thin/none
-    okx:      "TON-USDT",
-    gate:     "TON_USDT",
-    bitget:   "TONUSDT",
+  // TON → GRAM rebrand: same asset, code renamed. gate/bitget have rebranded
+  // (their TON symbols are delisted), so they fetch the live GRAM symbol; the
+  // other six venues keep their current live TON symbol until each rebrands,
+  // at which point its symbol flips to its GRAM form (Stage 5 rolling repoint).
+  GRAM: {
+    binance:  "TONUSDT",   // flips to GRAM form once binance rebrands (Stage 5)
+    bybit:    "TONUSDT",   // flips to GRAM form once bybit rebrands (Stage 5)
+    kraken:   "TONUSD",    // flips to GRAM form once kraken rebrands (Stage 5)
+    coinbase: "TON-USD",   // flips to GRAM form once coinbase rebrands (Stage 5)
+    bitfinex: "tTONUSD",   // flips to GRAM form once bitfinex rebrands (Stage 5)
+    okx:      "TON-USDT",  // flips to GRAM form once okx rebrands (Stage 5)
+    gate:     "GRAM_USDT", // rebranded — TON symbol delisted
+    bitget:   "GRAMUSDT",  // rebranded — TON symbol delisted
   },
   BNB: {
     binance:  "BNBUSDT",

@@ -1,4 +1,29 @@
 import { query } from "./pool.js";
+import { log } from "../lib/log.js";
+
+// TON → GRAM rebrand transitional read alias (decision D1). The old `TON`
+// request code resolves to the renamed `GRAM` data on the /v1 read path only —
+// an explicit declared map, never a silent "try the other name". Deleted in
+// Stage 6 once no consumer requests TON. Do NOT alias the /monitor admin
+// surface or any write path.
+const CURRENCY_ALIASES: Record<string, string> = { TON: "GRAM" };
+
+/**
+ * Canonicalize a raw ?currency value to a currency code. Returns "BTC" for
+ * empty/blank input (preserves the pre-multi-currency default), otherwise
+ * uppercases and maps through CURRENCY_ALIASES (logging when an alias fires).
+ * Returns a code only — validation against getEnabledCurrencies stays in the
+ * callers, so an unknown/non-aliased code still 400s there.
+ */
+export function canonicalCurrency(raw: unknown): string {
+  const upper = (typeof raw === "string" && raw.trim()) ? raw.trim().toUpperCase() : "BTC";
+  const alias = CURRENCY_ALIASES[upper];
+  if (alias) {
+    log(`[currency] alias ${upper}→${alias}`);
+    return alias;
+  }
+  return upper;
+}
 
 export interface CurrencyRow {
   code: string;

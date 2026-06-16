@@ -306,7 +306,7 @@ const CURRENCY_META: Record<string, { displayName: string }> = {
   ETH: { displayName: "Ethereum" },
   SOL: { displayName: "Solana" },
   TRX: { displayName: "TRON" },
-  TON: { displayName: "Toncoin" },
+  GRAM: { displayName: "GRAM" },
   BNB: { displayName: "BNB" },
 };
 

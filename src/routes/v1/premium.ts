@@ -2,7 +2,7 @@ import { Router } from "express";
 import { apiKeyAuth } from "../../middleware/apiKeyAuth.js";
 import { premiumRateLimit } from "../../middleware/premiumRateLimit.js";
 import { getSourceCandles, getSourcePresence, tfToMinutes, VALID_TFS } from "../../db/candles.js";
-import { getEnabledCurrencies } from "../../db/currencies.js";
+import { getEnabledCurrencies, canonicalCurrency } from "../../db/currencies.js";
 import { SOURCE_NAMES } from "../../adapters/registry.js";
 import { computeMinuteOffsets, aggregateOffsets, isPegVenue } from "../../lib/premium.js";
 import { logError } from "../../lib/log.js";
@@ -36,7 +36,7 @@ const MAX_BARS = 5000;
 const MAX_RAW_MINUTES = 134_000;
 
 async function resolveCurrency(raw: unknown): Promise<{ currency: string } | { error: string }> {
-  const currency = (typeof raw === "string" && raw.trim()) ? raw.trim().toUpperCase() : "BTC";
+  const currency = canonicalCurrency(raw);
   const enabled = await getEnabledCurrencies();
   if (!enabled.includes(currency)) {
     return { error: `Unknown or disabled currency '${currency}'. Enabled: ${enabled.join(", ")}` };

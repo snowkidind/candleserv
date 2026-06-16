@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { apiKeyAuth } from "../../middleware/apiKeyAuth.js";
 import { getCandles, getLatest1m, tfToMinutes, VALID_TFS } from "../../db/candles.js";
-import { getEnabledCurrencies } from "../../db/currencies.js";
+import { getEnabledCurrencies, canonicalCurrency } from "../../db/currencies.js";
 import { addClient, removeClient, getSubscriptionStatus, pushToClient } from "../../lib/subscriptions.js";
 import { candleEmitter } from "../../lib/emitter.js";
 import { redisGet, redisSet, boundaryTtl } from "../../lib/redis.js";
@@ -23,7 +23,7 @@ router.use(apiKeyAuth);
  * unchanged. Returns the validated uppercase code or an error for a 400.
  */
 async function resolveCurrency(raw: unknown): Promise<{ currency: string } | { error: string }> {
-  const currency = (typeof raw === "string" && raw.trim()) ? raw.trim().toUpperCase() : "BTC";
+  const currency = canonicalCurrency(raw);
   const enabled = await getEnabledCurrencies();
   if (!enabled.includes(currency)) {
     return { error: `Unknown or disabled currency '${currency}'. Enabled: ${enabled.join(", ")}` };
