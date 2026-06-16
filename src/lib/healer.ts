@@ -148,8 +148,8 @@ export async function healRange(currency: string, from: Date, to: Date, overwrit
   const baseline     = await getSourceCountBaseline(currency);
   const sigma        = await getRecentCloseStddev(currency);
   const volumeLeader = await getTrailingVolumeLeader(currency, 10);
-  const minSources   = await getSettingInt("minSources", 3);
   const meta         = await getCurrency(currency);
+  const minSources   = meta?.minSources ?? await getSettingInt("minSources", 3);
   const premiumEnabled = meta?.premiumEnabled ?? true;
 
   // Fetch/compose set comes from the per-currency formula TIMELINE, not the live
@@ -388,7 +388,7 @@ export async function healMinute(currency: string, minuteTs: Date): Promise<bool
     const meta           = await getCurrency(currency);
     const premiumEnabled = meta?.premiumEnabled ?? true;
     const results      = await fetchAllSources(currency, minuteTs, allowed);
-    const minSources   = await getSettingInt("minSources", 3);
+    const minSources   = meta?.minSources ?? await getSettingInt("minSources", 3);
     const baseline     = await getSourceCountBaseline(currency);
     const sigma        = await getRecentCloseStddev(currency);
     const volumeLeader = await getTrailingVolumeLeader(currency, 10);
@@ -571,7 +571,8 @@ export async function reHealLowConfidence(currency: string, windowDays = 7): Pro
   }
   beginActivity("reHealLowConfidence", { currency, windowDays });
   try {
-    const minSources = await getSettingInt("minSources", 3);
+    const meta       = await getCurrency(currency);
+    const minSources = meta?.minSources ?? await getSettingInt("minSources", 3);
     const baseline   = await getSourceCountBaseline(currency);
     const threshold  = minSources / baseline; // e.g. 3/5 = 0.6
 
