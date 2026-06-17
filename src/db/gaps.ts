@@ -4,6 +4,7 @@ import type { GapRow } from "../types/index.js";
 function rowToGap(row: Record<string, unknown>): GapRow {
   return {
     id: row.id as number,
+    currency: row.currency as string,
     timestamp: row.timestamp as Date,
     durationMinutes: row.durationMinutes as number,
     state: row.state as string,
@@ -52,11 +53,19 @@ export async function getPendingGaps(currency: string): Promise<GapRow[]> {
   return res.rows.map(rowToGap);
 }
 
-export async function getAllGaps(limit = 100): Promise<GapRow[]> {
-  const res = await query(
-    `SELECT * FROM gaps ORDER BY "timestamp" DESC LIMIT $1`,
-    [limit]
-  );
+export async function getAllGaps(limit = 100, currency?: string): Promise<GapRow[]> {
+  // currency optional: the global session view passes none (all currencies);
+  // per-currency consumers (e.g. majorsGapSet) pass one so gaps stay attributable
+  // and the row cap applies per currency rather than across the whole table.
+  const res = currency
+    ? await query(
+        `SELECT * FROM gaps WHERE "currency" = $1 ORDER BY "timestamp" DESC LIMIT $2`,
+        [currency, limit]
+      )
+    : await query(
+        `SELECT * FROM gaps ORDER BY "timestamp" DESC LIMIT $1`,
+        [limit]
+      );
   return res.rows.map(rowToGap);
 }
 

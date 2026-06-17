@@ -62,6 +62,7 @@ export interface ApiKeyRow {
 
 export interface GapRow {
   id: number;
+  currency: string;
   timestamp: Date;
   durationMinutes: number;
   state: string;

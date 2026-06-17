@@ -255,11 +255,12 @@ export const cancelRepairJob = (jobId: string) =>
 
 // Gaps
 export interface Gap {
-  id: number; timestamp: string; durationMinutes: number;
+  id: number; currency: string; timestamp: string; durationMinutes: number;
   state: string; alertSent: boolean;
   detectedAt: string; healedAt: string | null;
 }
-export const getGaps = () => req<{ gaps: Gap[] }>("/monitor/gaps");
+export const getGaps = (currency?: string) =>
+  req<{ gaps: Gap[] }>(`/monitor/gaps${currency ? `?currency=${encodeURIComponent(currency)}` : ""}`);
 
 // Per-source 1m OHLCV (+ peg rate) for the Candles-tab source hover popup.
 // Loaded once per session (latest N days, default 7); never auto-refreshed.

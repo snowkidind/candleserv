@@ -135,8 +135,9 @@ router.get("/candles/latest", ...view, async (req, res) => {
 });
 
 /** GET /monitor/gaps — readable by API key or session view */
-router.get("/gaps", ...viewOrApiKey, async (_req, res) => {
-  const gaps = await getAllGaps(200);
+router.get("/gaps", ...viewOrApiKey, async (req, res) => {
+  const currency = (req.query.currency as string)?.toUpperCase() || undefined;
+  const gaps = await getAllGaps(200, currency);
   return res.json({ gaps: gaps.map((g) => ({
     ...g,
     timestamp: g.timestamp.toISOString(),
