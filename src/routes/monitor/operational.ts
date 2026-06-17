@@ -1,5 +1,7 @@
 import { Router } from "express";
+import type { Request, Response, NextFunction } from "express";
 import { trackSession, authenticate, requirePerm } from "../../middleware/sessionAuth.js";
+import { apiKeyAuth } from "../../middleware/apiKeyAuth.js";
 import { query } from "../../db/pool.js";
 import { getAllGaps, countPendingGaps } from "../../db/gaps.js";
 import { getStreamEvents } from "../../db/streamEvents.js";
@@ -49,6 +51,22 @@ import { logError } from "../../lib/log.js";
 const router = Router();
 const view   = [trackSession, authenticate, requirePerm("CAN_VIEW_CANDLESERV")];
 const modify = [trackSession, authenticate, requirePerm("CAN_MODIFY_CANDLESERV")];
+
+// Accept either an API key (Authorization header, same scheme as /v1) or a
+// logged-in session with CAN_VIEW_CANDLESERV. Machine clients send a key; the
+// monitor UI sends a session cookie. The presence of the Authorization header
+// selects the API-key path; otherwise we fall through to the session chain.
+// (trackSession would mint a cookie for API clients, so we skip it for them.)
+const viewOrApiKey = [
+  (req: Request, res: Response, next: NextFunction) =>
+    req.headers["authorization"] ? apiKeyAuth(req, res, next) : next(),
+  (req: Request, res: Response, next: NextFunction) =>
+    req.apiKeyId ? next() : trackSession(req, res, next),
+  (req: Request, res: Response, next: NextFunction) =>
+    req.apiKeyId ? next() : authenticate(req, res, next),
+  (req: Request, res: Response, next: NextFunction) =>
+    req.apiKeyId ? next() : requirePerm("CAN_VIEW_CANDLESERV")(req, res, next),
+];
 
 // Resolve the acting operator's identity for the audit log. One small lookup
 // per mutation (not a hot path); falls back to user:<id> / "unknown".
@@ -116,8 +134,8 @@ router.get("/candles/latest", ...view, async (req, res) => {
   }
 });
 
-/** GET /monitor/gaps */
-router.get("/gaps", ...view, async (_req, res) => {
+/** GET /monitor/gaps — readable by API key or session view */
+router.get("/gaps", ...viewOrApiKey, async (_req, res) => {
   const gaps = await getAllGaps(200);
   return res.json({ gaps: gaps.map((g) => ({
     ...g,
