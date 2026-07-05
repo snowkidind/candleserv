@@ -125,6 +125,18 @@ for (const a of ADAPTERS) {
 
 export const SOURCE_NAMES: string[] = ADAPTERS.map((a) => a.name);
 
+// The venues that carry a peg rate (normalize.pegFetcher != null): the only
+// sources present in stable_rates_1m_sources. Evaluates to
+// ["binance","bybit","gate","bitget"] in bit order. Read-only surface for the
+// peg endpoints (routes/v1/peg.ts).
+export const PEG_SOURCE_NAMES: string[] = ADAPTERS.filter((a) => a.normalize.pegFetcher != null).map((a) => a.name);
+
+// Provenance: which ticker pair each peg venue derives its USDT→USD rate from.
+// Evaluates to { binance:"USDCUSDT", bybit:"USDTUSD", gate:"USDC_USDT", bitget:"USDCUSDT" }.
+export const PEG_SOURCE_PAIRS: Record<string, string> = Object.fromEntries(
+  ADAPTERS.filter((a) => a.normalize.pegFetcher != null).map((a) => [a.name, a.normalize.pegSourcePair as string]),
+);
+
 export const SOURCE_BITS: Record<string, number> = Object.fromEntries(
   ADAPTERS.map((a) => [a.name, 1 << a.bit]),
 );
