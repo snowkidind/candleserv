@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { apiKeyAuth } from "../../middleware/apiKeyAuth.js";
 import { getCandles, getLatest1m, tfToMinutes, VALID_TFS } from "../../db/candles.js";
 import { getEnabledCurrencies, canonicalCurrency } from "../../db/currencies.js";
 import { addClient, removeClient, getSubscriptionStatus, pushToClient } from "../../lib/subscriptions.js";
@@ -14,8 +13,10 @@ const MAX_WAIT_LIMIT_MS = 60_000;
 
 const router = Router();
 
-// All /v1/* routes require API key auth
-router.use(apiKeyAuth);
+// Auth is applied once at the /v1 boundary (app.use("/v1", apiKeyAuth)) — this
+// router is mounted at the disjoint /v1/candles prefix and registers no auth of
+// its own (a per-router router.use of the stateful apiKeyAuth would double-run
+// the single-use nonce under a shared mount).
 
 /**
  * Resolve + validate the ?currency param. Defaults to BTC — the
@@ -34,7 +35,7 @@ async function resolveCurrency(raw: unknown): Promise<{ currency: string } | { e
 /**
  * GET /v1/candles/latest?tf=<tf>&n=<count>
  */
-router.get("/candles/latest", async (req, res) => {
+router.get("/latest", async (req, res) => {
   const { tf, n } = req.query as Record<string, string>;
   if (!tf || !VALID_TFS.includes(tf)) {
     return res.status(400).json({ error: `Invalid tf. Valid: ${VALID_TFS.join(", ")}` });
@@ -65,7 +66,7 @@ router.get("/candles/latest", async (req, res) => {
  * timestamp is at-or-after endingAt has been ingested, or until maxWaitMs
  * elapses (504). See plans/candleserv-wait-for-fresh.md.
  */
-router.get("/candles", async (req, res) => {
+router.get("/", async (req, res) => {
   const { tf, endingAt, limit } = req.query as Record<string, string>;
   if (!tf || !VALID_TFS.includes(tf)) {
     return res.status(400).json({ error: `Invalid tf. Valid: ${VALID_TFS.join(", ")}` });
@@ -127,7 +128,7 @@ interface MultiEntry {
   currency?: string;
 }
 
-router.post("/candles/multi", async (req, res) => {
+router.post("/multi", async (req, res) => {
   const body = req.body as { requests?: unknown };
   if (!body || !Array.isArray(body.requests)) {
     return res.status(400).json({ error: "body must be { requests: [...] }" });
@@ -316,7 +317,7 @@ async function handleWaitForFresh(
  * GET /v1/candles/stream?n=<count>
  * SSE — 1m only, rolling N-candle buffer per push.
  */
-router.get("/candles/stream", async (req, res) => {
+router.get("/stream", async (req, res) => {
   const apiKey = req.apiKey!;
   const n = Math.min(Math.max(parseInt((req.query.n as string) || "1", 10), 1), 200);
 
@@ -373,7 +374,7 @@ router.get("/candles/stream", async (req, res) => {
  * GET /v1/candles/subscriptions
  * Check if this API key has an active SSE subscription.
  */
-router.get("/candles/subscriptions", (req, res) => {
+router.get("/subscriptions", (req, res) => {
   const status = getSubscriptionStatus(req.apiKey!);
   return res.json(status);
 });

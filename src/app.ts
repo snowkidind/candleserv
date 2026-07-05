@@ -18,6 +18,7 @@ import internalRouter from "./routes/internal.js";
 import { repairLock } from "./middleware/repairLock.js";
 import { demoGate } from "./middleware/demoGate.js";
 import { demoRateLimit, demoPageRateLimit } from "./middleware/demoRateLimit.js";
+import { apiKeyAuth } from "./middleware/apiKeyAuth.js";
 import { isDemoMode, mintDemoToken } from "./lib/demoMode.js";
 
 export async function createApp(): Promise<express.Application> {
@@ -89,9 +90,14 @@ export async function createApp(): Promise<express.Application> {
   // the /v1 + monitor routers.
   app.use(demoGate);
 
-  // API consumer routes — API key auth
-  app.use("/v1", v1CandlesRouter);
-  app.use("/v1", v1PremiumRouter);
+  // API consumer routes — API key auth applied ONCE at the /v1 boundary. Each
+  // domain router mounts at a DISJOINT /v1/<domain> sub-prefix so no router
+  // falls through into a sibling's middleware. apiKeyAuth is stateful (advances
+  // a single-use nonce); registering it per-router under a shared /v1 mount
+  // double-ran it via Express fall-through → 401 Nonce replay. See plan D10.
+  app.use("/v1", apiKeyAuth);
+  app.use("/v1/candles", v1CandlesRouter);
+  app.use("/v1/premium", v1PremiumRouter);
 
   // Operator routes — localhost-only (cli/ctl.ts). No demo/session gating;
   // the router enforces a direct loopback connection itself.

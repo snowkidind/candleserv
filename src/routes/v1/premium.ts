@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { apiKeyAuth } from "../../middleware/apiKeyAuth.js";
 import { premiumRateLimit } from "../../middleware/premiumRateLimit.js";
 import { getSourceCandles, getSourcePresence, tfToMinutes, VALID_TFS } from "../../db/candles.js";
 import { getEnabledCurrencies, canonicalCurrency } from "../../db/currencies.js";
@@ -22,7 +21,10 @@ import { logError } from "../../lib/log.js";
  */
 const router = Router();
 
-router.use(apiKeyAuth);
+// Auth runs once at the /v1 boundary (app.use("/v1", apiKeyAuth)); this router
+// is mounted at the disjoint /v1/premium prefix. premiumRateLimit stays here —
+// it is premium-only and now correctly scoped to /v1/premium (under the old
+// shared /v1 mount it leaked onto sibling routers via fall-through).
 router.use(premiumRateLimit);
 
 // 30d is a calendar-month aggregation that doesn't fit the rolling window here.
@@ -54,7 +56,7 @@ async function resolveCurrency(raw: unknown): Promise<{ currency: string } | { e
  *   - n: contributing minutes in the bucket
  * Omit `venue` for all venues; pass one venue name to filter.
  */
-router.get("/premium", async (req, res) => {
+router.get("/", async (req, res) => {
   const tf = (req.query.tf as string) || "1m";
   if (!PREMIUM_TFS.includes(tf)) {
     return res.status(400).json({ error: `Invalid tf. Valid: ${PREMIUM_TFS.join(", ")}` });
@@ -112,7 +114,7 @@ router.get("/premium", async (req, res) => {
  * history, whether they're peg-corrected (USDT) or USD-native, and the coverage
  * window of their archived source data.
  */
-router.get("/premium/venues", async (req, res) => {
+router.get("/venues", async (req, res) => {
   const resolved = await resolveCurrency(req.query.currency);
   if ("error" in resolved) return res.status(400).json({ error: resolved.error });
   const { currency } = resolved;
