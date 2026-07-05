@@ -243,6 +243,78 @@
         }
       ],
       "description": "Per-venue premium-offset (cross-exchange basis) history. See research/methods #12 and chit/articles/01_bitfinex_premium. Nonce-auth, attached automatically."
+    },
+    {
+      "name": "Peg (v1)",
+      "item": [
+        {
+          "name": "GET /v1/peg/now",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/peg/now",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "peg", "now"]
+            },
+            "description": "Immediate per-venue **USDT→USD peg** at the last closed minute (`MAX(timestamp)` in `stable_rates_1m_sources`).\n\nUSDT-only over the four peg venues (`binance`, `bybit`, `gate`, `bitget`); there is no USDC (never priced) and no kraken/coinbase/bitfinex/okx (USD-native, store no peg). A venue with no row at that minute is omitted (fail-visible), never stale-filled.\n\nReturns `{ \"unit\": \"usd\", \"USDT\": { \"<venue>\": <rate>, ... }, \"timestamp\": <unix ms|null> }`."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /v1/peg?tf=4h&limit=10",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/peg?tf=4h&endingAt=2026-05-31T00:00:00.000Z&limit=10&venue=bybit",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "peg"],
+              "query": [
+                {
+                  "key": "tf",
+                  "value": "4h",
+                  "description": "Optional. Timeframe, default 1h. All standard tfs except 30d."
+                },
+                {
+                  "key": "endingAt",
+                  "value": "2026-05-31T00:00:00.000Z",
+                  "description": "Optional. ISO-8601 instant the window ends at. Default now.",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Optional. Bars per venue. Default 200, max 5000. Trimmed per-venue."
+                },
+                {
+                  "key": "venue",
+                  "value": "bybit",
+                  "description": "Optional. Restrict to one peg venue: binance,bybit,gate,bitget. Omit for all.",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Per-venue **OHLC-of-rate** history for the USDT→USD peg (the intraday high/low drift is the signal; the consumer averages downstream). No `currency` param (the peg table is currency-agnostic). Rejected rows filtered out.\n\nEach bar: `t` bucket-open unix ms, `o`/`h`/`l`/`c` OHLC of the per-minute rate, `n` contributing minutes.\n\nReturns `{ \"unit\": \"usd\", \"tf\", \"USDT\": { \"<venue>\": [ { t, o, h, l, c, n }, ... ] } }` (bars ascending). History depth is bounded by source retention (~180 days today), not a fixed window."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /v1/peg/venues",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/peg/venues",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "peg", "venues"]
+            },
+            "description": "The four peg venues, each with its `pegSourcePair` provenance and archived-rate coverage window.\n\n`pegSourcePair` is the ticker each venue's rate derives from (`binance`/`bitget` `USDCUSDT`, `gate` `USDC_USDT`, `bybit` direct `USDTUSD`). `oldest`/`newest` are unix ms.\n\nReturns `{ \"venues\": [ { name, pegSourcePair, hasData, oldest, newest, count }, ... ] }`."
+          },
+          "response": []
+        }
+      ],
+      "description": "Per-venue USDT→USD stablecoin peg (read-only, over stable_rates_1m_sources). USDT-only, four venues (binance/bybit/gate/bitget); no USDC, no USD-native venues. Nonce-auth, attached automatically."
     }
   ],
   "event": [

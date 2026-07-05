@@ -118,7 +118,7 @@ All are free, public, no API key required. **OKX is geo-restricted from some reg
 
 USDT does not trade at exactly $1.00, and there is **no single USDT/USD rate** — only the local stablecoin price at each specific venue. Rather than pretend otherwise, candleserv fetches each USDT-quoted venue's *own* USDC×USDT (or USDT×USD) 1-minute close and uses it to convert that venue's BTC price into real-USD space before compositing. USD-native venues (Kraken, Coinbase) pass through untouched. Bitfinex is deliberately treated as USD-native even though its "USD" is internally-redeemed USDT — its basis is left to surface as signal (see [Premium offset](#premium-offset)).
 
-This is the principle the whole composite is built around. The long-form study lives in `chit/articles/01_bitfinex_premium`.
+This is the principle the whole composite is built around. The long-form study lives in `chit/articles/01_bitfinex_premium`. The per-venue USDT→USD rate described here is directly queryable via the [peg endpoints](#peg-endpoints).
 
 ---
 
@@ -251,6 +251,24 @@ GET /v1/premium/venues[?currency=BTC]
 ```
 
 Per-venue OHLC-of-offset bars (signed USD): `o`/`c` are the open/close-field offset at the bucket's first/last minute, `h`/`l` the widest/narrowest the basis got intraday, `n` the contributing minutes. All standard timeframes except `30d`. Rate-limited per key (sliding 60s window, threshold `rateLimitPerMinute`, default 120; `429` + `Retry-After: 60`); `503` during a repair job.
+
+**Multi-timeframe "now".** There is no dedicated `/premium/now` — request each timeframe with `endingAt` omitted (defaults to now) and `limit=1`: `GET /v1/premium?tf=4h&limit=1`, `?tf=1h&limit=1`, … (or batch client-side). Caveats: the value is a signed-USD **offset**, not a price; the latest bar is a **live partial bucket** (still forming — not a closed candle); an offset needs **≥3 accepted venues** for the leave-one-out consensus, else that venue is absent; nothing is persisted (recomputed from raw 1m rows each call). Target consumer: daas.
+
+### Peg endpoints
+
+```
+GET /v1/peg/now                                                          # immediate per-venue USDT→USD peg
+GET /v1/peg?tf=<tf>[&endingAt=<iso>][&limit=200][&venue=<name>]          # OHLC-of-rate history
+GET /v1/peg/venues                                                       # peg venues + pegSourcePair + coverage
+```
+
+Read-only surface over the per-venue local USDT→USD rate candleserv already stores (`stable_rates_1m_sources`; see [There is no canonical USDT](#there-is-no-canonical-usdt)). **USDT-only, four venues** (`binance`, `bybit`, `gate`, `bitget`) — the adapters that carry a peg. There is **no `USDC`** (never priced — it appears only as an assumed-$1 proxy leg) and **no kraken/coinbase/bitfinex/okx** (USD-native, store no peg). No `currency` param (the peg table is currency-agnostic). Rejected rows are filtered out. Auth only — **not** rate-limited (light indexed SELECTs).
+
+- **`/v1/peg/now`** → `{ unit:"usd", USDT:{ <venue>:<rate>, … }, timestamp:<unix ms|null> }`. The immediate peg at the **last closed minute** (`MAX(timestamp)`). A venue with no row at that minute is **omitted** (fail-visible) — never backfilled with a stale value.
+- **`/v1/peg`** → `{ unit:"usd", tf, USDT:{ <venue>:[{ t, o, h, l, c, n }, … ] } }`. **OHLC-of-rate** per venue (the intraday high/low drift of the peg is the signal; the consumer averages downstream). `t` is the bucket-open unix ms, `n` the contributing minutes. `tf` defaults `1h`, all standard timeframes except `30d`; `limit` default 200, max 5000, trimmed per-venue. Optional `venue` filters to one.
+- **`/v1/peg/venues`** → `{ venues:[{ name, pegSourcePair, hasData, oldest, newest, count }, … ] }`. `pegSourcePair` is the ticker each venue's rate derives from (`binance`/`bitget` `USDCUSDT`, `gate` `USDC_USDT`, `bybit` `USDTUSD`); `oldest`/`newest` are unix ms.
+
+History depth is bounded by source retention (**~180 days** today, snapped to the longest-retained currency — not 90 days), and the endpoints promise no fixed depth: they serve whatever is retained.
 
 ### Operational endpoints
 
