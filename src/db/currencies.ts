@@ -68,6 +68,21 @@ export async function getEnabledCurrencies(): Promise<string[]> {
   return res.rows.map((r: { code: string }) => r.code);
 }
 
+// Same enabled filter + BTC-first ordering as getEnabledCurrencies, but carries
+// each currency's inceptionTs temporal floor. Read by the GET /v1/currencies
+// route so a downstream consumer (phaseserv) discovers the served set and its
+// per-currency backfill floor over the API-key /v1 surface in one call. Does not
+// replace getEnabledCurrencies (still used by resolveCurrency validation).
+export async function getEnabledCurrencyInfo(): Promise<{ code: string; inceptionTs: Date | null }[]> {
+  const res = await query(
+    `SELECT "code", "inceptionTs" FROM currencies WHERE enabled = true ORDER BY ("code" = 'BTC') DESC, "code" ASC`,
+  );
+  return res.rows.map((row: Record<string, unknown>) => ({
+    code: row.code as string,
+    inceptionTs: (row.inceptionTs as Date) ?? null,
+  }));
+}
+
 export async function getCurrency(code: string): Promise<CurrencyRow | null> {
   const res = await query(`SELECT * FROM currencies WHERE "code" = $1`, [code]);
   return res.rows.length ? rowToCurrency(res.rows[0]) : null;
