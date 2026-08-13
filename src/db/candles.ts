@@ -143,6 +143,14 @@ export async function getLatest1m(currency: string, n: number): Promise<CandleJs
   return res.rows.map(rowToJson);
 }
 
+// Weekly candles fold on MONDAY 00:00 UTC — the exchange/Binance convention the oracle consumer
+// already assumes (webserv/oracle/src/engine/candleFetcher.ts). A bare FLOOR(epoch / 604800) aligns
+// to the Unix epoch, which fell on a THURSDAY, so an un-offset weekly bucket closes on Thursday — a
+// latent bug. WEEK_ANCHOR_SEC = 4 days shifts the fold to Monday. It is applied to 7d ONLY: 345600 is
+// a whole multiple of every sub-weekly TF served here (≤ 1d), so it is a no-op for those, but it is
+// NOT a multiple of 3d — a uniform offset would corrupt 3d buckets. 30d takes the calendar-month path.
+const WEEK_ANCHOR_SEC = 345_600;
+
 /**
  * Fetch N candles ending at (inclusive) for any timeframe.
  * Higher TFs are aggregated from 1m rows on the fly.
@@ -178,10 +186,12 @@ export async function getCandles(opts: {
   // where the function previously returned raw cross-source sums — fine while
   // sourceCount was constant historically, wrong once 5→8 expansion landed.
   const windowStart = new Date(endingAt.getTime() - minutes * limit * 60 * 1000);
+  // $6 = anchor offset (seconds): Monday fold for 7d, zero (epoch-aligned) for every other TF.
+  const anchorSec = tf === "7d" ? WEEK_ANCHOR_SEC : 0;
   const res = await query(
     `SELECT
        to_timestamp(
-         FLOOR(EXTRACT(EPOCH FROM "timestamp") / ($1 * 60)) * ($1 * 60)
+         FLOOR((EXTRACT(EPOCH FROM "timestamp") - $6) / ($1 * 60)) * ($1 * 60) + $6
        ) AS bucket,
        (array_agg(open ORDER BY "timestamp" ASC))[1] AS open,
        MAX(high) AS high,
@@ -199,7 +209,7 @@ export async function getCandles(opts: {
      GROUP BY bucket
      ORDER BY bucket DESC
      LIMIT $4`,
-    [minutes, endingAt, windowStart, limit, currency]
+    [minutes, endingAt, windowStart, limit, currency, anchorSec]
   );
 
   return res.rows

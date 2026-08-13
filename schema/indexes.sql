@@ -13,13 +13,15 @@
 -- (INSERT ... ON CONFLICT DO NOTHING), so re-running them never duplicates or
 -- mutates a completed bar.
 --
--- Conventions — VALIDATED bar-for-bar against candleserv's live /v1/candles
--- (tf=1d and tf=7d) on 2026-06-11:
+-- Conventions — daily VALIDATED bar-for-bar against candleserv's live /v1/candles
+-- (tf=1d) on 2026-06-11; weekly re-anchored to Monday 2026-08-13 (see below):
 --   * UTC throughout (SET LOCAL timezone = 'UTC').
 --   * Daily bar  = [D 00:00, D+1 00:00), labeled by its START (D 00:00).
---   * Weekly bar = [Thu 00:00, +7d), labeled by its START Thursday. candleserv's
---     7d bars are Thursday-aligned (Unix epoch day 0 is a Thursday), so weeks
---     are anchored to Thursday to match.
+--   * Weekly bar = [Mon 00:00, +7d), labeled by its START Monday. Weeks anchor to
+--     Monday 00:00 UTC to match candleserv's /v1/candles 7d bars (Monday-aligned as
+--     of the 2026-08-13 fix in db/candles.ts — the Binance/exchange convention the
+--     oracle consumer assumes) and phaseserv's weekly Phase. (Previously Thursday,
+--     matching the epoch-day-0 artifact in the REST aggregation — that was the bug.)
 --   * open = first 1m open, close = last 1m close, high = max, low = min,
 --     volume / volumeNormalized = sum, over the bucket.
 --   * Only COMPLETE buckets are stored — the in-progress day/week is excluded
@@ -122,7 +124,7 @@ $function$;
 
 -- ── process_weeks() ──────────────────────────────────────────────────────────
 -- Same shape as process_days(), but reads candles_1d and rolls 7 day bars into a
--- Thursday-anchored week. Only weeks with all 7 day bars present are stored, so
+-- Monday-anchored week. Only weeks with all 7 day bars present are stored, so
 -- the current partial week is excluded until it closes. Returns rows inserted.
 
 CREATE OR REPLACE FUNCTION public.process_weeks()
@@ -155,8 +157,9 @@ BEGIN
         d.open, d.high, d.low, d.close,
         d.volume,
         d."volumeNormalized" AS vol_norm,
-        -- Thursday on-or-before this day: dow 4 = Thursday; subtract (dow+3)%7.
-        d.timestamp - ((extract(dow FROM d.timestamp)::int + 3) % 7) * interval '1 day' AS wk
+        -- Monday on-or-before this day: dow 1 = Monday; subtract (dow+6)%7
+        -- (Postgres dow: Sun=0..Sat=6). Monday 00:00 UTC weekly fold — see header.
+        d.timestamp - ((extract(dow FROM d.timestamp)::int + 6) % 7) * interval '1 day' AS wk
       FROM public.candles_1d d
       WHERE d.timestamp >= COALESCE(
               (SELECT max(w.timestamp) + interval '7 days'

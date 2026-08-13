@@ -159,7 +159,12 @@ export function boundaryTtl(tf: string, endingAt?: Date): number {
   const tfMs = tfToMs(tf);
   if (tfMs === 0) return 60;
 
-  const nextBoundary = Math.ceil(now / tfMs) * tfMs;
+  // Weekly folds on Monday 00:00 UTC (WEEK_ANCHOR_MS = 4 days past the Thursday epoch); every other
+  // TF is epoch-aligned. Mirrors the aggregation anchor in db/candles.ts so the forming weekly
+  // candle's cache expires at the real Monday close, not the epoch's Thursday.
+  const WEEK_ANCHOR_MS = 345_600_000;
+  const anchorMs = tf === "7d" ? WEEK_ANCHOR_MS : 0;
+  const nextBoundary = Math.ceil((now - anchorMs) / tfMs) * tfMs + anchorMs;
   const ttlMs = nextBoundary - now;
   return Math.max(1, Math.ceil(ttlMs / 1000));
 }
