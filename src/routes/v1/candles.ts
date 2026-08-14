@@ -11,6 +11,13 @@ const WAIT_FOR_FRESH_TFS = new Set(["1m", "5m", "15m", "30m", "1h", "4h", "6h", 
 const DEFAULT_WAIT_MS = 15_000;
 const MAX_WAIT_LIMIT_MS = 60_000;
 
+// SSE keepalive cadence. Candle frames arrive ~once/minute, so without a heartbeat
+// a silently-dead (proxy half-open / partition) connection is indistinguishable
+// from "no candle yet" for ~60s. A NAMED heartbeat event (not a `:` comment, which
+// some clients never surface) lets a consumer's idle watchdog detect death within
+// a few missed beats. Mirrors hotphase's events.routes.
+const STREAM_HEARTBEAT_MS = 20_000;
+
 const router = Router();
 
 // Auth is applied once at the /v1 boundary (app.use("/v1", apiKeyAuth)) — this
@@ -351,7 +358,10 @@ router.get("/stream", async (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no"); // don't let a proxy buffer the stream
   res.flushHeaders();
+  res.write("retry: 3000\n\n");   // client reconnect backoff hint
+  res.write(": connected\n\n");   // SSE open comment
 
   const client: SseClient = {
     apiKeyId: req.apiKeyId!,
@@ -363,6 +373,12 @@ router.get("/stream", async (req, res) => {
     lastPushAt: null,
   };
   addClient(client);
+
+  // Named heartbeat (not a `:` comment) so a consumer's idle watchdog sees liveness
+  // between the ~once/minute candle frames. Written directly to res; cleared on close.
+  const heartbeat = setInterval(() => {
+    try { res.write("event: heartbeat\ndata: {}\n\n"); } catch { /* dropped — cleanup fires on close/error */ }
+  }, STREAM_HEARTBEAT_MS);
 
   // Initial push — one tagged frame per subscribed currency (last N each).
   for (const currency of currencies) {
@@ -391,6 +407,7 @@ router.get("/stream", async (req, res) => {
   candleEmitter.on("candle", onCandle);
 
   req.on("close", () => {
+    clearInterval(heartbeat);
     candleEmitter.off("candle", onCandle);
     removeClient(apiKey);
   });
