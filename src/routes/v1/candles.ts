@@ -33,6 +33,26 @@ async function resolveCurrency(raw: unknown): Promise<{ currency: string } | { e
 }
 
 /**
+ * Resolve + validate a comma-separated ?currency list for the multi-currency
+ * stream (e.g. ?currency=BTC,ETH,SOL). Each code is validated via resolveCurrency;
+ * any invalid code fails the whole request (fail loud). Deduped, order preserved.
+ * Empty/absent ⇒ [BTC] (the resolveCurrency default). Returns the validated set or
+ * an error for a 400.
+ */
+async function resolveCurrencies(raw: unknown): Promise<{ currencies: string[] } | { error: string }> {
+  const codes = typeof raw === "string" && raw.length > 0
+    ? raw.split(",").map((c) => c.trim()).filter((c) => c.length > 0)
+    : [undefined]; // undefined ⇒ resolveCurrency default (BTC)
+  const out: string[] = [];
+  for (const code of codes) {
+    const resolved = await resolveCurrency(code);
+    if ("error" in resolved) return { error: resolved.error };
+    if (!out.includes(resolved.currency)) out.push(resolved.currency);
+  }
+  return { currencies: out };
+}
+
+/**
  * GET /v1/candles/latest?tf=<tf>&n=<count>
  */
 router.get("/latest", async (req, res) => {
@@ -314,16 +334,19 @@ async function handleWaitForFresh(
 }
 
 /**
- * GET /v1/candles/stream?n=<count>
- * SSE — 1m only, rolling N-candle buffer per push.
+ * GET /v1/candles/stream?currency=<BTC[,ETH,...]>&n=<count>
+ * SSE — 1m only, rolling N-candle buffer per push. One connection may subscribe to
+ * multiple currencies (comma-separated); each frame is tagged with its currency:
+ *   event: candles
+ *   data: { "currency": "BTC", "candles": [ … ], "count": 5 }
  */
 router.get("/stream", async (req, res) => {
   const apiKey = req.apiKey!;
   const n = Math.min(Math.max(parseInt((req.query.n as string) || "1", 10), 1), 200);
 
-  const resolved = await resolveCurrency(req.query.currency);
+  const resolved = await resolveCurrencies(req.query.currency);
   if ("error" in resolved) return res.status(400).json({ error: resolved.error });
-  const { currency } = resolved;
+  const { currencies } = resolved;
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -334,29 +357,32 @@ router.get("/stream", async (req, res) => {
     apiKeyId: req.apiKeyId!,
     apiKey,
     n,
-    currency,
+    currencies,
     res,
     connectedSince: new Date(),
     lastPushAt: null,
   };
   addClient(client);
 
-  // Initial push — send the last N candles immediately
-  try {
-    const initial = await getLatest1m(currency, n);
-    res.write(`event: candles\ndata: ${JSON.stringify({ candles: initial, count: initial.length })}\n\n`);
-    client.lastPushAt = new Date();
-  } catch {
-    // Non-fatal — client will get candles on next push
+  // Initial push — one tagged frame per subscribed currency (last N each).
+  for (const currency of currencies) {
+    try {
+      const initial = await getLatest1m(currency, n);
+      res.write(`event: candles\ndata: ${JSON.stringify({ currency, candles: initial, count: initial.length })}\n\n`);
+      client.lastPushAt = new Date();
+    } catch {
+      // Non-fatal — client will get this currency's candles on its next push
+    }
   }
 
-  // Fan-out: when a new candle arrives, push last N to this client — but only
-  // for the subscriber's currency, so an ETH tick never wakes a BTC stream.
+  // Fan-out: on each new candle, push last N to this client — but only for a
+  // currency it subscribes to, so an unsubscribed tick never wakes this stream.
   const onCandle = async (candle: CandleJson & { currency?: string }) => {
-    if ((candle?.currency ?? "BTC") !== currency) return;
+    const cur = candle?.currency ?? "BTC";
+    if (!currencies.includes(cur)) return;
     try {
-      const candles = await getLatest1m(currency, n);
-      pushToClient(apiKey, candles);
+      const candles = await getLatest1m(cur, n);
+      pushToClient(apiKey, cur, candles);
     } catch {
       // ignore
     }

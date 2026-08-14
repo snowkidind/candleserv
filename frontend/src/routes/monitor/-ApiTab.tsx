@@ -152,13 +152,13 @@ const SECTIONS: Section[] = [
         path: "/v1/candles/stream",
         auth: true,
         badge: "SSE",
-        summary: "Server-Sent Events, 1m only. On connect pushes the last n candles; thereafter pushes the rolling last n whenever a new 1m composite is ingested.",
+        summary: "Server-Sent Events, 1m only. On connect pushes the last n candles per subscribed currency; thereafter pushes the rolling last n whenever a new 1m composite is ingested. One connection may subscribe to multiple currencies; each frame is tagged with its currency.",
         params: [
           { name: "n", def: "1", desc: "Rolling buffer size pushed per event. Clamped 1–200." },
-          { name: "currency", def: "BTC", desc: "An event for another currency never wakes this stream." },
+          { name: "currency", def: "BTC", desc: "Comma-separated list (e.g. BTC,ETH,SOL). An event for an unsubscribed currency never wakes this stream." },
         ],
         sample: `event: candles
-data: { "candles": [ … ], "count": 5 }`,
+data: { "currency": "BTC", "candles": [ … ], "count": 5 }`,
         notes: [
           "Dropped briefly at the start of a repair job — reconnect on disconnect.",
         ],

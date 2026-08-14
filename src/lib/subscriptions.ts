@@ -19,7 +19,7 @@ export function getClient(apiKey: string): SseClient | undefined {
 export function getSubscriptionStatus(apiKey: string): {
   active: boolean;
   n?: number;
-  currency?: string;
+  currencies?: string[];
   connectedSince?: string;
   lastPushAt?: string | null;
 } {
@@ -28,17 +28,19 @@ export function getSubscriptionStatus(apiKey: string): {
   return {
     active: true,
     n: c.n,
-    currency: c.currency,
+    currencies: c.currencies,
     connectedSince: c.connectedSince.toISOString(),
     lastPushAt: c.lastPushAt?.toISOString() ?? null,
   };
 }
 
-export function pushToClient(apiKey: string, candles: unknown[]): void {
+// Push one currency's rolling buffer to the client. The frame is tagged with the
+// currency so a multi-currency subscriber demuxes on the wire.
+export function pushToClient(apiKey: string, currency: string, candles: unknown[]): void {
   const c = clients.get(apiKey);
   if (!c) return;
   try {
-    c.res.write(`event: candles\ndata: ${JSON.stringify({ candles, count: candles.length })}\n\n`);
+    c.res.write(`event: candles\ndata: ${JSON.stringify({ currency, candles, count: candles.length })}\n\n`);
     c.lastPushAt = new Date();
   } catch {
     removeClient(apiKey);

@@ -83,7 +83,9 @@ export interface SseClient {
   apiKeyId: number;
   apiKey: string;
   n: number;
-  currency: string;
+  // One SSE connection subscribes to one or more currencies. Each pushed frame is
+  // tagged with the currency it carries, so a client demuxes on the wire.
+  currencies: string[];
   res: import("express").Response;
   connectedSince: Date;
   lastPushAt: Date | null;
