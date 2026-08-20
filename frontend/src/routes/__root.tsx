@@ -84,7 +84,7 @@ function RootLayout() {
           </a>
           <button
             onClick={toggleTheme}
-            title={`Theme: ${theme} — click to switch to ${nextTheme(theme)}`}
+            title={`Theme: ${theme} (click to switch to ${nextTheme(theme)})`}
             className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
           >
             {THEME_ICON[theme] ?? theme}

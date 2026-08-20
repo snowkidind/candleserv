@@ -77,7 +77,7 @@ function MonitorContent() {
       {isMobile && !mobileNoticeDismissed && (
         <div className="flex items-start gap-3 bg-amber-900/40 border-b border-amber-700 px-4 py-2 text-xs text-amber-100 shrink-0">
           <span className="flex-1">
-            This dashboard is built for a desktop screen — the charts and controls don't fit a phone.
+            This dashboard is built for a desktop screen; the charts and controls don't fit a phone.
             For the full experience, open it on a larger display.
           </span>
           <button

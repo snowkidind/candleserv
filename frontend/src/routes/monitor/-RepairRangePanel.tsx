@@ -114,7 +114,7 @@ function RepairProgressPanel({ jobId, onDismiss }: { jobId: string; onDismiss: (
       {runs("fetch") && (
         <div className="mb-3 text-sm">
           <div className="text-gray-300 mb-1 flex items-center gap-1">
-            Step 1 — fetch <InfoTip id="step.fetch" />
+            Step 1: fetch <InfoTip id="step.fetch" />
             {data.ensure ? <span className="text-gray-500 ml-2 text-xs">
               ({data.ensure.rowsFetched.toLocaleString()} fetched, {data.ensure.sentinelsWritten.toLocaleString()} sentinels, {data.ensure.skipped.toLocaleString()} skipped, {data.ensure.tilesSkipped.toLocaleString()} tiles skipped)
             </span> : data.state === "fetching" ? <span className="text-blue-400 ml-2 text-xs">running…</span> : null}
@@ -127,7 +127,7 @@ function RepairProgressPanel({ jobId, onDismiss }: { jobId: string; onDismiss: (
       {runs("stables") && (
         <div className="mb-3 text-sm">
           <div className="text-gray-300 mb-1 flex items-center gap-1">
-            Step 2 — stables <InfoTip id="step.stables" />
+            Step 2: stables <InfoTip id="step.stables" />
             {data.backfill ? <span className="text-gray-500 ml-2 text-xs">
               ({data.backfill.rowsInserted.toLocaleString()} inserted, {data.backfill.rowsSkippedNoBtc.toLocaleString()} skipped no-btc)
             </span> : data.state === "stables" ? <span className="text-blue-400 ml-2 text-xs">running…</span> : null}
@@ -140,7 +140,7 @@ function RepairProgressPanel({ jobId, onDismiss }: { jobId: string; onDismiss: (
       {runs("recompose") && (
         <div className="mb-4 text-sm">
           <div className="text-gray-300 mb-1 flex items-center gap-1">
-            Step 3 — recompose <InfoTip id="step.recompose" />
+            Step 3: recompose <InfoTip id="step.recompose" />
             {data.recompose ? <span className="text-gray-500 ml-2 text-xs">
               ({data.recompose.recomposed.toLocaleString()} recomposed, {data.recompose.skippedNoSources.toLocaleString()} skipped no-sources)
             </span> : data.state === "recomposing" ? <span className="text-blue-400 ml-2 text-xs">running…</span> : null}
@@ -330,9 +330,9 @@ export default function RepairRangePanel({ currency, sourceNames }: { currency: 
           </div>
           {/* Current timeline */}
           <div className="mt-3 text-xs">
-            <div className="text-gray-500 mb-1">Formula timeline ({currency}) — what each minute composes from:</div>
+            <div className="text-gray-500 mb-1">Formula timeline ({currency}), what each minute composes from:</div>
             {versions.length === 0 ? (
-              <div className="text-gray-600">No versions yet — repair lazily seeds an epoch baseline from the current live feeds on first run.</div>
+              <div className="text-gray-600">No versions yet. Repair lazily seeds an epoch baseline from the current live feeds on first run.</div>
             ) : (
               <div className="space-y-1 font-mono">
                 {versions.map((v) => (

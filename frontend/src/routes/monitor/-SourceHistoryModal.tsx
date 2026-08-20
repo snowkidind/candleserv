@@ -100,7 +100,7 @@ export default function SourceHistoryModal({ source, onClose }: Props) {
       >
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-medium text-gray-100 capitalize">
-            {source} — 180 day history
+            {source}: 180 day history
           </h2>
           <button
             onClick={onClose}
@@ -132,7 +132,7 @@ export default function SourceHistoryModal({ source, onClose }: Props) {
 
             {hover && (
               <div className="mt-3 text-xs text-gray-400 font-mono">
-                {new Date(hover.day).toISOString().slice(0, 10)} —
+                {new Date(hover.day).toISOString().slice(0, 10)}:{" "}
                 used {hover.used}, formula-excluded {hover.formulaExcluded},
                 outlier-rejected {hover.outlierRejected}, missing {hover.missing}
               </div>

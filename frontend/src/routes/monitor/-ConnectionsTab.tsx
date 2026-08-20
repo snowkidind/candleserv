@@ -137,7 +137,7 @@ function FormulaDiffModal({
         </div>
         {toInclude.length > 0 && (
           <div className="mt-4 text-xs text-yellow-400/80 leading-relaxed">
-            ⚠ Re-including a source resumes fetching from the next tick. The archive gap accumulated during the exclusion window will NOT be filled automatically — use Repair Range in the Admin tab if you need to backfill it.
+            ⚠ Re-including a source resumes fetching from the next tick. The archive gap accumulated during the exclusion window will NOT be filled automatically. Use Repair Range in the Admin tab if you need to backfill it.
           </div>
         )}
         <div className="flex justify-end gap-2 mt-5">
@@ -218,7 +218,7 @@ function LiveFormulaEditor({
         <h3 className="text-sm font-medium text-gray-200">Live formula</h3>
         {live.lastChange && (
           <span className="text-xs text-gray-500">
-            Last change: {timeAgo(live.lastChange.at)} — {live.lastChange.by}
+            Last change: {timeAgo(live.lastChange.at)} by {live.lastChange.by}
             {" "}{live.lastChange.setOrUnset === "set" ? "excluded" : "included"} {live.lastChange.exchange}
           </span>
         )}

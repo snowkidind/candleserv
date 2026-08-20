@@ -137,7 +137,7 @@ const SECTIONS: Section[] = [
         sample: `{ "results": [ { "tf": "1h", "currency": "BTC", "endingAt": "…", "candles": [ … ] }, … ] }`,
         notes: [
           "Max 16 entries; each limit a positive integer capped at 5000. waitForFresh not supported here.",
-          "Semantically a read — allowed on read-only replicas, blocked (503) during repair.",
+          "Semantically a read: allowed on read-only replicas, blocked (503) during repair.",
         ],
       },
       {
@@ -160,14 +160,14 @@ const SECTIONS: Section[] = [
         sample: `event: candles
 data: { "currency": "BTC", "candles": [ … ], "count": 5 }`,
         notes: [
-          "Dropped briefly at the start of a repair job — reconnect on disconnect.",
+          "Dropped briefly at the start of a repair job; reconnect on disconnect.",
         ],
       },
     ],
   },
   {
     name: "Premium",
-    blurb: "Per-venue cross-exchange premium-offset (basis) history — the signed-USD leave-one-out deviation from cross-venue consensus the composite engine computes internally and discards. Bitfinex is the headline venue.",
+    blurb: "Per-venue cross-exchange premium-offset (basis) history: the signed-USD leave-one-out deviation from cross-venue consensus the composite engine computes internally and discards. Bitfinex is the headline venue.",
     endpoints: [
       {
         method: "GET",
@@ -340,7 +340,7 @@ export default function ApiTab() {
         <p className="text-sm text-gray-400 leading-relaxed">
           <span className="font-mono text-gray-300">/health</span> is open. Every{" "}
           <span className="font-mono text-gray-300">/v1/*</span> route requires a per-request signed token in the{" "}
-          <span className="font-mono text-gray-300">Authorization</span> header — the header value <em>is</em> the token
+          <span className="font-mono text-gray-300">Authorization</span> header. The header value <em>is</em> the token
           (no <span className="font-mono">Bearer</span> prefix).
         </p>
         <Code>{`token = base64( apiKey + ":" + nonce + ":" + chop )
@@ -349,7 +349,7 @@ chop  = SHA256( apiSecret + ":" + nonce ).hex.slice(0, 19)`}</Code>
           <li className="text-sm text-gray-500 flex gap-2">
             <span className="text-gray-700">▸</span>
             <span>
-              <span className="text-gray-400">nonce</span> must strictly increase per key — the server rejects any
+              <span className="text-gray-400">nonce</span> must strictly increase per key; the server rejects any
               nonce ≤ the last one it saw (<span className="font-mono">401 Nonce replay rejected</span>). Use{" "}
               <span className="font-mono">Date.now()</span> and persist the last value.
             </span>

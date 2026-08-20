@@ -138,8 +138,8 @@ export default function FeedsTab() {
       const r = await updateCurrency(code, { enabled });
       if (enabled && r.backfill) {
         flash(r.backfill === "started"
-          ? `${code} enabled — backfill started`
-          : `${code} enabled — backfill deferred (queued behind an in-progress backfill)`);
+          ? `${code} enabled, backfill started`
+          : `${code} enabled, backfill deferred (queued behind an in-progress backfill)`);
       } else {
         flash(`${code} ${enabled ? "enabled" : "disabled"}`);
       }
@@ -189,7 +189,7 @@ export default function FeedsTab() {
 
       {ro && (
         <div className="mb-3 px-3 py-2 rounded bg-gray-900 border border-gray-800 text-gray-500 text-xs">
-          🔒 Read-only — feed configuration requires modify access.
+          🔒 Read-only. Feed configuration requires modify access.
         </div>
       )}
 
@@ -243,7 +243,7 @@ export default function FeedsTab() {
               <span className="text-gray-200 flex items-center gap-1">Premium-offset correction <InfoTip id="feeds.premiumOffset" /></span>
             </label>
             <p className="text-gray-600 text-xs mt-1 ml-7">
-              Inert until the token has ≥3 accepted venues — below that the plain pegged medians are used.
+              Inert until the token has ≥3 accepted venues; below that the plain pegged medians are used.
             </p>
           </div>
 
@@ -258,7 +258,7 @@ export default function FeedsTab() {
               <span className="text-gray-200 flex items-center gap-1">Flat-fill empty minutes <InfoTip id="feeds.flatFillEmpty" /></span>
             </label>
             <p className="text-gray-600 text-xs mt-1 ml-7">
-              On for thin tokens — a no-trade minute carries the previous close (volume 0) instead of striking the venue.
+              On for thin tokens: a no-trade minute carries the previous close (volume 0) instead of striking the venue.
             </p>
           </div>
 
@@ -403,7 +403,7 @@ export default function FeedsTab() {
           {!ro && (
             <details className="border-t border-gray-800 pt-4">
               <summary className="cursor-pointer text-gray-300 text-sm select-none">
-                Repair Range <span className="text-gray-600">— historical fill / recompose for {cur.code}</span>
+                Repair Range <span className="text-gray-600">(historical fill / recompose for {cur.code})</span>
               </summary>
               <div className="mt-3">
                 <RepairRangePanel key={cur.code} currency={cur.code} sourceNames={SOURCES} />

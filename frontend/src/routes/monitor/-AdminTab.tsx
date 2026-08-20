@@ -34,7 +34,7 @@ function SourcePrunePauseCard({ readOnly }: { readOnly: boolean }) {
           className="accent-blue-600"
         />
         <span className="text-gray-300">
-          {paused ? "Pruning PAUSED — raw source + pegs kept" : "Pruning active (daily, per-currency retention)"}
+          {paused ? "Pruning PAUSED (raw source + pegs kept)" : "Pruning active (daily, per-currency retention)"}
         </span>
       </label>
       <p className="text-gray-600 text-xs mt-1">
@@ -151,7 +151,7 @@ function ApiKeysSection() {
       {/* Show newly issued key — shown once */}
       {newKey && (
         <div className="bg-gray-900 border border-green-800 rounded-lg p-3 text-xs space-y-1">
-          <div className="text-green-400 font-medium mb-2">Key issued — copy secret now, it will not be shown again</div>
+          <div className="text-green-400 font-medium mb-2">Key issued. Copy secret now, it will not be shown again</div>
           <div><span className="text-gray-500">apiKey: </span><span className="font-mono text-gray-200">{newKey.apiKey}</span></div>
           <div><span className="text-gray-500">secret: </span><span className="font-mono text-yellow-300">{newKey.secret}</span></div>
           <button onClick={() => setNewKey(null)} className="text-gray-600 hover:text-gray-400 mt-2 block">Dismiss</button>
@@ -457,7 +457,7 @@ function RuntimeSection() {
   });
   const sessionFlush = useMutation({
     mutationFn: flushSessions,
-    onSuccess: (r) => { setNote(`Flushed ${r.removed} session(s) — you'll be logged out shortly.`); setConfirmSessions(false); },
+    onSuccess: (r) => { setNote(`Flushed ${r.removed} session(s). You'll be logged out shortly.`); setConfirmSessions(false); },
     onError: (e) => { setNote(`Session flush failed: ${String(e)}`); setConfirmSessions(false); },
   });
 
