@@ -1,11 +1,10 @@
 import { query } from "./pool.js";
 import { log } from "../lib/log.js";
 
-// TON → GRAM rebrand transitional read alias (decision D1). The old `TON`
-// request code resolves to the renamed `GRAM` data on the /v1 read path only —
-// an explicit declared map, never a silent "try the other name". Deleted in
-// Stage 6 once no consumer requests TON. Do NOT alias the /monitor admin
-// surface or any write path.
+// TON → GRAM rebrand read alias: a request for the old `TON` code resolves to
+// the renamed `GRAM` data on the /v1 read path only — an explicit declared map,
+// never a silent "try the other name". Do NOT alias the /monitor admin surface
+// or any write path.
 const CURRENCY_ALIASES: Record<string, string> = { TON: "GRAM" };
 
 /**
