@@ -69,8 +69,9 @@ async function main(): Promise<void> {
   });
 
   // Setup-complete marker lives in app_settings (written by db/init.ts install
-  // or the legacy /setup wizard). DB is the single source of truth — no .env
-  // coupling. If the app_settings table is missing entirely, getSetting returns
+  // or the /setup wizard). This startup gate reads the DB marker; the /setup
+  // wizard mount in app.ts is gated separately on the SETUP_COMPLETE .env line.
+  // If the app_settings table is missing entirely, getSetting returns
   // null (logs the error) and we treat that as "not initialized."
   const setupComplete = await getSetting("setupComplete");
   if (setupComplete !== "true") {

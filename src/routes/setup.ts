@@ -79,9 +79,9 @@ router.post("/install", async (req, res) => {
 
     await insertStreamEvent("candleserv", "on");
 
-    // server.ts gates startup on app_settings.setupComplete='true' (single
-    // source of truth). The SETUP_COMPLETE .env line above is legacy and no
-    // longer read by the server — kept for backward visibility only.
+    // Two gates, written together so they agree: server.ts gates full startup
+    // on app_settings.setupComplete, and app.ts gates the /setup wizard mount on
+    // the SETUP_COMPLETE .env line written above.
     await setSetting("setupComplete", "true");
 
     log("[setup] install complete");
