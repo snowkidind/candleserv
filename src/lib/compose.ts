@@ -1,5 +1,5 @@
 /**
- * composeMinute — canonical Phase 3/5 compose function.
+ * composeMinute — canonical compose function.
  *
  * Reads per-source rows from `candles_1m_sources` for a given minute, applies
  * the supplied formula and the existing `rejected` flags on those rows, and
@@ -11,9 +11,8 @@
  *
  * Both paths run in a single transaction so the invariant
  *   `usedInFormula IS NULL  ⟺  no candles_1m row exists for this timestamp`
- * holds at commit. The plan-prescribed bulk UPDATE means stale archive rows
- * left over from a prior compose pass also get their flag set correctly —
- * this is the canonical form the partial Phase 3 implementation missed.
+ * holds at commit. The bulk UPDATE means stale archive rows left over from a
+ * prior compose pass also get their flag set correctly.
  *
  * Caller pre-computes baseline / minSources / volumeLeader so recomposeRange
  * doesn't pay those queries per-minute over a 180-day window.
@@ -73,8 +72,7 @@ export async function composeMinute(
   // Single JOIN: pulls the per-source candle and its paired stable rate
   // (NULL for USD-native venues, and — by the bundle invariant — NEVER NULL
   // for a non-rejected USDT BTC row, since the FK + collector transaction
-  // guarantee both halves commit together). See plan:
-  // candleserv-stablecoin-aware-index §Phase 2.
+  // guarantee both halves commit together).
   const res = await query(
     `SELECT s.source, s.open, s.high, s.low, s.close, s.volume,
             s.rejected, s."rejectedReason",
@@ -90,7 +88,7 @@ export async function composeMinute(
 
   const formulaExcluded = rows.filter((r) => excluded.has(r.source)).length;
 
-  // Per the plan: formula-excluded rows don't appear in the composite's
+  // Formula-excluded rows don't appear in the composite's
   // sourcesAttempted set at all (so they don't drag confidence down).
   // Rejected rows DO appear so buildComposite can factor them into the
   // rejectedRatio component of confidence.
@@ -213,8 +211,7 @@ export async function composeMinute(
       ],
     );
     // Single bulk UPDATE: every archive row at the minute gets its
-    // usedInFormula set based on (NOT excluded AND NOT rejected). Plan-canonical
-    // form — fixes the stale-NULL leftover problem from Phase 3.
+    // usedInFormula set based on (NOT excluded AND NOT rejected).
     await client.query(
       `UPDATE candles_1m_sources
           SET "usedInFormula" = (source != ALL($2::varchar[]) AND rejected = false),

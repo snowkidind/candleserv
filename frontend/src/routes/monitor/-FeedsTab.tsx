@@ -84,8 +84,7 @@ export default function FeedsTab() {
 
   // Seed the editable fields from the SELECTED currency only — keyed on
   // `selected`, NOT `currencies`, so the every-5s healer reload doesn't reset a
-  // field the operator is mid-edit. (This is what silently dropped a typed
-  // minSources before.)
+  // field the operator is mid-edit.
   useEffect(() => {
     const c = currencies.find(x => x.code === selected);
     setMinSrcInput(c?.minSources != null ? String(c.minSources) : "");
@@ -94,7 +93,7 @@ export default function FeedsTab() {
   }, [selected]);
 
   // Poll healer status to surface which currency is actively backfilling. The
-  // runBackfill activity is tagged with { currency } (Phase 5.5).
+  // runBackfill activity is tagged with { currency }.
   useEffect(() => {
     let alive = true;
     async function tick() {
@@ -281,7 +280,7 @@ export default function FeedsTab() {
             />
           </label>
 
-          {/* Source retention (Stage 7/8): per-currency archive depth + days-stored preview */}
+          {/* Source retention: per-currency archive depth + days-stored preview */}
           <div>
             <label className="flex items-center gap-3">
               <span className="text-gray-200 flex items-center gap-1">Source retention (days) <InfoTip id="feeds.sourceRetention" /></span>

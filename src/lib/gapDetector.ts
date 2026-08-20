@@ -164,7 +164,7 @@ export async function runGapScan(windowDays: number, currency: string): Promise<
 
     // B3 temporal floor: never scan before the currency's inception. A
     // not-yet-probed currency has inceptionTs = NULL → coalesce to now − 90d,
-    // never epoch (finding B-null). Resolve the NULL with ?? before any Date
+    // never epoch. Resolve the NULL with ?? before any Date
     // math; never `new Date(nullableInceptionTs)`.
     const inception = await getInceptionTs(currency);
     const floor = inception ?? new Date(Date.now() - NINETY_DAYS_MS);

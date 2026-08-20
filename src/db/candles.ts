@@ -4,7 +4,6 @@ import type { CandleRow, CandleJson } from "../types/index.js";
 // Public candle JSON surface. The `volume` field carries the NORMALIZED value
 // (volume × baseline/sourceCount), not the raw cross-source sum. The internal
 // DB schema still has both columns; this is just the API projection.
-// See plan: candleserv-exchange-expansion §Phase 2.5 (volume API consolidation).
 export function rowToJson(row: Record<string, unknown>): CandleJson {
   return {
     timestamp: new Date(row.timestamp as string | Date).getTime(),
@@ -182,9 +181,7 @@ export async function getCandles(opts: {
 
   // Aggregate from 1m: align to bucket boundaries, group, aggregate.
   // The `volume` output carries the NORMALIZED sum (volume × baseline/sourceCount
-  // per minute, then summed across the bucket). This corrects a latent bug
-  // where the function previously returned raw cross-source sums — fine while
-  // sourceCount was constant historically, wrong once 5→8 expansion landed.
+  // per minute, then summed across the bucket).
   const windowStart = new Date(endingAt.getTime() - minutes * limit * 60 * 1000);
   // $6 = anchor offset (seconds): Monday fold for 7d, zero (epoch-aligned) for every other TF.
   const anchorSec = tf === "7d" ? WEEK_ANCHOR_SEC : 0;
@@ -369,7 +366,7 @@ export async function get24hSourceStats(source: string): Promise<{
  * only between repairs by design — the archive does not grow unbounded.
  */
 export async function pruneSourceCandles(): Promise<void> {
-  // Per-currency retention (Stage 7): each currency prunes to its own
+  // Per-currency retention: each currency prunes to its own
   // sourceRetentionDays. A CORRELATED SUBQUERY (not a JOIN) is deliberate — a
   // JOIN would silently drop any candles_1m_sources row whose currency has no
   // currencies row (orphan) from the DELETE, so it would never prune → unbounded

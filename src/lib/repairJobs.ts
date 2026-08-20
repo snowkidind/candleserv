@@ -1,12 +1,12 @@
 /**
- * Repair-job state machine — Phase 5c of the exchange-expansion plan.
+ * Repair-job state machine.
  *
- * In-memory only (per the plan's resolved decision #7): a Map<jobId, state>
+ * In-memory only: a Map<jobId, state>
  * plus a `repairInProgress` single-flight flag. Server restart during a
  * running job means the job dies; the operator re-runs.
  *
- * State machine: queued → ensuring → backfilling → recomposing → done | failed | cancelled.
- * (backfilling = stable-rate backfill per Phase 5 of the stablecoin-aware index plan.)
+ * State machine: queued → fetching → stables → recomposing → done | failed | cancelled.
+ * (stables = the stable-rate backfill step.)
  *
  * Single-flight: only one job at a time. Auto-suspend formula edits and
  * operator PUT /monitor/formula still work during a repair (the formula is
@@ -68,8 +68,8 @@ export interface RepairJobState {
   sources?: string[];
   formula?: Formula;
   retryEmpty?: boolean;
-  repairExistingTokenMinutes?: boolean;  // Stage 6: ON → re-fetch + overwrite token archive (else fill holes only)
-  repairExistingStableMinutes?: boolean; // Stage 6: ON → re-fetch + overwrite pegs (else fill holes only)
+  repairExistingTokenMinutes?: boolean;  // ON → re-fetch + overwrite token archive (else fill holes only)
+  repairExistingStableMinutes?: boolean; // ON → re-fetch + overwrite pegs (else fill holes only)
   steps: RepairStep[];        // which units this job runs (subset of ALL_REPAIR_STEPS)
   suspendGlobal?: boolean;    // true → blocked ALL candle reads during the repair (shared pegs)
 
@@ -89,9 +89,9 @@ interface JobEntry {
 }
 
 const jobs = new Map<string, JobEntry>();
-// Per-currency lock (Stage 4): the set of currencies with an in-progress repair.
-// Single-flight is now PER CURRENCY — a TON repair no longer blocks a BTC read,
-// and a BTC repair can run while TON repairs. `globalSuspendCount` > 0 means a
+// Per-currency lock: the set of currencies with an in-progress repair.
+// Single-flight is PER CURRENCY — a TON repair does not block a BTC read, and a
+// BTC repair can run while TON repairs. `globalSuspendCount` > 0 means a
 // repair asked to block ALL candle reads (stable-rate repairs, since pegs are
 // shared across currencies); a counter, not a bool, so overlapping global
 // suspends compose correctly.
@@ -109,8 +109,8 @@ export function isGlobalRepairSuspend(): boolean {
 }
 
 /**
- * Any repair in any non-terminal state? Retained for status/recovery callers.
- * The repair LOCK no longer uses this — it gates per-currency (see repairLock).
+ * Any repair in any non-terminal state? Used only by status/recovery callers;
+ * the repair LOCK gates per-currency (see repairLock).
  */
 export function isRepairInProgress(): boolean {
   return repairingCurrencies.size > 0 || globalSuspendCount > 0;
@@ -153,9 +153,9 @@ export interface StartRepairJobRequest {
   sources?: string[];
   formula?: Formula;
   retryEmpty?: boolean;
-  repairExistingTokenMinutes?: boolean; // Stage 6 token toggle
-  repairExistingStableMinutes?: boolean; // Stage 6 stable toggle
-  steps?: RepairStep[];   // default: all three (today's full ensure→backfill→recompose chain)
+  repairExistingTokenMinutes?: boolean; // token toggle
+  repairExistingStableMinutes?: boolean; // stable toggle
+  steps?: RepairStep[];   // default: all three (the full fetch→stables→recompose chain)
   suspendGlobal?: boolean; // block ALL candle reads during the repair (stable-rate repairs — pegs are shared)
 }
 
@@ -342,7 +342,7 @@ export async function previewRepair(req: StartRepairJobRequest): Promise<RepairP
   const willBeRecomposed = totalMinutes;
 
   // 3. Archive holes — how many (minute, source) pairs are missing in the
-  // window. The denominator is the repair's ACTUAL fetch set (Stage 4): the
+  // window. The denominator is the repair's ACTUAL fetch set: the
   // per-op allow-list or the per-currency formula timeline union — NOT
   // getActiveFeeds, so the preview doesn't count holes for venues the repair
   // won't fetch (the coinbase/gate no_data waste). Excludes 'no_data' sentinels

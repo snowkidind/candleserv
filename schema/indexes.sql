@@ -13,15 +13,13 @@
 -- (INSERT ... ON CONFLICT DO NOTHING), so re-running them never duplicates or
 -- mutates a completed bar.
 --
--- Conventions — daily VALIDATED bar-for-bar against candleserv's live /v1/candles
--- (tf=1d) on 2026-06-11; weekly re-anchored to Monday 2026-08-13 (see below):
+-- Conventions:
 --   * UTC throughout (SET LOCAL timezone = 'UTC').
 --   * Daily bar  = [D 00:00, D+1 00:00), labeled by its START (D 00:00).
 --   * Weekly bar = [Mon 00:00, +7d), labeled by its START Monday. Weeks anchor to
---     Monday 00:00 UTC to match candleserv's /v1/candles 7d bars (Monday-aligned as
---     of the 2026-08-13 fix in db/candles.ts — the Binance/exchange convention the
---     oracle consumer assumes) and phaseserv's weekly Phase. (Previously Thursday,
---     matching the epoch-day-0 artifact in the REST aggregation — that was the bug.)
+--     Monday 00:00 UTC to match candleserv's /v1/candles 7d bars (the
+--     Binance/exchange convention the oracle consumer assumes) and phaseserv's
+--     weekly Phase.
 --   * open = first 1m open, close = last 1m close, high = max, low = min,
 --     volume / volumeNormalized = sum, over the bucket.
 --   * Only COMPLETE buckets are stored — the in-progress day/week is excluded

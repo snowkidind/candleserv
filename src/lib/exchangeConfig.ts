@@ -1,9 +1,8 @@
 /**
  * Per-exchange repair tuning, read from the tracked exchange_config.json at the
- * repo root (candleserv-repair-rework Stage 0/5, decision D4). Holds each venue's
- * tile_size / throttle_ms / timeout_ms and empirically-probed candle + peg depth
- * (minutes back from now the venue actually serves). NOT env vars, NOT a DB table
- * — a tracked JSON file plus an ephemeral per-run override for one-offs.
+ * repo root. Holds each venue's tile_size / throttle_ms / timeout_ms and
+ * empirically-probed candle + peg depth (minutes back from now the venue actually
+ * serves). NOT env vars, NOT a DB table — a tracked JSON file.
  *
  * The file is loaded once and cached. The probe (cli/probe-earliest.ts --write)
  * is what refreshes it on disk; this module only reads.
@@ -41,8 +40,7 @@ function loadFile(): Record<string, ExchangeTuning> {
 /**
  * Tuning for a source. Throws loud if the source is absent from the config — a
  * repair must not guess a rate limit (no silent default that could burst a venue
- * past its cap). (An ephemeral per-run override surface was specced but the UI is
- * read-only for now, so it's not built — the file/CLI is the edit path.)
+ * past its cap). (There is no per-run override UI; the file/CLI is the edit path.)
  */
 export function getExchangeTuning(source: string): ExchangeTuning {
   const base = loadFile()[source];

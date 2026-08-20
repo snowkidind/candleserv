@@ -316,7 +316,7 @@ router.put("/formula", ...modify, async (req, res) => {
  *           retryEmpty?: boolean, steps?: ("fetch"|"stables"|"recompose")[] }
  *
  * steps selects which units run (any non-empty subset); absent = all three (the
- * full ensure→backfill→recompose chain). Recompose-only = { steps: ["recompose"] }
+ * full fetch→stables→recompose chain). Recompose-only = { steps: ["recompose"] }
  * — re-derives the composite from the existing archive with no exchange fetches.
  *
  * dry=true returns { preview }. dry=false starts a job and returns { jobId }.
@@ -377,7 +377,7 @@ router.post("/repair", ...modify, async (req, res) => {
   }
 
   // Optional step selection — any non-empty subset of fetch/stables/recompose.
-  // Default (absent) = all three = today's full ensure→backfill→recompose chain.
+  // Default (absent) = all three = the full fetch→stables→recompose chain.
   // Recompose-only = { steps: ["recompose"] } (no exchange fetches).
   let steps: RepairStep[] | undefined;
   if (body.steps !== undefined) {
@@ -393,12 +393,12 @@ router.post("/repair", ...modify, async (req, res) => {
   }
 
   const retryEmpty = Boolean(body.retryEmpty);
-  // Stage 6 existing-minute toggles. OFF (default) → fill only holes (coverage-
+  // Existing-minute toggles. OFF (default) → fill only holes (coverage-
   // skip, fast/resumable). ON → re-fetch + overwrite that domain.
   const repairExistingTokenMinutes = Boolean(body.repairExistingTokenMinutes);
   const repairExistingStableMinutes = Boolean(body.repairExistingStableMinutes);
   // Block ALL candle reads during the repair (not just this currency). Surfaced
-  // by the UI when the stable toggle is on, since pegs are shared (Stage 4/6).
+  // by the UI when the stable toggle is on, since pegs are shared.
   const suspendGlobal = Boolean(body.suspendGlobal);
   const dry = req.query.dry === "true";
 
@@ -580,7 +580,7 @@ router.get("/ping", ...view, (_req, res) => {
 
 /**
  * GET /monitor/me — the authed user's permission map + demo flag, for frontend
- * tab gating (finding B5). Returns the real permission map (not a fabricated
+ * tab gating. Returns the real permission map (not a fabricated
  * isAdmin) so the UI gates Connections/Feeds/Admin on CAN_MODIFY_CANDLESERV,
  * consistent with the requirePerm guards on the modify routes.
  */
@@ -765,7 +765,7 @@ router.get("/admin/actions", ...view, async (req, res) => {
   }
 });
 
-// ── Feeds / currency control plane (multi-currency Phase 9.3) ──────────────────
+// ── Feeds / currency control plane ────────────────────────────────────────────
 
 function serializeCurrency(c: Awaited<ReturnType<typeof getCurrency>>) {
   if (!c) return null;
@@ -782,7 +782,7 @@ router.get("/currencies", ...view, async (_req, res) => {
   try {
     const currencies = await listCurrencies();
     // Days of source archive currently stored per currency (now − oldest minute),
-    // for the retention preview (Stage 8). One grouped query.
+    // for the retention preview. One grouped query.
     const daysRes = await query(
       `SELECT "currency", FLOOR(EXTRACT(EPOCH FROM (NOW() - MIN("timestamp"))) / 86400)::int AS days
          FROM candles_1m_sources GROUP BY "currency"`,
@@ -864,7 +864,7 @@ router.put("/currencies/:code", ...modify, async (req, res) => {
     if (typeof body.enabled === "boolean") {
       await setCurrencyEnabled(code, body.enabled);
       if (body.enabled && !existing.enabled) {
-        backfill = await onboardCurrency(code);   // canonical onboarding kick (B1)
+        backfill = await onboardCurrency(code);   // canonical onboarding kick
       }
     }
 
@@ -912,8 +912,8 @@ router.put("/currencies/:code/feeds", ...modify, async (req, res) => {
  * currency: fetch one recently-closed minute from each mapped venue and set
  * currency_sources.available accordingly. Availability is host-dependent
  * (D-OKX: okx is geo-blocked from some hosts), so it reflects reality for the
- * host this runs on. The deep inception fetchRange walk-back is the separate
- * Phase 2.4 probe and is intentionally not run here.
+ * host this runs on. The deep inception fetchRange walk-back is a separate
+ * probe and is intentionally not run here.
  */
 router.post("/currencies/:code/probe", ...modify, async (req, res) => {
   const code = req.params.code.toUpperCase();
@@ -966,7 +966,7 @@ router.post("/currencies/:code/probe", ...modify, async (req, res) => {
 });
 
 /**
- * Per-currency formula TIMELINE (Stage 3/8). The effective-dated record of which
+ * Per-currency formula TIMELINE. The effective-dated record of which
  * venues compose this currency over time; repair/heal/recompose resolve it
  * as-of each minute. Distinct from the LIVE feeds (currency_sources) and the
  * GLOBAL kill-switch (formula_changes).

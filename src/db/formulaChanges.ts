@@ -5,8 +5,6 @@
  * The `formula_changes` table is the storage. The in-memory mirror is the
  * hot-path read (no DB roundtrip per compose tick). Both stay in sync via the
  * mutation helpers below — never write to formula_changes directly.
- *
- * See plan: candleserv-exchange-expansion §Phase 3.
  */
 import { query } from "./pool.js";
 import { recordAdminAction } from "./adminActions.js";
@@ -38,10 +36,10 @@ export interface FormulaChange {
 const mirror = new Map<string, FormulaChange>();
 let lastChange: FormulaChange | null = null;
 
-// The per-source 24h failure record and the auto-ban suspended set moved to the
-// Redis overlay (lib/redis.ts) in Stage 3 — they are ephemeral, global,
-// live-collector-only liveness state, not durable formula intent. formula_changes
-// now holds ONLY the operator's GLOBAL kill-switch; auto-bans never land here.
+// The per-source 24h failure record and the auto-ban suspended set live in the
+// Redis overlay (lib/redis.ts) — they are ephemeral, global, live-collector-only
+// liveness state, not durable formula intent. formula_changes holds ONLY the
+// operator's GLOBAL kill-switch; auto-bans never land here.
 
 /**
  * Hydrate the in-memory mirror from formula_changes on boot. Reads the latest

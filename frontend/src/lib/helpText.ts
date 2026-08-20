@@ -1,5 +1,5 @@
-// Inline help registry, keyed by control id (candleserv-repair-rework Stage 8 /
-// Appendix A). Effect + consequence, plain English. Rendered by <InfoTip id=…>.
+// Inline help registry, keyed by control id. Effect + consequence, plain
+// English. Rendered by <InfoTip id=…>.
 // "Step", never "phase" (reserved for Biasserv Phase Events).
 export const HELP_TEXT: Record<string, string> = {
   // ── Repair Range ──────────────────────────────────────────────────────────

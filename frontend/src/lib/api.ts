@@ -7,7 +7,7 @@ async function req<T>(path: string, opts?: RequestInit): Promise<T> {
     "Content-Type": "application/json",
     ...(opts?.headers as Record<string, string> | undefined),
   };
-  // Demo reads carry the server-injected signed page token (Phase 10).
+  // Demo reads carry the server-injected signed page token.
   if (isDemo()) {
     const t = demoToken();
     if (t) headers["X-Demo-Token"] = t;
@@ -48,7 +48,7 @@ export interface HealthData {
 export const getHealth = () => req<HealthData>("/health");
 
 // Candles
-// `volume` carries the normalized value (Phase 2.5 plan).
+// `volume` carries the normalized value.
 export interface Candle {
   timestamp: number;
   open: number; high: number; low: number; close: number;
@@ -211,7 +211,7 @@ export const getRepairJob = (jobId: string) =>
 export const getActiveRepairJob = () =>
   req<RepairJobState | null>("/monitor/repair/current");
 
-// Per-currency formula TIMELINE (Stage 3/8): effective-dated venue allow-list
+// Per-currency formula TIMELINE: effective-dated venue allow-list
 // resolved by repair/heal/recompose as-of each minute.
 export interface FormulaVersion {
   effectiveFrom: string;   // ISO
@@ -354,14 +354,14 @@ export interface RateLimit {
 }
 export const getRateLimits = () => req<{ rateLimits: RateLimit[] }>("/monitor/rate-limits");
 
-// Current user — permission map + demo flag, for tab gating (B5).
+// Current user — permission map + demo flag, for tab gating.
 export interface Me {
   perms: Record<string, boolean>;
   isDemo: boolean;
 }
 export const getMe = () => req<Me>("/monitor/me");
 
-// Currencies / Feeds control plane (Phase 9.3 API).
+// Currencies / Feeds control plane.
 export interface CurrencyFeed {
   symbol: string;
   available: boolean;
@@ -375,7 +375,7 @@ export interface CurrencyInfo {
   flatFillEmpty: boolean;
   minSources: number | null;
   inceptionTs: string | null;
-  sourceRetentionDays: number | null;   // null → global default 180 (Stage 7)
+  sourceRetentionDays: number | null;   // null → global default 180
   sourceDaysStored: number;              // days of source archive currently stored (now − oldest minute)
   createdAt: string;
   updatedAt: string;

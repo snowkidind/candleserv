@@ -2,7 +2,7 @@
  * One-off research probe: empirically discover how far back each adapter serves
  * 1m data, per currency. Binary-searches the earliest endTime at which the venue
  * returns data, then reports the actual earliest timestamp. Probes TWO
- * independent depths per venue (Stage 0 of plans/candleserv-repair-rework.md):
+ * independent depths per venue:
  *   (a) candle history per (source, currency) — via the raw fetchRange exports;
  *   (b) peg history per USDT source — how far back its USDT→USD pair serves, via
  *       the raw fetch*StableRange exports. These differ: a venue can have deep

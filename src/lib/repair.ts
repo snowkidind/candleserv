@@ -1,5 +1,5 @@
 /**
- * Repair operations — Phase 5 of the exchange-expansion plan.
+ * Repair operations.
  *
  *   ensureSourceCoverage   — fills missing per-source archive rows for a window.
  *                            Empty fetches get a "no_data" sentinel row so we
@@ -37,9 +37,9 @@ import { getExchangeTuning } from "./exchangeConfig.js";
 import { query } from "../db/pool.js";
 import { log, logError } from "./log.js";
 
-// Tile size / throttle / timeout are now PER VENUE, read from exchange_config.json
-// (getExchangeTuning) — a 1000-row venue no longer crawls at a 300-cap venue's
-// pace. See Stage 5 of plans/candleserv-repair-rework.md.
+// Tile size / throttle / timeout are PER VENUE, read from exchange_config.json
+// (getExchangeTuning) — each venue walks at its own pace, so a 1000-row venue is
+// not held to a 300-cap venue's pace.
 
 /**
  * Bound a single adapter fetch to the venue's timeout_ms. A timeout rejects so
@@ -69,7 +69,7 @@ export interface EnsureSourceCoverageResult {
 export interface EnsureSourceCoverageOpts {
   sources?: string[];        // default: all formula-included adapters
   retryEmpty?: boolean;      // default: false; if true, delete 'no_data' sentinels in the window first
-  overwriteExisting?: boolean; // Stage 6 (repairExistingTokenMinutes): bypass coverage-skip + ON CONFLICT DO UPDATE — re-fetch and overwrite existing rows. OFF (default) = coverage-skip + DO NOTHING (fast, resumable, fills only holes).
+  overwriteExisting?: boolean; // (repairExistingTokenMinutes): bypass coverage-skip + ON CONFLICT DO UPDATE — re-fetch and overwrite existing rows. OFF (default) = coverage-skip + DO NOTHING (fast, resumable, fills only holes).
   signal?: AbortSignal;      // honored at tile boundaries for cancellation
 }
 
@@ -104,7 +104,7 @@ export async function ensureSourceCoverage(
   // — the wrong set for a deep repair: it dragged in venues with no deep data,
   // returning ~390k no_data sentinels). NOT minus getCurrentFormula and NOT minus
   // the Redis auto-ban overlay — repair is the remediation that fixes the gap a
-  // ban caused, and the timeline is the per-currency source of truth (Stage 4).
+  // ban caused, and the timeline is the per-currency source of truth.
   // Symbols come from currency_sources (the feed map), independent of `available`.
   const selectedSources = opts?.sources ?? await resolveRepairSources(currency, from, to);
   const feedMap = await getFeedMap(currency);
@@ -317,7 +317,7 @@ export interface RecomposeRangeResult {
 }
 
 export interface RecomposeRangeOpts {
-  formula?: Formula;        // explicit per-op override; absent → per-minute formula timeline (Stage 3). Never writes formula_changes.
+  formula?: Formula;        // explicit per-op override; absent → per-minute formula timeline. Never writes formula_changes.
   signal?: AbortSignal;     // honored at minute granularity
 }
 

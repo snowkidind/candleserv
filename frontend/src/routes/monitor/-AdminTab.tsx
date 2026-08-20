@@ -11,8 +11,7 @@ import InfoTip from "@/components/InfoTip";
 import { isDemo } from "@/lib/demo";
 import { useCanModify } from "@/lib/access";
 
-// ── source-prune pause (D6: the healer panel is removed; this global pruning
-// kill-switch lives here instead) ─────────────────────────────────────────────
+// ── source-prune pause — global pruning kill-switch ───────────────────────────
 function SourcePrunePauseCard({ readOnly }: { readOnly: boolean }) {
   const qc = useQueryClient();
   const { data } = useQuery({ queryKey: ["config"], queryFn: getConfig });
@@ -228,7 +227,7 @@ function ConfigSection() {
           </div>
         ))}
 
-        {/* Public demo rate limit (Phase 10.1). Only active when IS_DEMO. */}
+        {/* Public demo rate limit. Only active when IS_DEMO. */}
         <div className="pt-2 border-t border-gray-800 space-y-2">
           <h3 className="text-xs font-medium text-gray-400">Public demo</h3>
           <label className="flex items-center gap-2 text-xs text-gray-400">
@@ -621,7 +620,7 @@ export default function AdminTab() {
             {noModify
               ? <LockedCard title="Maintenance" />
               : <SourcePrunePauseCard readOnly={demo} />}
-            <p className="text-xs text-gray-600">Repair Range moved to the Feeds tab (select a token there → expand “Repair Range”).</p>
+            <p className="text-xs text-gray-600">Repair Range is on the Feeds tab (select a token there → expand “Repair Range”).</p>
           </div>
         )}
         {sub === "Config" && (demo ? <LockedCard title="Configuration" /> : (

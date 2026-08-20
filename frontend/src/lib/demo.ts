@@ -1,5 +1,5 @@
 /**
- * Public demo mode (Phase 10) — client side.
+ * Public demo mode — client side.
  *
  * The server injects `window.__DEMO__ = { isDemo, token }` into index.html only
  * when running in demo mode (src/app.ts serveDemoIndex). The token is a

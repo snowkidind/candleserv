@@ -45,8 +45,7 @@ export async function fetchBinanceCandle(symbol: string, minuteTs: Date): Promis
 
 // Local USDT/USD rate bounds — loose enough to admit historical extremes like
 // USDT@0.85 in 2018, tight enough that hitting them means the upstream feed
-// is broken. See plan: candleserv-stablecoin-aware-index §Phase 1
-// "Sanity bounds on stable rate."
+// is broken.
 const STABLE_RATE_MIN = 0.50;
 const STABLE_RATE_MAX = 1.50;
 
@@ -59,7 +58,7 @@ function checkRateBound(name: string, rate: number): number {
 
 /**
  * Fetch binance's local USDT/USD rate at the given minute boundary.
- * Derivation: rate = 1 / USDCUSDT close (USDC treated as $1). See plan §Phase 1.
+ * Derivation: rate = 1 / USDCUSDT close (USDC treated as $1).
  */
 export async function fetchBinanceStableRate(minuteTs: Date): Promise<number> {
   const startTime = minuteTs.getTime();

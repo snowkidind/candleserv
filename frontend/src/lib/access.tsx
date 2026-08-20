@@ -1,9 +1,8 @@
 /**
  * Access context — exposes whether the current viewer may MUTATE state
- * (`canModify`). This is the single gate every control reads; it generalizes the
- * old per-control `isDemo()` checks so an authenticated *view-only* user (logged
- * in, but without CAN_MODIFY_CANDLESERV) gets the same read-only surface the
- * public demo does.
+ * (`canModify`). This is the single gate every control reads: an authenticated
+ * *view-only* user (logged in, but without CAN_MODIFY_CANDLESERV) gets the same
+ * read-only surface the public demo does.
  *
  * `canModify = !demo && perms.CAN_MODIFY_CANDLESERV`. It mirrors the backend's
  * `requirePerm("CAN_MODIFY_CANDLESERV")` guards on the mutation routes — the UI

@@ -51,8 +51,7 @@ function parseRow(row: unknown[]): { timestamp: Date; candle: SourceCandle } {
   };
 }
 
-// Local stable-rate sanity bounds. See plan: candleserv-stablecoin-aware-index
-// §Phase 1 "Sanity bounds on stable rate."
+// Local stable-rate sanity bounds.
 const STABLE_RATE_MIN = 0.50;
 const STABLE_RATE_MAX = 1.50;
 
@@ -76,7 +75,6 @@ function parseStableRow(row: unknown[]): { timestamp: Date; rate: number } {
 
 /**
  * Gate local USDT/USD rate. Derivation: rate = 1 / USDC_USDT close (USDC ≈ $1).
- * See plan §Per-venue stable rates.
  */
 export async function fetchGateStableRate(minuteTs: Date): Promise<number> {
   const fromSec = Math.floor(minuteTs.getTime() / 1000);

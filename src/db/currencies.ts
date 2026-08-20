@@ -33,7 +33,7 @@ export interface CurrencyRow {
   flatFillEmpty: boolean;
   minSources: number | null;
   inceptionTs: Date | null;
-  sourceRetentionDays: number | null;   // null → global default 180 (Stage 7)
+  sourceRetentionDays: number | null;   // null → global default 180
   createdAt: Date;
   updatedAt: Date;
 }
@@ -133,7 +133,7 @@ export async function setInceptionTs(code: string, inceptionTs: Date | null): Pr
   );
 }
 
-// Stage 7: per-currency source-archive retention (days). null → global default
+// Per-currency source-archive retention (days). null → global default
 // (180; see retention.ts). The composite candles_1m is kept forever regardless;
 // this governs only the per-venue source archive (candles_1m_sources) and, via
 // the snap-to-oldest rule, the shared peg table.

@@ -16,9 +16,9 @@ candleEmitter.setMaxListeners(1000);
 
 // Cache invalidation: drops the new candle's currency `candles:latest:<currency>:*`
 // keys on each new candle. Scoped by currency so an ETH candle never busts the
-// BTC latest cache (multi-currency Phase 7.3). Historical `candles:<currency>:*`
-// entries are left to their short boundary TTL (matching the pre-multi-currency
-// behavior); the repair path does the full-prefix flush when it rewrites history.
+// BTC latest cache. Historical `candles:<currency>:*` entries are left to their
+// short boundary TTL; the repair path does the full-prefix flush when it rewrites
+// history.
 // Extracted into a named function so closeAllListeners can re-attach it after a
 // drain — without this, the first repair would silently break the cache
 // invalidation that all REST consumers depend on.
@@ -36,7 +36,7 @@ candleEmitter.on("candle", cacheInvalidationHandler());
 
 /**
  * Drain all in-flight candle/source_state subscribers. Called by the repair
- * job start hook (Phase 5d): in-flight waitForFresh long-polls listen for
+ * job start hook: in-flight waitForFresh long-polls listen for
  * '__close__' and finish with 503; SSE consumers see a brief disconnect and
  * auto-reconnect. Without this, a long-poll attached before the repair-lock
  * middleware engaged would either hang past maxWaitMs or get resolved by a

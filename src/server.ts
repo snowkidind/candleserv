@@ -117,8 +117,8 @@ async function main(): Promise<void> {
     // Daily maintenance: prune sessions + the 180d-old per-venue SOURCE archive +
     // stable rates. Only the inputs to the composite are pruned — the composite
     // candles_1m (the canonical price series) is kept indefinitely, in prod AND
-    // demo. The stable_rates FK/cascade was dropped (D-STABLE-FK), so
-    // pruneOldStableRates is now the ONLY thing removing stale rate rows.
+    // demo. pruneOldStableRates is the ONLY thing removing stale rate rows
+    // (stable_rates has no FK/cascade).
     setInterval(async () => {
       try {
         await pruneOldSessions();

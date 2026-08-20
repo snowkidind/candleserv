@@ -30,8 +30,7 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 5180,
     strictPort: true,
-    // Canonical candleserv backend (CLAUDE.md port table). The multi-currency
-    // clone (candleserv-mc) runs its own backend on :3019 with its own frontend.
+    // candleserv backend.
     proxy: {
       "/v1": "http://localhost:3007",
       "/monitor": "http://localhost:3007",

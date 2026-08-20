@@ -72,13 +72,12 @@ export async function redisDelByPrefix(prefix: string): Promise<number> {
   }
 }
 
-// ── Auto-ban overlay (Stage 3) ──────────────────────────────────────────────
+// ── Auto-ban overlay ─────────────────────────────────────────────────────────
 // Ephemeral, GLOBAL (cross-currency), live-collector-only liveness state. The
 // rolling-24h per-source failure record + the suspended set live here, NOT in
 // formula_changes (which is durable operator intent) and NOT in the per-currency
-// formula timeline (which is history). Same threshold-10 / 24h policy as before
-// — only the storage relocated. The durable "auto-banned at T" audit stays in
-// the DB (recordError / admin_actions). ONLY the live collector subtracts this
+// formula timeline (which is history). Same threshold-10 / 24h policy. The
+// durable "auto-banned at T" audit stays in the DB (recordError / admin_actions). ONLY the live collector subtracts this
 // overlay; recompose / heal / repair ignore it (they fix the gap a ban caused).
 const AUTOBAN_FAIL_PREFIX = "candleserv:autoban:fail:";   // sorted set per source (score = failure ts)
 const AUTOBAN_SUSPEND_KEY = "candleserv:autoban:suspended"; // hash: field=source → JSON SuspendInfo

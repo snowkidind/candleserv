@@ -91,7 +91,7 @@ router.get("/latest", async (req, res) => {
  *
  * When waitForFresh=true, the response is held until a 1m candle whose close
  * timestamp is at-or-after endingAt has been ingested, or until maxWaitMs
- * elapses (504). See plans/candleserv-wait-for-fresh.md.
+ * elapses (504).
  */
 router.get("/", async (req, res) => {
   const { tf, endingAt, limit } = req.query as Record<string, string>;

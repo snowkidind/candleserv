@@ -18,8 +18,7 @@ export interface CandleRow {
 
 // Public candle JSON surface. `volume` carries the NORMALIZED value (raw ×
 // baseline/sourceCount). The two-column distinction lives only in the DB
-// schema and CandleRow; consumers see one `volume` field. See plan
-// candleserv-exchange-expansion §Phase 2.5.
+// schema and CandleRow; consumers see one `volume` field.
 export interface CandleJson {
   timestamp: number;   // Unix ms
   open: number;

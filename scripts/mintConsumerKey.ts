@@ -1,7 +1,7 @@
 /**
  * Mint an api_keys row for a consumer service (biasserv, phaseserv, dataserv, …).
  *
- * Invoked once per consumer by the ss-devops installer's Phase 10, and usable
+ * Invoked once per consumer by the ss-devops installer, and usable
  * standalone by operators of candleserv-as-product for key rotation or
  * recovery of a lost secret. Talks directly to the candleserv DB via the
  * existing apiKeys.ts helpers — does not require the HTTP server to be up.

@@ -3,8 +3,7 @@ import { recordError } from "../db/errors.js";
 import { logError, logWarn } from "./log.js";
 import { SOURCE_BITS, ADAPTER_BY_NAME } from "../adapters/registry.js";
 
-// Premium-offset correction tuning. See plan:
-// candleserv-stablecoin-aware-index §Phase 3. Pulls each venue's contribution
+// Premium-offset correction tuning. Pulls each venue's contribution
 // 80% of the way toward the leave-one-out consensus across its peers before
 // the final median, tightening the population on the wick fields and
 // neutralizing per-venue basis while preserving structural price moves.
@@ -160,7 +159,7 @@ export function applyGuards(
  *   is NOT peg-adjusted — venue volumes are venue-denominated base-asset
  *   quantities and the peg only applies to price.
  *
- * Pipeline (per plan: candleserv-stablecoin-aware-index §Phase 3):
+ * Pipeline:
  *   1. Peg-adjust each accepted source's candle.
  *   2. For each field (O,H,L,C) and each source, compute the leave-one-out
  *      median across the population (its "consensus") and pull the source's
@@ -168,8 +167,7 @@ export function applyGuards(
  *      Wicks may pass through uncorrected when the venue's profile sets
  *      applyOffsetToWicks=false (forward-looking for on-chain venues).
  *   3. The final composite OHLC are medians across the post-correction
- *      contributions — H/L come from the same population as O/C, replacing
- *      the prior dominant-source-wick rule.
+ *      contributions — H/L come from the same population as O/C.
  *
  * premiumEnabled: per-currency toggle (currencies.premiumEnabled). When false,
  *   the leave-one-out premium-offset correction (step 2) is bypassed entirely

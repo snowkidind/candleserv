@@ -22,8 +22,7 @@ import {
 } from "./bitget.js";
 
 /**
- * Per-venue normalization profile. See plan:
- * candleserv-stablecoin-aware-index §Per-source normalization profile.
+ * Per-venue normalization profile.
  *
  * The peg fetcher is attached directly to the adapter (rather than a separate
  * stable-adapter registry) so the BTC quote and the local stable rate are a

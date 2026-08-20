@@ -46,7 +46,7 @@ export async function authenticate(
   res: Response,
   next: NextFunction
 ): Promise<void | Response> {
-  // Public demo read (Phase 10): demoGate already validated the same-origin
+  // Public demo read: demoGate already validated the same-origin
   // signed page token for an allow-listed read path. Grant view-only access
   // without a session — modify routes require CAN_MODIFY and so stay blocked.
   if (req.demoRead) {

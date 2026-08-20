@@ -179,7 +179,7 @@ function RepairProgressPanel({ jobId, onDismiss }: { jobId: string; onDismiss: (
 
 // ── main panel ───────────────────────────────────────────────────────────────
 // `currency` is driven by the Feeds tab's selected currency sub-tab — no
-// independent dropdown (Stage 8). Remounted by key={currency} in FeedsTab, so
+// independent dropdown. Remounted by key={currency} in FeedsTab, so
 // per-currency state (preview, formula timeline, active job) starts clean.
 export default function RepairRangePanel({ currency, sourceNames }: { currency: string; sourceNames: string[] }) {
   const qc = useQueryClient();

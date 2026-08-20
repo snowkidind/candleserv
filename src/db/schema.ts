@@ -171,7 +171,7 @@ DROP INDEX IF EXISTS gaps_ts;
 CREATE INDEX IF NOT EXISTS gaps_curr_state_ts ON gaps ("currency", "state", "timestamp" DESC);
 CREATE INDEX IF NOT EXISTS gaps_curr_ts ON gaps ("currency", "timestamp" DESC);
 
--- Currency control plane (multi-currency Phase 1). "currencies" = one row per
+-- Currency control plane. "currencies" = one row per
 -- supported asset (chain on/off + per-token premium toggle + temporal floor).
 CREATE TABLE IF NOT EXISTS currencies (
   "code"           varchar      PRIMARY KEY,             -- 'BTC','ETH','TON','TRX','SOL','BNB'
@@ -181,7 +181,7 @@ CREATE TABLE IF NOT EXISTS currencies (
   "flatFillEmpty"  boolean      NOT NULL DEFAULT false,  -- D-FLATFILL: empty minute → carry prev close (thin tokens); false → empty = failure/strike (BTC + liquid)
   "minSources"     smallint,                             -- nullable → fall back to app_settings.minSources
   "inceptionTs"    timestamptz,                          -- B3 temporal floor; NULL → consumers COALESCE to now-90d, never epoch
-  "sourceRetentionDays" smallint,                        -- Stage 7: per-currency source-archive retention; NULL → global default 180. The composite candles_1m is kept forever regardless.
+  "sourceRetentionDays" smallint,                        -- per-currency source-archive retention; NULL → global default 180. The composite candles_1m is kept forever regardless.
   "createdAt"      timestamptz  NOT NULL DEFAULT NOW(),
   "updatedAt"      timestamptz  NOT NULL DEFAULT NOW()
 );
@@ -285,9 +285,9 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   // Kill-switch for source-archive pruning. "true" → daily maintenance skips
   // pruneSourceCandles + pruneOldStableRates (preserves a deep backfill's
   // source/pegs for recompose-only). Read cache-free (lib/retention.ts).
-  // Temporary until per-currency sourceRetentionDays lands.
+  // A global kill-switch, distinct from the per-currency sourceRetentionDays depth.
   sourcePrunePaused: "false",
-  // Public demo mode (Phase 10). IS_DEMO can also be forced via the env var of
+  // Public demo mode. IS_DEMO can also be forced via the env var of
   // the same name (env wins — see lib/demoMode.ts). When demo: api-key auth off,
   // monitor reads require a same-origin signed page token, limit/n clamped to
   // 200, optional IP rate-limit, ≤180d retention, Candles-only UI.
@@ -296,11 +296,11 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   rateLimitPerMinute: "120",
 };
 
-// Multi-currency Phase 1.9 seed. BTC is the working baseline (enabled, its feeds
+// Currency seed. BTC is the working baseline (enabled, its feeds
 // enabled); majors are seeded disabled until an operator turns them on from the
-// Feeds tab. currency_sources.available stays false everywhere until the Phase-2
-// per-host availability probe runs. inceptionTs left NULL (consumers COALESCE to
-// now-90d); the real candleserv migration seeds BTC inceptionTs = 2012-04-18.
+// Feeds tab. currency_sources.available stays false everywhere until the per-host
+// availability probe runs. inceptionTs left NULL (consumers COALESCE to
+// now-90d); the candleserv migration seeds BTC inceptionTs = 2012-04-18.
 const CURRENCY_META: Record<string, { displayName: string }> = {
   BTC: { displayName: "Bitcoin" },
   ETH: { displayName: "Ethereum" },

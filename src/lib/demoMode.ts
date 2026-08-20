@@ -1,5 +1,5 @@
 /**
- * Public demo mode (Phase 10).
+ * Public demo mode.
  *
  * A demo droplet runs its own DB (≤180d) and serves a read-only public page.
  * Demo posture (D4): api-key auth disabled, monitor reads require a same-origin
@@ -15,7 +15,7 @@ import type { Request } from "express";
 import { getSettingBool } from "../db/appSettings.js";
 import { logError } from "./log.js";
 
-// Max rows a demo read may return (Phase 10.5).
+// Max rows a demo read may return.
 export const DEMO_READ_CAP = 200;
 
 // Page-token lifetime. Re-minted on every index.html serve (so a normal browsing
@@ -60,7 +60,6 @@ export async function readCap(normalCap: number): Promise<number> {
   return (await isDemoMode()) ? Math.min(normalCap, DEMO_READ_CAP) : normalCap;
 }
 
-/** True iff this is a GET request to one of the public demo read paths. */
 /** A demo-allowed read: any /monitor GET that isn't a secret-bearing path. */
 export function isDemoReadPath(req: Request): boolean {
   return req.method === "GET"

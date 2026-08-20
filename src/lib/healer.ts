@@ -81,7 +81,7 @@ export async function isHealerPaused(currency: string): Promise<boolean> {
 
 // B3 temporal floor: the earliest minute a currency should ever be scanned or
 // backfilled from. A not-yet-probed currency has inceptionTs = NULL — it MUST
-// coalesce to now − 90d, never epoch (finding B-null). Resolve the NULL with
+// coalesce to now − 90d, never epoch. Resolve the NULL with
 // ?? before any Date math; never `new Date(nullableInceptionTs)`.
 async function backfillFloor(currency: string): Promise<Date> {
   const inception = await getInceptionTs(currency);
@@ -466,8 +466,8 @@ async function backfillDay(currency: string, dayStart: Date): Promise<void> {
 }
 
 /**
- * Backfill a currency's initial history (B1). Per-currency completion latch
- * (backfillComplete:<code>). Window floored at the currency's inception (B3) so
+ * Backfill a currency's initial history. Per-currency completion latch
+ * (backfillComplete:<code>). Window floored at the currency's inception so
  * a recently-listed token backfills only from inception, not 90 d of empty
  * minutes — and a not-yet-probed currency floors at now − 90d, never epoch.
  * Serialized by the global in-flight guard.
@@ -536,7 +536,7 @@ export async function runBackfill(currency: string): Promise<void> {
 }
 
 /**
- * Currency onboarding (B1) — the single canonical path for a newly-enabled
+ * Currency onboarding — the single canonical path for a newly-enabled
  * currency to get its initial history. Clears the per-currency latch and kicks
  * runBackfill fire-and-forget behind the global in-flight guard. Returns whether
  * the backfill STARTED now or was DEFERRED (guard busy with another currency)

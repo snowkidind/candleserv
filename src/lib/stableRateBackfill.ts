@@ -1,5 +1,5 @@
 /**
- * Stable-rate backfill — Phase 5 of candleserv-stablecoin-aware-index.
+ * Stable-rate backfill.
  *
  * For each USDT venue (binance, bybit, bitget, gate), fetches the venue's
  * local USDT→USD rate over a window via its adapter's pegFetcherRange and
@@ -29,7 +29,7 @@ import { query } from "../db/pool.js";
 import { log, logError, logWarn } from "./log.js";
 
 // Tile size / throttle / timeout are PER VENUE, from exchange_config.json
-// (getExchangeTuning) — Stage 5. Peg depth is a separate gate (below).
+// (getExchangeTuning). Peg depth is a separate gate (below).
 
 /** Bound a single peg fetch to the venue's timeout_ms (see repair.ts withTimeout). */
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {

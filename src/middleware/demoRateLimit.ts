@@ -1,5 +1,5 @@
 /**
- * Demo IP rate-limits (Phase 10.4). No-ops unless IS_DEMO AND rateLimitEnabled.
+ * Demo IP rate-limits. No-ops unless IS_DEMO AND rateLimitEnabled.
  * Sliding 60s window per client IP.
  *
  *  - `demoRateLimit`     → the public read paths (mounted after repairLock).

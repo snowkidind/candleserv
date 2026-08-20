@@ -2,8 +2,8 @@ import { useState } from "react";
 import { HELP_TEXT } from "@/lib/helpText";
 
 /**
- * Hover/tap ⓘ → popover with the help text for a control id (candleserv-repair-
- * rework Stage 8 / Appendix A). Tailwind only, no heavy dep. Hover for desktop,
+ * Hover/tap ⓘ → popover with the help text for a control id. Tailwind only, no
+ * heavy dep. Hover for desktop,
  * click/tap to pin for touch. Unknown ids render nothing (so a not-yet-written
  * id is a no-op, not a crash).
  */

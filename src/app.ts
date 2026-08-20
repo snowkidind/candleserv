@@ -55,12 +55,12 @@ export async function createApp(): Promise<express.Application> {
     });
   }
 
-  // Phase 5 repair-lock: 503 on candle-poll endpoints while a recompose/repair
+  // Repair-lock: 503 on candle-poll endpoints while a recompose/repair
   // job is in flight. Whitelists SSE, /health, repair job status/cancel, and
   // every other /monitor/* path. Mirrors the READONLY_MODE pattern above.
   app.use(repairLock);
 
-  // Demo IP rate-limit (Phase 10.4) — no-op unless IS_DEMO && rateLimitEnabled.
+  // Demo IP rate-limit — no-op unless IS_DEMO && rateLimitEnabled.
   // Mounted right after repairLock so demo read floods are shed early.
   app.use(demoRateLimit);
 
@@ -87,7 +87,7 @@ export async function createApp(): Promise<express.Application> {
   // Setup wizard routes (still accessible post-install for reference, but install will error gracefully)
   app.use("/setup", setupRouter);
 
-  // Demo gate (Phase 10.2) — no-op unless IS_DEMO. Disables /v1 and gates the
+  // Demo gate — no-op unless IS_DEMO. Disables /v1 and gates the
   // public monitor read paths on a same-origin signed page token. Must precede
   // the /v1 + monitor routers.
   app.use(demoGate);
@@ -96,7 +96,7 @@ export async function createApp(): Promise<express.Application> {
   // domain router mounts at a DISJOINT /v1/<domain> sub-prefix so no router
   // falls through into a sibling's middleware. apiKeyAuth is stateful (advances
   // a single-use nonce); registering it per-router under a shared /v1 mount
-  // double-ran it via Express fall-through → 401 Nonce replay. See plan D10.
+  // double-ran it via Express fall-through → 401 Nonce replay.
   app.use("/v1", apiKeyAuth);
   app.use("/v1/candles", v1CandlesRouter);
   app.use("/v1/premium", v1PremiumRouter);
@@ -121,7 +121,7 @@ export async function createApp(): Promise<express.Application> {
 
   // Serve frontend static files. In demo, index.html (the SPA entry + every
   // deep-link fallback) is served with a freshly-minted signed page token
-  // injected as window.__DEMO__ (Phase 10.3); assets still come from static.
+  // injected as window.__DEMO__; assets still come from static.
   const frontendDist = path.join(__dirname, "..", "frontend", "dist");
   const indexHtmlPath = path.join(frontendDist, "index.html");
   const spaFallback = /^(?!\/v1|\/monitor|\/health|\/setup|\/internal).*/;

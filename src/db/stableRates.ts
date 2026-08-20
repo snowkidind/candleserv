@@ -1,13 +1,11 @@
 /**
- * Per-venue local USDT/USD rate archive. See plan:
- * candleserv-stablecoin-aware-index §Phase 1.
+ * Per-venue local USDT/USD rate archive.
  *
- * This table is currency-agnostic (peg is per-venue, asset-independent). The FK
- * to candles_1m_sources(timestamp, source) was dropped under multi-currency
- * D-STABLE-FK — once that PK gained "currency", (timestamp, source) was no
- * longer a unique target. The soft invariant (a rate row implies ≥1 currency
- * was fetched from that venue that minute) is held by collector ordering, not a
- * constraint. The collector writes both halves of every venue bundle in a
+ * This table is currency-agnostic (peg is per-venue, asset-independent). It has
+ * no FK to candles_1m_sources — (timestamp, source) is not a unique target there
+ * once the PK includes "currency". The soft invariant (a rate row implies ≥1
+ * currency was fetched from that venue that minute) is held by collector
+ * ordering, not a constraint. The collector writes both halves of every venue bundle in a
  * single transaction via withTransaction — the SQL below is the canonical
  * shape, but the live write path inlines it inside the transaction (see
  * collector.ts) so it shares a connection with the candle insert.
@@ -76,13 +74,13 @@ export async function getStableRatesAt(ts: Date): Promise<Map<string, number>> {
  * Drop stale peg rows. The peg table is SHARED (no currency column — one row per
  * minute+venue), so it SNAPS TO THE OLDEST retention across currencies: a peg at
  * minute X is needed by ANY currency holding a candle at X, so it must survive as
- * long as the most-retained currency (Stage 7, decision D5). Floored at the
+ * long as the most-retained currency. Floored at the
  * global 180 default via GREATEST.
  *
- * This is the SOLE prune path: the FK to candles_1m_sources (and its ON DELETE
- * CASCADE) was dropped under multi-currency D-STABLE-FK, so nothing removes stale
- * rate rows implicitly — this must run in the daily maintenance loop or rates
- * accumulate unbounded.
+ * This is the SOLE prune path: stable_rates_1m_sources has no FK to
+ * candles_1m_sources and no ON DELETE CASCADE, so nothing removes stale rate rows
+ * implicitly — this must run in the daily maintenance loop or rates accumulate
+ * unbounded.
  */
 export async function pruneOldStableRates(): Promise<void> {
   await query(

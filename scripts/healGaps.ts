@@ -6,13 +6,13 @@
  * multi-hour outages on a prod instance where backfillComplete=true.
  *
  * For each contiguous block of missing minutes, calls healRange(from, to, true)
- * — which fetches from all five exchanges in tiles, applies guards
+ * — which fetches from all enabled venues in tiles, applies guards
  * (applyGuards: minSources, sigma close-outlier rejection), and writes a
  * composite row via buildComposite (with confidence score + trailing volume
  * leader normalization).
  *
  * Also keeps the `gaps` table coherent: any filled minute is marked 'healed',
- * any minute all five exchanges refused is marked 'unresolvable'.
+ * any minute every venue refused is marked 'unresolvable'.
  *
  * Usage:
  *   npx tsx scripts/healGaps.ts [days]          # default 7
@@ -99,9 +99,9 @@ async function reportConfidence(currency: string, from: Date, to: Date): Promise
   const r = res.rows[0];
   console.log(`  window rows:       ${r.total}`);
   console.log(`  avg confidence:    ${r.avg_confidence}`);
-  console.log(`  full (5/5):        ${r.full_confidence}`);
-  console.log(`  partial (3-4/5):   ${r.partial_confidence}`);
-  console.log(`  low (<3/5):        ${r.low_confidence}`);
+  console.log(`  full (conf ≥ 1.0):     ${r.full_confidence}`);
+  console.log(`  partial (0.6–1.0):     ${r.partial_confidence}`);
+  console.log(`  low (conf < 0.6):      ${r.low_confidence}`);
 }
 
 async function healCurrency(currency: string, days: number, dryRun: boolean): Promise<void> {

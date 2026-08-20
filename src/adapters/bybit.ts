@@ -36,8 +36,7 @@ export async function fetchBybitRange(symbol: string, endTime: Date, limit: numb
   }
 }
 
-// Local stable-rate sanity bounds. See plan: candleserv-stablecoin-aware-index
-// §Phase 1 "Sanity bounds on stable rate."
+// Local stable-rate sanity bounds.
 const STABLE_RATE_MIN = 0.50;
 const STABLE_RATE_MAX = 1.50;
 
@@ -54,8 +53,6 @@ function checkRateBound(name: string, rate: number): number {
  * fallback to lastPrice). The endpoint accepts no timestamp parameter —
  * minuteTs is ignored and the returned rate is effectively "now". Sub-bps
  * temporal skew within a single minute; do not engineer around it.
- *
- * See plan: candleserv-stablecoin-aware-index §Per-venue stable rates.
  */
 export async function fetchBybitStableRate(_minuteTs: Date): Promise<number> {
   const url = `${BASE}/v5/market/tickers?category=spot&symbol=USDTUSD`;

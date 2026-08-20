@@ -54,8 +54,8 @@ export async function getRepairHorizonMs(): Promise<number> {
  * Read CACHE-FREE so a toggle takes effect on the very next daily prune, not up
  * to 1h later. NO try/catch: a DB read failure propagates to the maintenance
  * loop's own try/catch, which logs it loudly and skips that cycle — we never
- * silently default the pause either way. Temporary stop-gap until per-currency
- * `sourceRetentionDays` lands (plans/candleserv-repair-rework.md Phase 6).
+ * silently default the pause either way. A global kill-switch, distinct from the
+ * per-currency `sourceRetentionDays` depth.
  *
  * Set via SQL for now (no UI yet):
  *   INSERT INTO app_settings (key, value, "updatedAt")

@@ -4,7 +4,7 @@ Self-contained 1-minute OHLCV **composite candle store**. Collects from up to ei
 
 Candleserv has no knowledge of the trading system that consumes it. It stores candles and serves candles. It owns its database exclusively and runs as a standalone open-source service.
 
-Originally a Bitcoin-only store, it is now **multi-currency**: every table is keyed by `(currency, timestamp)` and the collector composes each enabled asset independently. BTC is the only enabled currency in a default install; the machinery (symbol map, per-venue feeds, peg layer) supports adding others.
+candleserv is **multi-currency**: every table is keyed by `(currency, timestamp)` and the collector composes each enabled asset independently. BTC is the only enabled currency in a default install; the machinery (symbol map, per-venue feeds, peg layer) supports adding others.
 
 **Live demo:** [cocooracle.com](https://cocooracle.com/) — a public, read-only instance running in [demo mode](#demo-mode).
 
@@ -268,7 +268,7 @@ Read-only surface over the per-venue local USDT→USD rate candleserv already st
 - **`/v1/peg`** → `{ unit:"usd", tf, USDT:{ <venue>:[{ t, o, h, l, c, n }, … ] } }`. **OHLC-of-rate** per venue (the intraday high/low drift of the peg is the signal; the consumer averages downstream). `t` is the bucket-open unix ms, `n` the contributing minutes. `tf` defaults `1h`, all standard timeframes except `30d`; `limit` default 200, max 5000, trimmed per-venue. Optional `venue` filters to one.
 - **`/v1/peg/venues`** → `{ venues:[{ name, pegSourcePair, hasData, oldest, newest, count }, … ] }`. `pegSourcePair` is the ticker each venue's rate derives from (`binance`/`bitget` `USDCUSDT`, `gate` `USDC_USDT`, `bybit` `USDTUSD`); `oldest`/`newest` are unix ms.
 
-History depth is bounded by source retention (**~180 days** today, snapped to the longest-retained currency — not 90 days), and the endpoints promise no fixed depth: they serve whatever is retained.
+History depth is bounded by source retention (**~180 days**, snapped to the longest-retained currency), and the endpoints promise no fixed depth: they serve whatever is retained.
 
 ### Operational endpoints
 

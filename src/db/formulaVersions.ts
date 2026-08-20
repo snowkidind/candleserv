@@ -1,6 +1,6 @@
 /**
  * Per-currency formula TIMELINE — the effective-dated record of which venues
- * compose a currency over time (candleserv-repair-rework Stage 3, decision D1).
+ * compose a currency over time.
  *
  * Repair, heal, and recompose resolve `formula(currency, minute)` from here: the
  * version with the greatest `effectiveFrom <= minute`. Stored CHANGES-only — one
@@ -8,7 +8,7 @@
  * venue set `{ sources: [...] }`, no delta replay). The head of the timeline is
  * the "current" repair set.
  *
- * Three distinct surfaces by design (do not conflate — see plan §2):
+ * Three distinct surfaces by design (do not conflate):
  *   - formula_changes (formulaChanges.ts) ...... GLOBAL operator kill-switch /
  *                                                "alive globally". Live + repair
  *                                                both subtract it.
@@ -42,7 +42,7 @@ export interface FormulaVersion {
 /**
  * The compose math takes a deny-list (`{ excludedSources }`); the timeline stores
  * an inclusive allow-list. Convert here against the full adapter set so the two
- * stay in lockstep (Ground Rule 4 — inclusive model, deny-list wire shape).
+ * stay in lockstep (inclusive model, deny-list wire shape).
  */
 export function toExcludedSources(sources: string[]): { excludedSources: string[] } {
   const incl = new Set(sources);

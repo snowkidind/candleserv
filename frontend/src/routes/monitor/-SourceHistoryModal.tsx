@@ -7,7 +7,7 @@ interface Props {
   onClose: () => void;
 }
 
-// Stacked bar chart on a canvas — same pattern as TimelineCanvas. One bar per
+// Stacked bar chart on a canvas. One bar per
 // day, height proportional to 1440 minutes/day. Categories stack bottom-to-top:
 // used (green), formulaExcluded (gray), outlierRejected (red), missing (white).
 function HistoryCanvas({ bins, onHover }: { bins: SourceHistoryBin[]; onHover: (idx: number | null) => void }) {

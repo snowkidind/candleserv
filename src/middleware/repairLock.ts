@@ -1,9 +1,8 @@
 /**
- * Repair-lock middleware — Phase 5d of the exchange-expansion plan; per-currency
- * since Stage 4 of candleserv-repair-rework.
+ * Repair-lock middleware — per-currency single-flight.
  *
  * A candle-read endpoint returns HTTP 503 ONLY if the currency it reads is
- * mid-repair (`isCurrencyRepairing`). A TON repair therefore no longer 503s a BTC
+ * mid-repair (`isCurrencyRepairing`). A TON repair therefore does not 503 a BTC
  * read. A stable-rate repair that asked to suspend globally
  * (`isGlobalRepairSuspend`) 503s every candle read regardless of currency, since
  * pegs are shared across currencies. Everything off the block list stays
