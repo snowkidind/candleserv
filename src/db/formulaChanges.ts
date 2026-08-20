@@ -122,8 +122,8 @@ export async function insertFormulaChange(
   const current = mirror.get(exchange);
   // No prior row for this exchange ≡ "included" (the default). Treat that as
   // if the effective current state is "unset" so a redundant unset request
-  // (e.g., legacy POST /sources/:source/resume on a source that was never
-  // excluded) doesn't write a useless row.
+  // (un-excluding a source that wasn't excluded, via PUT /monitor/formula)
+  // doesn't write a useless row.
   const effective = current?.setOrUnset ?? "unset";
   if (effective === setOrUnset) {
     return { inserted: false, row: current ?? null };
