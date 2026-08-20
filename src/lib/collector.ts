@@ -135,16 +135,6 @@ function recordLiveFetchState(source: string, newState: "on" | "error"): void {
 }
 
 /**
- * Backward-compat shim. The formula is now the single knob — "paused" maps
- * to "in the formula's excludedSources." Kept as an exported helper for
- * pre-existing code paths during the transition; Phase 6 frontend lands the
- * full rename to "excluded."
- */
-export function isSourcePaused(source: string): boolean {
-  return getCurrentFormula().excludedSources.includes(source);
-}
-
-/**
  * POST /monitor/sources/:source/resume → manual auto-ban recovery. Clears the
  * Redis suspend overlay + the source's 24h failure window so it resumes live
  * polling without immediately re-tripping (auto-ban state is in Redis now, not
