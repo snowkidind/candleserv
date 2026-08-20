@@ -281,7 +281,7 @@ export async function healRange(currency: string, from: Date, to: Date, overwrit
   //
   // overwrite=false path: initial backfill — preserves "never clobber live
   // data" via insertCandleIfMissing. composeMinute always overwrites, so the
-  // backfill path keeps using the legacy buildComposite flow (raw-quote, no peg
+  // backfill path uses the buildComposite flow instead (raw-quote, no peg
   // rates yet — stableRateBackfill + a later recomposeRange reconcile).
   for (const [tsMs, results] of byMinute) {
     if (!results.length) continue;
