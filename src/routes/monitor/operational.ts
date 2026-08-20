@@ -552,11 +552,10 @@ router.get("/sources/:source/history", ...view, async (req, res) => {
 });
 
 /**
- * POST /monitor/sources/:source/resume — legacy endpoint. Phase 3 of the
- * exchange-expansion plan replaced the in-memory pause set with the formula
- * model; this endpoint now routes to insertFormulaChange('unset') so the old
- * "Resume" button keeps working. Phase 6 frontend lands the rename to
- * PUT /monitor/formula and the endpoint is removed.
+ * POST /monitor/sources/:source/resume — manual auto-ban recovery. Calls
+ * resumeSource, which clears the Redis suspend overlay + the source's 24h
+ * failure window so it resumes live polling without immediately re-tripping.
+ * Does not touch the formula / formula_changes — that's PUT /monitor/formula.
  */
 router.post("/sources/:source/resume", ...modify, async (req, res) => {
   await resumeSource(req.params.source);
