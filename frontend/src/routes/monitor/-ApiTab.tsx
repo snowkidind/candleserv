@@ -101,7 +101,7 @@ const SECTIONS: Section[] = [
         params: [
           { name: "tf", required: true, desc: "Timeframe. One of: " + TIMEFRAMES },
           { name: "n", def: "1", desc: "Number of candles, oldest-first. Max 5000." },
-          { name: "currency", def: "BTC", desc: "Asset code. Pre-multi-currency consumers may omit it." },
+          { name: "currency", def: "BTC", desc: "Asset code." },
         ],
         sample: `{ "candles": [ /* …candle objects… */ ] }`,
       },
