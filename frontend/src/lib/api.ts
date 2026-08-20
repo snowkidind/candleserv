@@ -75,16 +75,13 @@ export interface StatsData {
 export const getStats = () => req<StatsData>("/monitor/stats");
 
 // Sources
-// Shape matches the server's getSourceStatus() — both legacy `paused` (alias
-// for `excluded`) and the new formula-aware fields are present during the
-// Phase 6 transition window.
+// Shape matches the server's getSourceStatus().
 export interface SourceStatus {
   // Live fetch metadata — null when excluded.
   fetching: boolean;
   failures24h: number;
   lastFetch: string | null;
-  state: string;            // legacy fine-grained "on" | "error" | "unknown"
-  paused: boolean;          // legacy alias for `excluded`
+  state: string;            // fine-grained live fetch state: "on" | "error" | "unknown"
 
   // Formula state.
   excluded: boolean;

@@ -149,22 +149,19 @@ export async function resumeSource(source: string): Promise<void> {
 }
 
 /**
- * Snapshot of per-source state for the monitoring UI. The shape includes both
- * legacy `paused` (alias for `excluded`) and the new formula-aware fields
- * (excluded, excludedReason, excludedBy, excludedAt, reason,
- * lastKnownAtExclusion). The legacy aliases let the current frontend keep
- * functioning until Phase 6 lands the rework.
+ * Snapshot of per-source state for the monitoring UI: the live fetch metadata
+ * plus the formula-aware exclusion fields (excluded, excludedReason, excludedBy,
+ * excludedAt, reason, lastKnownAtExclusion).
  */
 export interface SourceStatus {
   // Live fetch metadata — meaningful when not excluded.
   fetching: boolean;
   failures24h: number;
   lastFetch: string | null;
-  state: string;            // legacy "on" | "error" | "unknown" — fine-grained live fetch state.
+  state: string;            // fine-grained live fetch state: "on" | "error" | "unknown".
 
   // Formula state.
   excluded: boolean;
-  paused: boolean;          // legacy alias for `excluded`.
   excludedReason: "manual" | "auto-suspend" | null;
   excludedBy: string | null;
   excludedAt: string | null;
@@ -200,7 +197,6 @@ export async function getSourceStatus(): Promise<Record<string, SourceStatus>> {
       state: liveFetchStates[s] ?? "unknown",
 
       excluded,
-      paused: excluded,
       excludedReason,
       excludedBy: susp ? susp.by : (change?.by ?? null),
       excludedAt: susp ? new Date(susp.since).toISOString() : (change?.createdAt.toISOString() ?? null),
