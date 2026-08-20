@@ -238,7 +238,7 @@ async function runRepairJob(jobId: string, controller: AbortController): Promise
         {
           sources: state.sources,
           retryEmpty: state.retryEmpty,
-          // Stage 6: token toggle ON (or legacy retryEmpty) → re-fetch + overwrite.
+          // Token toggle, or the retryEmpty flag, forces re-fetch + overwrite.
           overwriteExisting: state.repairExistingTokenMinutes || state.retryEmpty,
           signal: controller.signal,
         },
@@ -256,7 +256,7 @@ async function runRepairJob(jobId: string, controller: AbortController): Promise
         {
           sources: state.sources,
           currency: state.currency,
-          // Stage 6: stable toggle ON (or legacy retryEmpty) → re-fetch + overwrite pegs.
+          // Stable toggle, or the retryEmpty flag, forces re-fetch + overwrite pegs.
           retryEmpty: state.repairExistingStableMinutes || state.retryEmpty,
           signal: controller.signal,
         },
