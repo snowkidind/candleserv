@@ -394,8 +394,8 @@ export default function ConnectionsTab() {
   const { data: gaps }       = useQuery({ queryKey: ["gaps"],             queryFn: getGaps,          refetchInterval: 60_000 });
   const { data: currencies } = useQuery({ queryKey: ["currencies"],       queryFn: getCurrencies,    refetchInterval: 30_000 });
 
-  // SSE-triggered invalidations — covers both legacy source_state and the new
-  // formula-excluded / formula-included transitions.
+  // Any source_state SSE event (auto-suspend or formula change) invalidates the
+  // source + formula queries.
   useEffect(() => {
     if (!sourceStateTick) return;
     qc.invalidateQueries({ queryKey: ["sources", "status"] });
