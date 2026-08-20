@@ -106,7 +106,7 @@ async function checkAutoSuspend(source: string): Promise<void> {
     detail: { reason, statsAtExclusion },
   });
   logWarn(`[collector] auto-suspended ${source} (Redis overlay): ${reason}`);
-  // SSE + legacy "paused" stream event so existing UIs still see a state change.
+  // Notify the UI (SSE) and record the event log row on auto-suspend.
   candleEmitter.emit("source_state", {
     source,
     state: "paused",
@@ -118,7 +118,7 @@ async function checkAutoSuspend(source: string): Promise<void> {
   try {
     await insertStreamEvent(source, "paused");
   } catch (err) {
-    logWarn(`[collector] failed to record legacy paused stream event for ${source}: ${err}`);
+    logWarn(`[collector] failed to record auto-suspend stream event for ${source}: ${err}`);
   }
 }
 
